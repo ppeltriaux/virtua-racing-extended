@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+# Reject staged binaries or large files: this repo must never contain game data.
+# Install: ln -sf ../../tools/pre-commit .git/hooks/pre-commit
+set -euo pipefail
+limit=262144
+fail=0
+while IFS= read -r -d '' f; do
+  [ -f "$f" ] || continue
+  size=$(wc -c < "$f")
+  if [ "$size" -gt "$limit" ]; then echo "pre-commit: $f is $size bytes (> $limit)"; fail=1; fi
+  if git diff --cached --numstat -- "$f" | grep -q '^-'; then echo "pre-commit: $f is binary"; fail=1; fi
+done < <(git diff --cached --name-only --diff-filter=AM -z)
+if [ "$fail" -ne 0 ]; then echo "pre-commit: refusing to commit game data / binaries"; exit 1; fi

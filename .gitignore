@@ -1,0 +1,57 @@
+# --- NEVER commit game data (copyrighted). Tools and docs only. ---
+*.zip
+*.7z
+*.rar
+*.bin
+*.cue
+*.iso
+*.chd
+*.nv
+*.rom
+/vr/
+/vr */
+/roms/
+/saturn/
+/extracted/
+/build/
+/Time-Warner-Interactive-*/
+*.ips
+*.bps
+*.patched
+# MAME runtime output
+/snap/
+/nvram/
+/cfg/
+# OS / editor
+.DS_Store
+__pycache__/
+*.pyc
+.venv/
+/out/
+local.env
+.superpowers/
+*.egg-info/
+# --- game data by name, wherever it is unpacked (exact disc/ROM name shapes) ---
+epr-*
+mpr-*
+opr-*
+opr1[0-9]*.bin
+315-*
+93c45*
+TRCK[A-Z0-9][A-Z0-9][A-Z0-9][A-Z0-9]
+BGS[A-Z0-9][A-Z0-9][A-Z0-9][A-Z0-9][0-9]
+BGM[A-Z0-9][A-Z0-9][A-Z0-9][A-Z0-9][0-9]
+TEXT[A-Z0-9][A-Z0-9][A-Z0-9][A-Z0-9]
+VRCODELO
+LOWDATA[0-9]
+SOUND[A-Z0-9][A-Z0-9][A-Z0-9]
+MOVIE[0-9][0-9][0-9]
+MOVIES0[0-9]/
+*.img
+*.ccd
+*.sub
+*.mdf
+*.mds
+*.ecm
+*.gdi
+/inp/

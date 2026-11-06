@@ -1,0 +1,135 @@
+# Virtua Racing Extended v0.1
+
+Virtua Racing Extended is the 1992 Sega Model 1 arcade Virtua Racing with ten courses: its own three
+(Big Forest, Bay Bridge, Acropolis) and the seven the 1995 Saturn port added (Alpine, Amazon Falls,
+Diablo Canyon, Metropolis, Pacific Coast, Surfers Oval, Surfers Road). The seven are converted from
+the Saturn disc into the arcade game's own data formats and race on the arcade's engine in MAME: its
+fifteen opponents, its time limits and checkpoints, its render rate. The three original courses are
+untouched, byte for byte. The project page, with videos and screenshots:
+https://continuearcade.com/virtua-racing-extended/
+
+This repository is a patch: one command builds the game on your machine from your own copies of the
+arcade game and of the Saturn port. It holds none of either (see "What is in the patch").
+
+> **v0.1 is an early release, not a finished one.** All ten courses load and race, with opponents,
+> pit lanes, walls, checkpoints, the in-race map and a best-time table per course, but the tuning
+> and the finish are still being worked on: see "Known issues in v0.1" and "Planned".
+
+## What you need
+
+- **Your own copy of the arcade game:** MAME 0.289's `vr` ROM set, `vr.zip` with all 38 files (the
+  25 the build reads are checked by size and CRC against MAME 0.289's list; the other 13 must be
+  present), with `model1io.zip` and `m1comm.zip` beside it.
+- **Your own copy of the Saturn port:** *Virtua Racing* for the Saturn, **the European release**, as
+  a `.cue` with its `.bin` beside it. The US and Japanese discs are not supported yet (see "Planned");
+  the build refuses them and names the file it could not find.
+- **Python 3.12 or later.**
+- **MAME 0.289** to play (and, optionally, to run the build's smoke test).
+- Tested on macOS (Apple silicon) with Homebrew's MAME 0.289. Linux should work the same; Windows is
+  untried (WSL2 is the safe bet).
+
+None of the game is included here, linked to, or sent on request.
+
+## How to use it
+
+```sh
+git clone https://github.com/ppeltriaux/virtua-racing-extended.git
+cd virtua-racing-extended
+python3 -m venv .venv && .venv/bin/pip install -e .
+.venv/bin/vrtools check --roms ~/roms/vr --saturn ~/saturn/"Virtua Racing (Europe).cue" --out ~/vr-extended
+.venv/bin/vrtools build --roms ~/roms/vr --saturn ~/saturn/"Virtua Racing (Europe).cue" --out ~/vr-extended --smoke
+mame vr -rompath ~/vr-extended
+```
+
+- `--roms` is the folder holding `vr.zip`, `model1io.zip` and `m1comm.zip`; `--saturn` the disc's
+  `.cue`; `--out` a new folder (it must not be the ROM folder: your files are only read, never
+  overwritten). The three default to `$VR_ROMDIR`, `$VR_SATURN_CUE` and `$VR_OUT`.
+- `check` names anything wrong with the inputs (a missing file, a file with another CRC than MAME
+  0.289's, a disc of another region) and `build` will not start until it passes.
+- `build` takes about nine minutes on an Apple silicon Mac. It writes `vr.zip` (the patched set), copies `model1io.zip` and `m1comm.zip` beside it, and
+  writes `build-report.txt` (one line per course). `--smoke` then runs MAME headless for 60 emulated
+  seconds on a converted course and checks that it loads and renders at the arcade's rate; without
+  `mame` on your `PATH` it says so and the build still succeeds.
+- MAME warns that some ROMs have the wrong checksums: they are the patched ones, that is expected.
+- Exit codes: 0 done, 1 an input is wrong, 2 a patch site did not match, 3 the smoke test failed.
+
+**In the game:** choose Practice; the course row scrolls through ten entries as you turn the wheel
+(steering left/right): BIG FOREST, BAY BRIDGE, ACROPOLIS, then ALPINE, AMAZON FALLS, DIABLO CANYON,
+METROPOLIS, PACIFIC COAST, SURFERS OVAL, SURFERS ROAD. Grand Prix is untouched.
+
+**Best times:** each course keeps its own ranking table in the game's battery-backed RAM. On the first
+boot of the patched set the game finds its RAM laid out for three tables and initialises it for ten,
+so best times saved by the original set are reset once. Keep a copy of MAME's `nvram/vr` folder if
+you want them.
+
+**Tuning (optional):** `--tune "AMAZON FALLS:pace=0.9,laps=4"` scales a course's opponents' pace
+(`pace`), its checkpoint time extensions (`time_factor`) and sets its race length (`laps`, 1 to 7);
+repeat `--tune` per course. The defaults are 5 laps and the values the build was tested with.
+
+## Known issues in v0.1
+
+- **Music:** races on the seven converted courses play the select screen's track, not the Saturn
+  course's music.
+- **Walls:** the collision wall follows the drawn scenery closely on most of each course, but not
+  everywhere: on a few corners (Amazon Falls' second corner, Diablo Canyon's rocks at its middle and
+  end sections) the wall stands a little off the drawn rock, and at Diablo Canyon's end the car can
+  slip under a rock.
+- **Difficulty:** the opponents' pace and the time limits on the converted courses are first values,
+  not yet balanced by play.
+- **Diablo Canyon:** its colours are not yet the Saturn's, the cars start the race slightly slanted,
+  and the camera can bounce on some sections.
+- **Original program bytes:** the patch finds and checks its sites in the arcade program by 15 short
+  instruction patterns (286 bytes in all, the instructions being replaced or next to them). A later
+  release will check them by checksum instead, so the patch holds no bytes of the program.
+- How the converted courses differ from the Saturn's, measured: `docs/deviations.md`.
+
+## Planned
+
+- **Other releases of the games:** the Saturn port's **US** and **Japanese** discs (they lay their
+  files out differently from the European one), and other revisions of the arcade ROM set as MAME
+  lists them.
+- The Saturn's music on each converted course.
+- The remaining wall spots, and the difficulty per course from playtesting.
+- Diablo Canyon's colours.
+- The patch-site checks by checksum (see above).
+
+## What is in the patch
+
+- the converter (`vrtools/`, Python): it reads the Saturn course files from your disc and writes the
+  arcade's road, collision, scenery, opponents' lines, race tables, select panels, map and backdrop
+  for each new course into free space of your ROM set, then patches the program to offer ten courses;
+- the MAME Lua scripts the tests drive the game with (`vrtools/mame/lua/`);
+- the tests (`tests/`): most need your ROM set and disc (`VR_ROMDIR`, `VR_SATURN_CUE`, see
+  `local.env.example`) and skip without them; the race tests need MAME 0.289;
+- the notes on the arcade's and the Saturn's data formats (`docs/formats/`), the research notes
+  behind each step (`docs/spike/`), and the measured differences (`docs/deviations.md`);
+- facts about the original program: addresses, sizes, CRCs, and the patch-site patterns above.
+
+None of the game: every course's road, collision, scenery and race tables are computed from your own
+disc when the build runs, and every picture and letter the select screen shows is drawn from your own
+ROM set or by the converter.
+
+## Development
+
+```sh
+.venv/bin/pip install -e '.[dev]'
+cp local.env.example local.env   # set the two paths, then: source local.env
+.venv/bin/pytest
+```
+
+A few collision tests written for earlier rounds are known to fail against the current geometry and
+are being restated; `tools/pre-commit` refuses binaries and large files (link it into `.git/hooks/`).
+
+## Legal
+
+This is a personal, non-commercial technical study; nothing is sold.
+
+- Virtua Racing, its code, art, sound and courses belong to Sega; the Saturn port and its courses to
+  Sega and Time Warner Interactive. This project is not affiliated with or endorsed by either; the
+  names are used only to say which games it concerns.
+- No ROM set, disc image, patched set or extracted game data is offered here or anywhere else, none
+  is linked to, and nothing will be sent on request. Build it from your own lawfully obtained copies.
+- The code and documents in this repository are under the MIT licence (`LICENSE`), which covers them
+  only.
+- If you hold rights in the games and object to anything here, open an issue and it will be taken
+  down promptly.
