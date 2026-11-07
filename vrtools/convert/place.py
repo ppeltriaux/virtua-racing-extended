@@ -94,6 +94,9 @@ class PitLane:
                                    # mouth the course can turn further towards the straight before its far end leaves the map
     pit_stop: bool = True          # the PIT WORK check at the entry quad; Phase 22i parks the car at the course's own box
                                    # (`collision.pit_box`; before that it drove to the host's, inside Diablo's rock)
+    entry_separate: bool = False   # v0.1.1 (Pascal, rec118: Surfers Road's pit stop did not trigger): the entry quad goes where the
+                                   # lane runs separate from the race lane (`collision.pit_lane_run`), not in the open tarmac the
+                                   # mouth shares with it, where a car from the race side cut into the lane past the entry
 
 
 # Keyed by the TRCK file's SHA-1 prefix; only the courses Pascal named (he stopped in front of each pit entry, 4 Nov).
@@ -112,11 +115,13 @@ PIT_LANES = {
     "d797f625f129ff8f": PitLane(None, (                             # Surfers Oval: 15-45 units left of the start straight
         105, 106, 107, 108, 109, 110, 161, 162, 163, 164, 165, 166, 167, 168, 169, 170, 171, 172, 174, 175, 177, 178,
         180, 182, 183, 185, 186, 188, 190, 191, 194, 195, 196, 198, 200, 203, 204, 221, 223, 230, 362, 363, 364)),
-    "ce590d8421e3ba76": PitLane(None, (78, 92, 95, 97, 99, 101, 103, 105, 107, 108, 110)),   # Metropolis: 17-22 right of 128-141
+    "ce590d8421e3ba76": PitLane(None, (78, 92, 95, 97, 99, 101, 103, 105, 107, 108, 110), depth=82.0),   # Metropolis: 17-22 right of 128-141;
+                                                                     # Phase 22t (Pascal): the box in the tunnel (roof to z 340; the default
+                                                                     # 130 put it at the lane's end, z 345, outside), 47 past the entry
     "f6f11957be802bd9": PitLane(None, (2, 5, 7, 9, 10, 13, 14, 17, 21, 24, 27, 43, 46, 48)),  # Alpine: 13-29 right of 184-209
     "4f4d8dc9681ad67e": PitLane(None, (                             # Surfers Road: 16-37 left of points 131-176
         139, 140, 141, 142, 143, 144, 145, 146, 147, 148, 149, 150, 152, 153, 155, 156, 158, 160, 161, 163, 164, 166,
-        168, 169, 172, 173, 174, 176, 178, 181, 182, 201, 208, 209)),
+        168, 169, 172, 173, 174, 176, 178, 181, 182, 201, 208, 209), entry_separate=True),
 }
 MAIN_ROAD_START = PIT_LANES                                           # (Phase 22f's name)
 

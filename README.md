@@ -1,4 +1,4 @@
-# Virtua Racing Extended v0.1.1
+# Virtua Racing Extended v0.1.2
 
 Virtua Racing Extended is the 1992 Sega Model 1 arcade Virtua Racing with ten courses: its own three
 (Big Forest, Bay Bridge, Acropolis) and the seven the 1995 Saturn port added (Alpine, Amazon Falls,
@@ -11,9 +11,9 @@ https://continuearcade.com/virtua-racing-extended/
 This repository is a patch: one command builds the game on your machine from your own copies of the
 arcade game and of the Saturn port. It holds none of either (see "What is in the patch").
 
-> **v0.1.1 is an early release, not a finished one.** All ten courses load and race, with opponents,
+> **v0.1.2 is an early release, not a finished one.** All ten courses load and race, with opponents,
 > pit lanes, walls, checkpoints, the in-race map and a best-time table per course, but the tuning
-> and the finish are still being worked on: see "Known issues in v0.1" and "Planned".
+> and the finish are still being worked on: see "Known issues in v0.1.2" and "Planned".
 
 ## What you need
 
@@ -66,7 +66,19 @@ you want them.
 (`pace`), its checkpoint time extensions (`time_factor`) and sets its race length (`laps`, 1 to 7);
 repeat `--tune` per course. The defaults are 5 laps and the values the build was tested with.
 
-## Known issues in v0.1.1
+## What's new in v0.1.2
+
+- **Surfers Road's pit stop** now always triggers: the lane shares open tarmac with the race road for its
+  first 140 units, and a car coming in from the race side could cross into the lane past the trigger.
+- **Amazon Falls' pit exit:** the wall now stands at the drawn rock on the right; a car leaving the pit
+  could drive into the rock and out of the course.
+- **Pacific Coast:** the Saturn's first C.P. flag, which stood 400 units after the start line and was
+  not a checkpoint, is no longer drawn.
+- **Metropolis:** the pit stop parks the car inside the tunnel, not just past its exit.
+
+The game the patch builds changes on those four courses only. v0.1.1 changed the tests only.
+
+## Known issues in v0.1.2
 
 - **Music:** races on the seven converted courses play the select screen's track, not the Saturn
   course's music.

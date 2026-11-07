@@ -54,3 +54,26 @@ def start_gate_point(sat: SaturnCourse, centreline: list[tuple[float, float]]) -
             cx = sum(q[0] for q in pts) / len(pts); cz = sum(q[2] for q in pts) / len(pts)
             return min(range(n), key=lambda i: math.dist(centreline[i], (cx, cz)))
     return None
+
+
+def hide_unused_gates(sat: SaturnCourse, centreline: list[tuple[float, float]]) -> SaturnCourse:
+    """Phase 22t (Pascal, 8 Nov: a checkpoint flag on Pacific Coast "with no real checkpoint under it"): `sat` without the
+    C.P. gates (68-vertex props) that are not checkpoints on the converted lap (`race.gate_checkpoints` drops a gate just
+    after our start line: Phase 22i), so a drawn C.P. always fires; START/GOAL gates stay (one stands at our line). The
+    props reach the scenery and the collision through `geometry.course_quads` only, so both lose it. Arcade coordinates:
+    call inside the course's placement."""
+    from dataclasses import replace
+    from vrtools.convert.race import gate_checkpoints
+    n = len(centreline)
+    cps = set(gate_checkpoints(saturn_gates(sat, centreline), n))
+    meshes, kept = sat.meshes[GATE_GROUP], []
+    for p in sat.placements[GATE_GROUP]:
+        if 0 <= p.mesh < len(meshes) and len(meshes[p.mesh].vertices) == 68:
+            pts = [q for f in face_quads(meshes[p.mesh], p) for q in f.p]
+            if pts:
+                cx = sum(q[0] for q in pts) / len(pts); cz = sum(q[2] for q in pts) / len(pts)
+                k = min(range(n), key=lambda i: math.dist(centreline[i], (cx, cz)))
+                if math.dist(centreline[k], (cx, cz)) <= GATE_NEAR and k not in cps:
+                    continue
+        kept.append(p)
+    return replace(sat, placements={**sat.placements, GATE_GROUP: kept})

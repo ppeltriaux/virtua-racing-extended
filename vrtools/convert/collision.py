@@ -1596,6 +1596,48 @@ def pit_entry_coverage(sat: SaturnCourse, col, k: int, at: tuple[float, float], 
     return sum(1 for q in pts if any(_point_in_xz(qq.corners, *q) for qq in quads)) / len(pts)
 
 
+
+PIT_ENTRY_RACE_CLEAR = 6.0    # v0.1.1: a lane point's own tarmac run (across the lane) reaching this near the race line is shared
+PIT_RUN_COVER = 0.8           # ... and the pair covers this share of a separate run (Surfers Road: 11 of 13 samples, the wall-side edge open)
+
+
+def pit_lane_run(col, at: tuple[float, float], direction: tuple[float, float], centreline) -> list[tuple[float, float]] | None:
+    """v0.1.1 (Pascal, rec118: Surfers Road's pit stop did not trigger): the tarmac across the lane at `at` (every 2 units
+    along the normal, out to PIT_ENTRY_ACROSS, stopping at the first point off the tarmac either way), or None when that run
+    is shared with the race lane (reaches within PIT_ENTRY_RACE_CLEAR of the race centreline): the lane is SEPARATED here,
+    so a pair spanning this run cannot be passed beside."""
+    nx, nz = -direction[1], direction[0]
+    L = math.hypot(nx, nz) or 1e-9
+    nx, nz = nx / L, nz / L
+    pa = np.array(centreline, float)
+    pb = np.roll(pa, -1, axis=0)                                    # the race line as segments (its points lie ~12 apart)
+    seg = pb - pa
+    seg_l2 = np.maximum((seg ** 2).sum(axis=1), 1e-9)
+
+    def race_dist(x: float, z: float) -> float:
+        u = np.clip(((x - pa[:, 0]) * seg[:, 0] + (z - pa[:, 1]) * seg[:, 1]) / seg_l2, 0.0, 1.0)
+        return float(np.sqrt((pa[:, 0] + u * seg[:, 0] - x) ** 2 + (pa[:, 1] + u * seg[:, 1] - z) ** 2).min())
+    run = []
+    for sign in (1, -1):
+        for t in range(0 if sign == 1 else 2, PIT_ENTRY_ACROSS + 1, 2):
+            q = (at[0] + sign * t * nx, at[1] + sign * t * nz)
+            if _tarmac_quad_at(col, *q) is None:
+                break
+            if race_dist(*q) < PIT_ENTRY_RACE_CLEAR:
+                return None
+            run.append(q)
+    return run if len(run) >= 3 else None
+
+
+def pit_run_coverage(col, run, k: int, partners) -> float:
+    """The share of `run` that tarmac quad `k` with the best of `partners` covers (the game's PIT WORK fires on k or k + 1)."""
+    tarmac = col.quads[:col.n_tarmac]
+    best = 0.0
+    for j in partners:
+        quads = [tarmac[i] for i in {k, j} if 0 <= i < len(tarmac)]
+        best = max(best, sum(1 for q in run if any(_point_in_xz(qq.corners, *q) for qq in quads)) / len(run))
+    return best
+
 def pit_entry_pair(sat: SaturnCourse, quads: list[Quad16], n_tarmac: int, k: int, centreline) -> tuple[list[Quad16], int, int]:
     """Phase 22j: the quad after the entry quad `k` in the list is made part of the lane's mouth, as the game fires PIT WORK
     on either: the side-by-side lane quad whose footprint with k's best covers the lane's width is moved to k + 1 (a lane
@@ -1732,6 +1774,13 @@ def pit_entry_quad(sat: SaturnCourse, col, centreline=None, require_pair: bool =
             raise ConvertError("no tarmac along the pit lane for its entry quad")
         for i, k, d in points:                                             # a point where the pair spans all the tarmac across
             if pit_entry_coverage(sat, col, k, line[i], d, all_tarmac=True) >= PIT_ENTRY_COVER:
+                return k
+        for i, k, d in (points if pit.entry_separate else ()):            # v0.1.1: else a point where the lane runs SEPARATE from
+            run = pit_lane_run(col, line[i], d, centreline)                 # the race lane and the pair spans its tarmac (Surfers
+            if run is None:                                                 # Road: the first 140 units are open tarmac shared with
+                continue                                                    # the race lane, and a car cut in past an entry there)
+            # the build's first call judges k alone (its pair is made after, and only ever widens it); the final call k + 1
+            if pit_run_coverage(col, run, k, [k + 1] if require_pair else [k]) >= PIT_RUN_COVER:
                 return k
         best = None
         for i, k, d in points:                                             # else one where it spans the lane's width

@@ -40,7 +40,7 @@ from vrtools.convert.collision import mesh_height
 from vrtools.convert.collision import pit_box, pit_entry_quad, pit_lane_line
 from vrtools.convert.place import pit_lane_of
 from vrtools.convert.gates import start_gate_point
-from vrtools.convert.gates import saturn_gates
+from vrtools.convert.gates import GATE_GROUP, hide_unused_gates, saturn_gates
 from vrtools.convert.race import car_table_for, check_laps, checkpoints_for, gate_checkpoints, time_records_for
 from vrtools.convert.road import attitude_words, heading_word, road_tables
 from vrtools.saturn.backdrop import BGS_OF_COURSE, SaturnPanorama, decode_bgs
@@ -83,8 +83,10 @@ class CoursePlan:
 
 COURSES: list[CoursePlan] = [
     CoursePlan("ALPINE00/TRCKALPN", "ALPINE", 3, 3, 2, 0),
-    CoursePlan("AMAZON00/TRCKAMAZ", "AMAZON FALLS", 1, 4, 0, 1, lane_points=((152, 191),), flag_start=0),   # first corner's curbs (p22play29:
-                                                                                                   # 29-68 from the old start, 207 points before the flag)
+    CoursePlan("AMAZON00/TRCKAMAZ", "AMAZON FALLS", 1, 4, 0, 1, lane_points=((152, 191), (20, 37)), flag_start=0),   # first corner's curbs
+                                                                                                   # (p22play29: 29-68 from the old start, 207 points
+                                                                                                   # before the flag); v0.1.1 (Pascal, rec120): the pit
+                                                                                                   # exit, the rock 7-10 out on the right at 26-35
     CoursePlan("DIABLO00/TRCKDIAB", "DIABLO CANYON", 2, 5, 1, 2),
     CoursePlan("METROPOL/TRCKMETR", "METROPOLIS", 2, 6, 1, 1, flag_start=0,   # Phase 22n: the building at the hairpin's inside
                lane_points=((318, 356),), time_factor=1.15),    # Phase 22p: the clock (the autopilot's 150-s race ended with 71                      # (points 318-356 R since the flag start; 22k's 124-140): the lines
@@ -268,6 +270,9 @@ def convert_course(rs: RomSet, sat: SaturnCourse, name: str, bank: int, tgp_slot
                           flag_start=flag_start)                                  # Phase 22l: at the Saturn's flag where it fits
     with placed(pl.angle, pl.tx, pl.tz):
         lap = order_slices(sat, start_slice=pl.start_slice, direction=pl.direction, min_coverage=min_coverage)
+        n_props = len(sat.placements.get(GATE_GROUP, []))
+        sat = hide_unused_gates(sat, centreline(lap))                           # Phase 22t: no C.P. flag without its checkpoint
+        hidden_gates = n_props - len(sat.placements.get(GATE_GROUP, []))
         heights = road_profile(sat, lap)
         hfn = banked_height(lap, heights, mesh_height(_ground_quads(sat))) if banking else \
             arc_height(lap, heights, sat.segments, camber=camber, ground=sat)       # Phase 16 (22a: the drawn banking): the arc profile (no 2-D steps) + the camber
@@ -312,6 +317,7 @@ def convert_course(rs: RomSet, sat: SaturnCourse, name: str, bank: int, tgp_slot
         report["grid_boards"] = False if spawn_list is not None else None           # Phase 22q: the host's grid boards (the flag row) left out
         report["lanes"] = col.lanes                                                 # Phase 22n: (left, right, shift) per centreline point
         report["checkpoints"] = cps
+        report["hidden_gates"] = hidden_gates                                        # Phase 22t: the C.P. gates left out
         if backdrop_report is not None:
             report["backdrop"] = backdrop_report
     out = patch_course_tiles(out, host, objs, words, tile_table=tile_table)

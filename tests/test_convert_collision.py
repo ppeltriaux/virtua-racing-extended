@@ -2088,8 +2088,9 @@ def test_lanes_narrow_only_at_the_named_points():
     assert all(s == (1.0, 1.0) for s in lane_scales(faces))                      # no points named: nothing narrows
     s = lane_scales(faces, ((20, 22),))
     assert all(s[k] == (1.0, 1.0) for k in range(n) if not 20 - 10 <= k <= 22 + 10)   # the taper's reach at most
-    assert {p.name: p.lane_points for p in COURSES if p.lane_points} == {"AMAZON FALLS": ((152, 191),),   # 22l: re-indexed from 29-68
-                                                                          "METROPOLIS": ((318, 356),)}    # 22n: the hairpin's building
+    assert {p.name: p.lane_points for p in COURSES if p.lane_points} == {"AMAZON FALLS": ((152, 191), (20, 37)),   # 22l: re-indexed from 29-68;
+                                                                          "METROPOLIS": ((318, 356),)}    # v0.1.1: the pit exit (Pascal, rec120);
+                                                                                                          # 22n: the hairpin's building
 
 
 def test_lanes_stay_full_at_the_start_line():
@@ -2284,6 +2285,143 @@ def test_the_pit_box_lies_down_the_pit_lane_straight_ahead_of_the_entry(saturn_c
         assert cover >= 0.9, cover
     assert pit_lane_of(sat).pit_stop
 
+
+
+@pytest.mark.parametrize("name", ["SURFERS ROAD"])
+def test_the_pit_box_cannot_be_reached_from_the_race_line_past_the_entry_pair(saturn_cue, romset_zip, name):
+    """v0.1.1 (Pascal, rec118 on Surfers Road: "the pit stop didnt trigger"): the game fires PIT WORK only on the entry quad
+    and the next. Surfers Road's lane shares open tarmac with the race lane for its first 140 units, then runs separate:
+    an entry in the shared part let a car from the race side cut into the lane past it. On a course whose entry goes where
+    the lane runs separate (`PitLane.entry_separate`; the other six keep the open mouths Pascal drove in Phase 22i), every
+    way over tarmac from the race line to the box crosses the pair: flood fill from the box over the tarmac within 30 units
+    of the lane's line up to the box, the pair's footprint removed, reaches no cell within 6 units of the race centreline."""
+    import math
+    from vrtools.arcade.tencourse import COURSES, GRID_CLEAR_OF_COURSE, load_saturn_course
+    from vrtools.convert.collision import _point_in_xz, _tarmac_quad_at, pit_box, pit_entry_quad, pit_lane_centres, saturn_collision
+    from vrtools.convert.geometry import placed
+    from vrtools.convert.lap import centreline, order_slices
+    from vrtools.convert.place import COURSE_OF_TEMPLATE, GRID_OF_COURSE, choose_placement, grid_pose
+    from vrtools.convert.profile import arc_height, road_profile
+    rs = RomSet.from_zip(romset_zip)
+    plan = next(p for p in COURSES if p.name == name)
+    sat = load_saturn_course(saturn_cue, plan.path); gc = COURSE_OF_TEMPLATE[plan.template]
+    pl = choose_placement(sat, grid_pose(rs, gc), grid_point=GRID_OF_COURSE[gc][0], min_coverage=plan.min_coverage, flag_start=plan.flag_start)
+    with placed(pl.angle, pl.tx, pl.tz):
+        lap = order_slices(sat, start_slice=pl.start_slice, direction=pl.direction, min_coverage=plan.min_coverage)
+        hfn = arc_height(lap, road_profile(sat, lap), sat.segments, camber=plan.camber, ground=sat)
+        col, _ = saturn_collision(sat, hfn, lap=lap, merge=True, cover=True, lane_points=plan.lane_points, grid_clear=GRID_CLEAR_OF_COURSE[gc])
+        cl = centreline(lap)
+        k = pit_entry_quad(sat, col, cl)
+        bx, _, bz, _ = pit_box(sat, col, cl)
+        line = pit_lane_centres(sat, cl)
+    ib = min(range(len(line)), key=lambda j: math.dist(line[j], (bx, bz)))
+    region = line[:ib + 1]
+    pair = (col.quads[k].corners, col.quads[k + 1].corners)
+    step = 2.0
+    def cell(x, z):
+        return (round(x / step), round(z / step))
+    def open_(c):
+        x, z = c[0] * step, c[1] * step
+        if min(math.dist((x, z), p) for p in region) > 30:
+            return False
+        if any(_point_in_xz(q, x, z) for q in pair):
+            return False
+        return _tarmac_quad_at(col, x, z) is not None
+    start = cell(bx, bz); seen = {start}; todo = [start]; reached = []
+    near = [p for p in cl if min(math.dist(p, r) for r in region) < 40]
+    while todo:
+        c = todo.pop()
+        x, z = c[0] * step, c[1] * step
+        if near and min(math.dist((x, z), p) for p in near) < 6:
+            reached.append((x, z))
+            continue
+        for d in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+            n = (c[0] + d[0], c[1] + d[1])
+            if n not in seen and open_(n):
+                seen.add(n); todo.append(n)
+    assert not reached, (name, k, reached[:3])
+
+
+def test_amazons_pit_exit_wall_stands_at_the_drawn_rock(saturn_cue, romset_zip):
+    """v0.1.1 (Pascal, rec120: after the pit stop "i got out of the track boundaries at the exit of the pit where the road
+    reconnect with the main road"): past Amazon Falls' pit exit (centreline points 26-35, 40-130 units on) the drawn rock
+    on the right stands 7-10 units out, but the wall's floor (WALL_MIN_LATERAL, 12.5) held the wall 2-6 units BEHIND it:
+    the car drove into the rock, out of the course, onto the run-off wall. Pascal named the spot (and the other courses'
+    exits: only Amazon's has a wall behind a face there): the exit zone is one of the course's named points
+    (`CoursePlan.lane_points`) and the wall stands at the face less BARRIER_SETBACK, as on the first corner."""
+    import math
+    from vrtools.arcade.tencourse import COURSES, GRID_CLEAR_OF_COURSE, load_saturn_course
+    from vrtools.arcade.tgp import SURFACE_WALL
+    import vrtools.convert.collision as C
+    from vrtools.convert.geometry import course_quads, placed
+    from vrtools.convert.lap import centreline, order_slices
+    from vrtools.convert.place import COURSE_OF_TEMPLATE, GRID_OF_COURSE, choose_placement, grid_pose
+    from vrtools.convert.profile import arc_height, road_profile
+    rs = RomSet.from_zip(romset_zip)
+    plan = next(p for p in COURSES if p.name == "AMAZON FALLS")
+    sat = load_saturn_course(saturn_cue, plan.path); gc = COURSE_OF_TEMPLATE[plan.template]
+    pl = choose_placement(sat, grid_pose(rs, gc), grid_point=GRID_OF_COURSE[gc][0], min_coverage=plan.min_coverage, flag_start=plan.flag_start)
+    with placed(pl.angle, pl.tx, pl.tz):
+        lap = order_slices(sat, start_slice=pl.start_slice, direction=pl.direction, min_coverage=plan.min_coverage)
+        hfn = arc_height(lap, road_profile(sat, lap), sat.segments, camber=plan.camber, ground=sat)
+        col, _ = C.saturn_collision(sat, hfn, lap=lap, merge=True, cover=True, lane_points=plan.lane_points, grid_clear=GRID_CLEAR_OF_COURSE[gc])
+        pts = centreline(lap, spacing=C.COVERAGE_SPACING)
+        barriers = [q for q in course_quads(sat, groups=C.STEEP_GROUPS) if C.is_barrier(q)] \
+            + [q for q in course_quads(sat, groups=C.SOLID_GROUPS) if not C.is_water(q.rgb) and not C.is_shoulder(q)]
+        faces = C.fill_faces(C.barrier_faces(barriers, pts, hfn, curbs=[]))
+        ex = C.pit_lane_line(sat, pts)[-1]                                         # (the lane takes the placement)
+    assert min(range(len(pts)), key=lambda i: math.dist(pts[i], ex)) == 22        # the exit's point (the zone is named by number)
+    boxes = C._bboxes(col.quads); dirs = C._smooth_dirs(pts)
+    walls = {i for i, k in enumerate(col.surface) if k == SURFACE_WALL}
+    late = []
+    for k in range(26, 36):
+        (x, z), (dx, dz) = pts[k], dirs[k]
+        rx, rz = dz, -dx                                                           # the right side (`road_edges`' sign +1)
+        lat = 0.0
+        while lat <= 40.0:
+            px, pz = x + lat * rx, z + lat * rz
+            if any(i in walls and b[0] <= px <= b[1] and b[2] <= pz <= b[3] and C._point_in_xz(col.quads[i].corners, px, pz)
+                   for i, b in enumerate(boxes)):
+                break
+            lat += 0.25
+        if lat > faces[k][1] + 0.5:
+            late.append((k, lat, faces[k][1]))
+    assert not late, late
+
+
+def test_metropolis_pit_box_stands_in_the_tunnel(saturn_cue, romset_zip):
+    """Phase 22t (Pascal, 8 Nov: "pit stop on metropolis is too far (outside the tunnel, should be mid of the tunnel"):
+    Metropolis's pit lane runs through a tunnel (drawn geometry 8-11 units over the lane from its mouth to about z 340);
+    the default box, half the lane's length but at least PIT_BOX_DEPTH_MIN 130 in, fell at the lane's last point, just
+    outside it. The box stands under the roof, at least 20 units inside its end, and at least PIT_BOX_MIN_RUN past the
+    entry (the game's pit autopilot drives the straight run in between)."""
+    import math
+    from vrtools.arcade.tencourse import COURSES, GRID_CLEAR_OF_COURSE, load_saturn_course
+    import vrtools.convert.collision as C
+    from vrtools.convert.geometry import course_quads, placed
+    from vrtools.convert.lap import centreline, order_slices
+    from vrtools.convert.place import COURSE_OF_TEMPLATE, GRID_OF_COURSE, choose_placement, grid_pose
+    from vrtools.convert.profile import arc_height, road_profile
+    rs = RomSet.from_zip(romset_zip)
+    plan = next(p for p in COURSES if p.name == "METROPOLIS")
+    sat = load_saturn_course(saturn_cue, plan.path); gc = COURSE_OF_TEMPLATE[plan.template]
+    pl = choose_placement(sat, grid_pose(rs, gc), grid_point=GRID_OF_COURSE[gc][0], min_coverage=plan.min_coverage, flag_start=plan.flag_start)
+    with placed(pl.angle, pl.tx, pl.tz):
+        lap = order_slices(sat, start_slice=pl.start_slice, direction=pl.direction, min_coverage=plan.min_coverage)
+        hfn = arc_height(lap, road_profile(sat, lap), sat.segments, camber=plan.camber, ground=sat)
+        col, _ = C.saturn_collision(sat, hfn, lap=lap, merge=True, cover=True, lane_points=plan.lane_points, grid_clear=GRID_CLEAR_OF_COURSE[gc])
+        cl = centreline(lap)
+        x, y, z, h = C.pit_box(sat, col, cl)
+        k = C.pit_entry_quad(sat, col, cl)
+        line = C.pit_lane_line(sat, cl)
+        drawn = C.mesh_heights(course_quads(sat, groups=(0, 1, 2, 3, 4)))
+    def roofed(px, pz):
+        return any(4 < v - hfn(px, pz) < 60 for v in drawn(px, pz))
+    assert roofed(x, z), (x, z)
+    d = ((-math.sin(h * 2 * math.pi / 65536)), math.cos(h * 2 * math.pi / 65536))      # on along the lane: still under the roof
+    assert all(roofed(x + d[0] * t, z + d[1] * t) for t in range(0, 21, 2)), "within 20 units of the tunnel's end"
+    ex, ez = col.quads[k].centre[0], col.quads[k].centre[2]
+    assert math.dist((ex, ez), (x, z)) >= C.PIT_BOX_MIN_RUN
 
 # --- Phase 22j: the lap seam under the spawn ---------------------------------------------------------------------------
 def _straight_slices(z0: float, z1: float, step: float, w: float = 12.0):

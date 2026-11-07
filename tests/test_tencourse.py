@@ -179,7 +179,9 @@ def test_the_ten_course_set_keeps_polygon_rom_free(romset_zip, saturn_cue):
         terrain = len(course_quads(sat, (1,)))
         assert c.report["terrain_thinned"] < 0.5 * terrain, (plan.name, c.report["terrain_thinned"], terrain)
         if plan.terrain_thin == 0 and plan.thin == 0:                    # nothing thinned: every polygon of every layer is drawn
-            assert c.report["quads"] == sum(len(course_quads(sat, (g,))) for g in range(5)), plan.name   # (review: no verge holes)
+            hidden = 27 * c.report["hidden_gates"]                       # Phase 22t: a C.P. gate that is no checkpoint (27 faces) is left out
+            assert c.report["quads"] == sum(len(course_quads(sat, (g,))) for g in range(5)) - hidden, plan.name   # (review: no verge holes)
+    assert {plan.name: c.report["hidden_gates"] for plan, c in zip(COURSES, conv) if c.report["hidden_gates"]} == {"PACIFIC COAST": 1}
 
 
 def test_every_course_has_its_own_backdrop(romset_zip, saturn_cue):
@@ -337,3 +339,40 @@ def test_the_lap_starts_at_the_saturns_flag_where_it_fits(saturn_cue):
             k = start_gate_point(sat, cl)
         n = len(cl)
         assert k is not None and (n - k) % n <= plan.flag_start + 1 and (n - k) % n >= max(0, plan.flag_start - 1), (plan.name, k, n)
+
+
+def test_a_drawn_cp_gate_is_always_a_checkpoint(saturn_cue, romset_zip):
+    """Phase 22t (Pascal, 8 Nov: "one remaining checkpoint flag in pacific ... with no real checkpoint under it"): Phase
+    22i dropped a Saturn gate within GATE_START_GAP points after our start line as a checkpoint (Pacific Coast's first
+    C.P., 400 units after the line), but the gate was still drawn. `hide_unused_gates` leaves out the C.P. gates (68
+    vertices) that are not checkpoints, from the scenery and the collision alike; the START/GOAL gate (96) always stays
+    (on the Oval and Surfers Road it stands 50-60 units before our line: the line's own arch)."""
+    import math
+    from vrtools.arcade.tencourse import COURSES, load_saturn_course
+    from vrtools.convert.gates import GATE_GROUP, hide_unused_gates, saturn_gates
+    from vrtools.convert.geometry import face_quads, placed
+    from vrtools.convert.lap import centreline, order_slices
+    from vrtools.convert.place import COURSE_OF_TEMPLATE, GRID_OF_COURSE, choose_placement, grid_pose
+    from vrtools.convert.race import gate_checkpoints
+    rs = RomSet.from_zip(romset_zip)
+    hidden = {}
+    for plan in COURSES:
+        sat = load_saturn_course(saturn_cue, plan.path); gc = COURSE_OF_TEMPLATE[plan.template]
+        pl = choose_placement(sat, grid_pose(rs, gc), grid_point=GRID_OF_COURSE[gc][0], min_coverage=plan.min_coverage,
+                              flag_start=plan.flag_start)
+        with placed(pl.angle, pl.tx, pl.tz):
+            cl = centreline(order_slices(sat, start_slice=pl.start_slice, direction=pl.direction, min_coverage=plan.min_coverage))
+            cps = gate_checkpoints(saturn_gates(sat, cl), len(cl))
+            kept = hide_unused_gates(sat, cl)
+            assert gate_checkpoints(saturn_gates(kept, cl), len(cl)) == cps, plan.name          # the checkpoints do not move
+            meshes = kept.meshes[GATE_GROUP]
+            for p in kept.placements[GATE_GROUP]:
+                if 0 <= p.mesh < len(meshes) and len(meshes[p.mesh].vertices) == 68:
+                    q = [v for f in face_quads(meshes[p.mesh], p) for v in f.p]
+                    c = (sum(v[0] for v in q) / len(q), sum(v[2] for v in q) / len(q))
+                    k = min(range(len(cl)), key=lambda i: math.dist(cl[i], c))
+                    assert k in cps, (plan.name, k, cps)
+            assert sum(1 for p in kept.placements[GATE_GROUP] if len(meshes[p.mesh].vertices) == 96) == 1, plan.name
+        hidden[plan.name] = len(sat.placements[GATE_GROUP]) - len(kept.placements[GATE_GROUP])
+    assert hidden == {"ALPINE": 0, "AMAZON FALLS": 0, "DIABLO CANYON": 0, "METROPOLIS": 0, "PACIFIC COAST": 1,
+                      "SURFERS OVAL": 0, "SURFERS ROAD": 0}
