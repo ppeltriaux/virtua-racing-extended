@@ -208,7 +208,11 @@ def test_operator_fixed_course_still_loads_the_original(tmp_path, romset_zip):
     from vrtools.arcade.directory import ORIGINALS, install_directory
 
     rs = RomSet.from_zip(romset_zip)
-    poke = {"VR_POKE": "40dca1=2"}
+    # The game loads its settings from the I/O board's EEPROM (0xC00200 -> 0x40dc80, boot 0xfe08dd) and copies COURSE
+    # SELECT to 0x501103 (0xfe1b06) in the same frame; since Phase 22r's battery-RAM set-up the patched boot reaches
+    # that frame one frame later than the original, so a poke of 0x40dca1 alone came after the copy (v0.1.1 trace).
+    # Poking the game's copy too keeps the test on what it checks: the game's own fixed-course path through [0x501934].
+    poke = {"VR_POKE": "40dca1=2,501103=2"}
     a = _drive(tmp_path, "origfix", romset_zip.parent, seconds=40, extra_env=poke)
     build = _build(tmp_path, romset_zip, install_directory(rs, (ORIGINALS * 4)[:10]))
     b = _drive(tmp_path, "dirfix", build, seconds=40, extra_env=poke)

@@ -1,4 +1,4 @@
-# Virtua Racing Extended v0.1
+# Virtua Racing Extended v0.1.1
 
 Virtua Racing Extended is the 1992 Sega Model 1 arcade Virtua Racing with ten courses: its own three
 (Big Forest, Bay Bridge, Acropolis) and the seven the 1995 Saturn port added (Alpine, Amazon Falls,
@@ -11,7 +11,7 @@ https://continuearcade.com/virtua-racing-extended/
 This repository is a patch: one command builds the game on your machine from your own copies of the
 arcade game and of the Saturn port. It holds none of either (see "What is in the patch").
 
-> **v0.1 is an early release, not a finished one.** All ten courses load and race, with opponents,
+> **v0.1.1 is an early release, not a finished one.** All ten courses load and race, with opponents,
 > pit lanes, walls, checkpoints, the in-race map and a best-time table per course, but the tuning
 > and the finish are still being worked on: see "Known issues in v0.1" and "Planned".
 
@@ -66,7 +66,7 @@ you want them.
 (`pace`), its checkpoint time extensions (`time_factor`) and sets its race length (`laps`, 1 to 7);
 repeat `--tune` per course. The defaults are 5 laps and the values the build was tested with.
 
-## Known issues in v0.1
+## Known issues in v0.1.1
 
 - **Music:** races on the seven converted courses play the select screen's track, not the Saturn
   course's music.
@@ -117,8 +117,12 @@ cp local.env.example local.env   # set the two paths, then: source local.env
 .venv/bin/pytest
 ```
 
-A few collision tests written for earlier rounds are known to fail against the current geometry and
-are being restated; `tools/pre-commit` refuses binaries and large files (link it into `.git/hooks/`).
+The tests that disassemble the game's code need MAME's `unidasm`, which `tools/build-mame.sh` builds into
+`build/mame/` (macOS with Homebrew; it compiles MAME's Model 1 driver, which takes a while); without it they
+skip and say so. Ten tests written for earlier rounds are known to fail against the current geometry and
+are being restated: five collision tests, the thinning test, two profile tests, and two of the first
+autopilot drives (Alpine in Big Forest's slot, Diablo Canyon), whose old autopilot now meets the walls.
+`tools/pre-commit` refuses binaries and large files (link it into `.git/hooks/`).
 
 ## Legal
 
