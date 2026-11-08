@@ -19,7 +19,9 @@ arcade game and of the Saturn port. It holds none of either (see "What is in the
 
 - **Your own copy of the arcade game:** MAME 0.289's `vr` ROM set, `vr.zip` with all 38 files (the
   25 the build reads are checked by size and CRC against MAME 0.289's list; the other 13 must be
-  present), with `model1io.zip` and `m1comm.zip` beside it.
+  present), with `model1io.zip` and `m1comm.zip` beside it. MAME has one Virtua Racing arcade set for
+  every region: the region is an operator setting in the game's test menu (COUNTRY), so there is no
+  regional arcade version to choose.
 - **Your own copy of the Saturn port:** *Virtua Racing* for the Saturn, **the European release**, as
   a `.cue` with its `.bin` beside it. The US and Japanese discs are not supported yet (see "Planned");
   the build refuses them and names the file it could not find.
@@ -105,9 +107,8 @@ The game the patch builds changes on those four courses only. v0.1.1 changed the
 
 ## Planned
 
-- **Other releases of the games:** the Saturn port's **US** and **Japanese** discs (they lay their
-  files out differently from the European one), and other revisions of the arcade ROM set as MAME
-  lists them.
+- **The Saturn port's other releases:** the **US** and **Japanese** discs (they lay their files out
+  differently from the European one). The arcade side needs nothing: its one ROM set covers every region.
 - The Saturn's music on each converted course.
 - The remaining wall spots, and the difficulty per course from playtesting.
 - Diablo Canyon's colours.
