@@ -1,4 +1,4 @@
-# Virtua Racing Extended v0.1.3
+# Virtua Racing Extended v0.1.4
 
 Virtua Racing Extended is the 1992 Sega Model 1 arcade Virtua Racing with ten courses: its own three
 (Big Forest, Bay Bridge, Acropolis) and the seven the 1995 Saturn port added (Alpine, Amazon Falls,
@@ -11,9 +11,9 @@ https://continuearcade.com/virtua-racing-extended/
 This repository is a patch: one command builds the game on your machine from your own copies of the
 arcade game and of the Saturn port. It holds none of either (see "What is in the patch").
 
-> **v0.1.3 is an early release, not a finished one.** All ten courses load and race, with opponents,
+> **v0.1.4 is an early release, not a finished one.** All ten courses load and race, with opponents,
 > pit lanes, walls, checkpoints, the in-race map and a best-time table per course, but the tuning
-> and the finish are still being worked on: see "Known issues in v0.1.3" and "Planned".
+> and the finish are still being worked on: see "Known issues in v0.1.4" and "Planned".
 
 ## What you need
 
@@ -68,6 +68,11 @@ you want them.
 (`pace`), its checkpoint time extensions (`time_factor`) and sets its race length (`laps`, 1 to 7);
 repeat `--tune` per course. The defaults are 5 laps and the values the build was tested with.
 
+## What's new in v0.1.4
+
+- **The title says so:** the attract mode's V.R. / Virtua Racing logo now reads "Extended" under "Racing",
+  in the logo's own red with its black shadow, in bold italic. Nothing else in the game changes.
+
 ## What's new in v0.1.3
 
 - **The opponents stay on the road:** on the converted courses they ran off into the scenery far more often
@@ -87,7 +92,7 @@ repeat `--tune` per course. The defaults are 5 laps and the values the build was
 
 The game the patch builds changes on those four courses only. v0.1.1 changed the tests only.
 
-## Known issues in v0.1.3
+## Known issues in v0.1.4
 
 - **Music:** races on the seven converted courses play the select screen's track, not the Saturn
   course's music.
@@ -118,7 +123,8 @@ The game the patch builds changes on those four courses only. v0.1.1 changed the
 
 - the converter (`vrtools/`, Python): it reads the Saturn course files from your disc and writes the
   arcade's road, collision, scenery, opponents' lines, race tables, select panels, map and backdrop
-  for each new course into free space of your ROM set, then patches the program to offer ten courses;
+  for each new course into free space of your ROM set, then patches the program to offer ten courses and
+  adds "Extended" to the attract logo;
 - the MAME Lua scripts the tests drive the game with (`vrtools/mame/lua/`);
 - the tests (`tests/`): most need your ROM set and disc (`VR_ROMDIR`, `VR_SATURN_CUE`, see
   `local.env.example`) and skip without them; the race tests need MAME 0.289;

@@ -26,6 +26,7 @@ from vrtools.arcade.patch import (TILE_TABLE_BYTES, PatchError, copro_free_runs,
                                   write_tile_table)
 from vrtools.arcade.romset import RomSet
 from vrtools.arcade.spawn import SPAWN_LIST_BYTES, decode_spawn_list, encode_spawn_list, replace_entities
+from vrtools.arcade.title import install_title
 from vrtools.convert.backdrop import CODE_LIMIT, TOP_CODE, convert_panorama
 from vrtools.convert.collision import saturn_collision
 from vrtools.convert.geometry import OUTSIDE_MAP_MAX, convert_tiles, placed
@@ -410,7 +411,8 @@ def ten_course_set(rs: RomSet, converted: list[Converted], placeholder: Converte
                    panels: bool = True) -> RomSet:
     """The directory for the three originals followed by `converted` (in order); remaining entries up to ten
     repeat `placeholder` (or the last converted course) under the remaining Saturn names. With `panels`, every
-    non-original entry gets a generated select panel (its course outline and name on the host's frame)."""
+    non-original entry gets a generated select panel (its course outline and name on the host's frame). The attract
+    logo gets its "Extended" (title.py)."""
     from dataclasses import replace
     entries = [c.entry for c in converted]
     outlines = [c.centreline for c in converted]
@@ -433,7 +435,7 @@ def ten_course_set(rs: RomSet, converted: list[Converted], placeholder: Converte
         entries = [replace(e, picture=r) for e, r in zip(entries, records[3:])]
     lay = directory_layout()
     check_backdrop_markers(out.data, [(e.bank, e.header_base) for e in entries if e.bank is not None])
-    return install_directory(out, with_spawn(originals + entries, lay))
+    return install_title(install_directory(out, with_spawn(originals + entries, lay)))   # the attract logo's "Extended"
 
 
 def install_pictures(rs: RomSet, names: list[str], bases: list) -> tuple[RomSet, list[int]]:

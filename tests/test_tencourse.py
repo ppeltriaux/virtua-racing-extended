@@ -249,7 +249,8 @@ def _records(out):
 def test_every_entry_has_a_picture_record(romset_zip, saturn_cue):
     """Phase 21: ten picture records; the originals' point at their own select-list characters (311 / 258 / 288 in
     three runs) and the START tables; the converted ones hold at most PICTURE_CHARS characters; every blob lies in
-    bank 0 or the program ROM without overlapping another, and no record targets blocks or palettes 0-95."""
+    bank 0 or the program ROM without overlapping another (the title lettering's characters too), and no record
+    targets blocks or palettes 0-95. The set's attract logo says "Extended" (title.py)."""
     from vrtools.arcade.panel import select_uploads
     from vrtools.arcade.picture import PICTURE_CHARS
     from vrtools.arcade.select import CHAR_RAM, SLOT_CHAR
@@ -268,9 +269,15 @@ def test_every_entry_has_a_picture_record(romset_zip, saturn_cue):
     for r in recs[3:]:
         assert 0 < n(r) <= PICTURE_CHARS and r.a_dst == 0
         spans.append((r.chars_addr, r.map_addr + 672))
+    from vrtools.arcade.title import FREE_CHARS, LOWER_MAP, boot_uploads, install_title
+    src, dst, count = boot_uploads(out)[-1]                                      # the title lettering (title.py)
+    assert dst == 0x780000 + 32 * FREE_CHARS[0] and boot_uploads(out)[:-1] == boot_uploads(rs)
+    spans.append((src, src + 4 + 32 * count))
     spans.sort()
     assert all(a[1] <= b[0] for a, b in zip(spans, spans[1:]))
     assert all(0x100000 <= a < 0x300000 for a, _ in spans)
+    lower = slice(LOWER_MAP - 0x200000, LOWER_MAP - 0x200000 + 12 + 2 * 27 * 62)
+    assert out.program[lower] == install_title(rs).program[lower]
 
 
 def test_stand_in_entries_show_their_course_picture(romset_zip, saturn_cue):
