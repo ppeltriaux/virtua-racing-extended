@@ -2626,6 +2626,7 @@ def _covers_road(v: Quad16, pts) -> bool:
 
 END_SPLIT_UNITS = 120.0        # Phase 22l: tarmac quads within this of the lap's end along the road are cut into pieces no
 END_SPLIT_LATERAL = 40.0       # ... and whose centre lies within this of the centreline (the road and the Oval's apron beside it)
+MID_SPLIT_LEN = 40.0           # Phase 22u: every other tarmac quad is cut to this length (the opponents' cursors; see test)
 END_SPLIT_LEN = 15.0           # longer than this: the Oval's start straight was one 70-unit Saturn slice ending 33 units before
                                # the new line, credited one road point (384 for 377-384); the field's road point jumped 376 -> 384
                                # -> 386 and three opponents halted on it with the cursor at 385 (the credits step by one now)
@@ -2702,7 +2703,7 @@ def _shoelace(c) -> float:
 
 
 def split_quads_before_the_line(tarmac: list[Quad16], pts, height: HeightFn, units: float = END_SPLIT_UNITS,
-                                length: float = END_SPLIT_LEN) -> tuple[list[Quad16], int]:
+                                length: float = END_SPLIT_LEN, keep=()) -> tuple[list[Quad16], int]:
     """Phase 22l: `tarmac` with every quad whose centre lies within `units` of the lap's end (along `pts`) and which is
     longer than `length` along the road cut into equal pieces of at most `length` (`_clip_quad`: new corners on the
     quad's plane), in place; and how many quads were cut. The game credits a quad one road point, so a long quad
@@ -2716,7 +2717,8 @@ def split_quads_before_the_line(tarmac: list[Quad16], pts, height: HeightFn, uni
     for q in tarmac:
         cx, cz = q.centre[0], q.centre[2]
         k = min(range(n), key=lambda i: (pts[i][0] - cx) ** 2 + (pts[i][1] - cz) ** 2)
-        if (n - k) * spacing > units or k == 0 or math.dist(pts[k], (cx, cz)) > END_SPLIT_LATERAL:
+        if (n - k) * spacing > units or k == 0 or math.dist(pts[k], (cx, cz)) > END_SPLIT_LATERAL \
+                or any(_point_in_xz(poly, cx, cz) for poly in keep):        # Phase 22u: the pit lanes stay whole (their entry pairs)
             out.append(q); continue                                # (END_SPLIT_LATERAL 40: the apron's slices too — split to
                                                                    # the road alone, the Oval's field stalled again: the walk
                                                                    # numbers the pieces by list order at the seam, follow-up)
@@ -3195,6 +3197,8 @@ def saturn_collision(sat: SaturnCourse, height: HeightFn, y_offset: float = 0.0,
                                                half_width=PIT_LANE_HALF_WIDTH, blocked=blocked)
             coverage["holes"] += n_pit
         tarmac, coverage["end_split"] = split_quads_before_the_line(quads[:n_tarmac], pts, hfun)   # Phase 22l: short quads into the line
+        tarmac, coverage["mid_split"] = split_quads_before_the_line(tarmac, pts, hfun, units=math.inf, length=MID_SPLIT_LEN,
+                                                                  keep=[[(p[0], 0.0, p[2]) for p in poly] for poly in pit_lane_polygons(sat)])   # Phase 22u
         tarmac, band = start_line_band(tarmac, pts, hfun)             # an uncontested last-point band before the line
         coverage.update(band)
         quads = tarmac + quads[n_tarmac:]; n_tarmac = len(tarmac)

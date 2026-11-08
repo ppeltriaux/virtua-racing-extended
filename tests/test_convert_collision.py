@@ -2872,6 +2872,27 @@ def test_the_slices_near_the_lap_ends_stay_single_so_the_credits_step_by_one():
     assert all(max(c[2] for c in q.corners) - min(c[2] for c in q.corners) <= 10.01 for q in ends[:singles_each_end - 1] + ends[-(singles_each_end - 1):])
 
 
+
+def test_long_tarmac_quads_are_split_lap_wide_so_the_cursors_stay_near_their_cars():
+    """Phase 22u (Pascal, 8 Nov: "opponents crash randomly in the decor too often ... on most tracks"): an opponent's line
+    cursor advances to a point only once the car is credited that point's segment, and steers two points beyond it; a
+    long tarmac quad (merged straights, long Saturn slices: up to 70-116 units) credits one point for its whole length,
+    so the cursor ran up to 9 points ahead and the car left the road. Measured over a 150-s race per course (out/crash/):
+    off-tarmac speed dips 98 -> 43 over the seven courses with every tarmac quad cut to MID_SPLIT_LEN 40 (30: 30, but
+    the TGP budget fell to 3 724). Mid-lap quads longer than MID_SPLIT_LEN are cut into equal pieces; the pit lanes'
+    quads stay whole (their PIT WORK entry pairs)."""
+    from vrtools.arcade.tgp import Quad16
+    from vrtools.convert.collision import MID_SPLIT_LEN, split_quads_before_the_line
+    assert MID_SPLIT_LEN == 40.0
+    pts = [(0.0, float(z)) for z in range(0, 1000, 10)]                  # a straight lap of 100 points along +z
+    long_q = Quad16(((-12.0, 0.0, 600.0), (12.0, 0.0, 600.0), (12.0, 0.0, 500.0), (-12.0, 0.0, 500.0)), (0.0, 0.0, 550.0), 7)
+    out, cut = split_quads_before_the_line([long_q], pts, lambda x, z: 0.0, units=math.inf, length=MID_SPLIT_LEN)
+    assert cut == 1 and len(out) == 3
+    assert all(max(c[2] for c in q.corners) - min(c[2] for c in q.corners) <= MID_SPLIT_LEN + 1e-6 for q in out)
+    lane = [[(-15.0, 0.0, 450.0), (15.0, 0.0, 450.0), (15.0, 0.0, 650.0), (-15.0, 0.0, 650.0)]]
+    kept, cut = split_quads_before_the_line([long_q], pts, lambda x, z: 0.0, units=math.inf, length=MID_SPLIT_LEN, keep=lane)
+    assert cut == 0 and kept == [long_q]
+
 def test_long_tarmac_quads_before_the_line_are_split_so_the_credits_step_by_one():
     """Phase 22l (the Surfers Oval's new line): the Saturn's start straight is one 70-unit slice ending 33 units before
     the line, credited one road point (384 for points 377-384); the field's road point jumped 376 -> 384 -> 386 and

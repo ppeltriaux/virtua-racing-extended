@@ -1,4 +1,4 @@
-# Virtua Racing Extended v0.1.2
+# Virtua Racing Extended v0.1.3
 
 Virtua Racing Extended is the 1992 Sega Model 1 arcade Virtua Racing with ten courses: its own three
 (Big Forest, Bay Bridge, Acropolis) and the seven the 1995 Saturn port added (Alpine, Amazon Falls,
@@ -11,9 +11,9 @@ https://continuearcade.com/virtua-racing-extended/
 This repository is a patch: one command builds the game on your machine from your own copies of the
 arcade game and of the Saturn port. It holds none of either (see "What is in the patch").
 
-> **v0.1.2 is an early release, not a finished one.** All ten courses load and race, with opponents,
+> **v0.1.3 is an early release, not a finished one.** All ten courses load and race, with opponents,
 > pit lanes, walls, checkpoints, the in-race map and a best-time table per course, but the tuning
-> and the finish are still being worked on: see "Known issues in v0.1.2" and "Planned".
+> and the finish are still being worked on: see "Known issues in v0.1.3" and "Planned".
 
 ## What you need
 
@@ -66,6 +66,13 @@ you want them.
 (`pace`), its checkpoint time extensions (`time_factor`) and sets its race length (`laps`, 1 to 7);
 repeat `--tune` per course. The defaults are 5 laps and the values the build was tested with.
 
+## What's new in v0.1.3
+
+- **The opponents stay on the road:** on the converted courses they ran off into the scenery far more often
+  than on the originals, about half as often now. The game tracks each car's progress by the road piece under it
+  and steers it at a point just ahead; our long road pieces made that point jump far ahead. Long pieces are now cut
+  (measured over a 150-second race per course: off-road moments 98 -> 43 over the seven courses).
+
 ## What's new in v0.1.2
 
 - **Surfers Road's pit stop** now always triggers: the lane shares open tarmac with the race road for its
@@ -78,7 +85,7 @@ repeat `--tune` per course. The defaults are 5 laps and the values the build was
 
 The game the patch builds changes on those four courses only. v0.1.1 changed the tests only.
 
-## Known issues in v0.1.2
+## Known issues in v0.1.3
 
 - **Music:** races on the seven converted courses play the select screen's track, not the Saturn
   course's music.
@@ -86,6 +93,7 @@ The game the patch builds changes on those four courses only. v0.1.1 changed the
   everywhere: on a few corners (Amazon Falls' second corner, Diablo Canyon's rocks at its middle and
   end sections) the wall stands a little off the drawn rock, and at Diablo Canyon's end the car can
   slip under a rock.
+- **Opponents:** they still leave the road now and then, most on Diablo Canyon.
 - **Difficulty:** the opponents' pace and the time limits on the converted courses are first values,
   not yet balanced by play.
 - **Diablo Canyon:** its colours are not yet the Saturn's, the cars start the race slightly slanted,
