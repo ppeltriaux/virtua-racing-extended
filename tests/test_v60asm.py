@@ -26,6 +26,7 @@ FORMS = [
     ("mov.b reg,abs", ("r0", 0xE00004), "mov.b R0, E00004"),
     ("mov.b abs,reg", (0xC0001E, "r0"), "mov.b C0001E, R0"),
     ("mov.b imm,abs", (2, 0x501934), "mov.b #2, 501934"),
+    ("mov.b reg,abs(reg)", ("r3", 0x40FC6A, "r0"), "mov.b R3, 40FC6A(R0)"),
     ("mov.h reg,abs", ("r0", 0x70A000), "mov.h R0, 70A000"),
     ("mov.h abs(reg),reg", (0x278E40, "r0", "r0"), "mov.h 278E40(R0), R0"),
     ("movz.bw abs,reg", (0x501934, "r0"), "movz.bw 501934, R0"),

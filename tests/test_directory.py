@@ -16,7 +16,8 @@ SPANS = ({(0xFE48ED, 0xB7), (0xFE8E8F, 0xD), (0xFC270B, 4), (0xFC28A3, 4), (0xFC
           (0xFF27D8, 7), (0xFF2D69, 7), (0xFF33C7, 7), (0xFF3A1B, 7),      # the pit autopilot's and the crew spawns' calls of the box pose
           (0xFFE007, 7), (0xFFE49E, 7),                                   # Phase 18b: the backdrop directory readers
           (0xFC4208, 30), (0xFC3B78, 3), (0xFC3B4F, 7), (0xFC3B5E, 7), (0xFC3B6C, 12), (0xFC3BF6, 36),   # Phase 22r: the ranking setter, the
-          (0xFE69F7, 7), (0xFE6A18, 7), (0xFC270F, 9)}      # S-RAM initialiser's count, arrays and slot stores, the magic, the id store, the boot clear
+          (0xFE69F7, 7), (0xFE6A18, 7), (0xFC270F, 9),      # S-RAM initialiser's count, arrays and slot stores, the magic, the id store, the boot clear
+          (0xFC3C33, 10), (0xFC3CFF, 19)}                    # Phase 23b: the attract page's setter call, the ranking title
          | {(s, 0x16) for s in (0xFE1D37, 0xFE2160, 0xFE2B07, 0xFE2CF7, 0xFE415B)})
 
 
@@ -134,8 +135,9 @@ def test_loader_and_car_routines_serve_the_entry(romset_zip):
     assert any("FCD395" in t for t in cars) and any("FCD195" in t for t in cars) and "rsr" in cars
     assert [l.text.split()[0] for l in listing(out, 0xFE8A91, 2)] == ["jsr", "nop"]
     assert listing(out, 0xFE8AA7, 1)[0].text.startswith("and.w")                            # the instruction after the span is intact
-    assert directory_layout()["end"] - directory_layout()["loader"] < 4000                  # routines stay small (Phase 21: + picture (unrolled for speed), start; 22i: the pit
-                                                                                            # routines; 22r: the ranking arrays and routines, 0x1b0 bytes)
+    assert directory_layout()["end"] - directory_layout()["loader"] < 5000                  # routines stay small (Phase 21: + picture (unrolled for speed), start; 22i: the pit
+                                                                                            # routines; 22r: the ranking arrays and routines, 0x1b0 bytes; 23b: the
+                                                                                            # attract groups, the names and seven 100-byte title routines, ~0x380)
 
 
 def test_laps_are_written_only_in_the_normal_game_mode(romset_zip):

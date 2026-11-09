@@ -395,6 +395,18 @@ emits one table entry per distinct palette index, sorts the quads by index so
   into `0x5018f0` and `0x501918`. The ranking display `0xfc3cff..0xfc3e9f` reads `[0x501918]` for the slot, `[0x5018f0]`
   for the entries (page `36[R25]` × 0x18), prints with `0xffe848 / 0xffe8fb / 0xffe74d`, and picks the title by
   `[0x501934]` through the jump table `0xfc3db6`.
+- Callers of the setter (Phase 23b recon): `0xfc3c33` (`movz.bw 501934, R0; bsr FC4208`, 10 bytes) is the attract
+  mode's ranking page, which comes with the demo of each original (data index 0, 2, 1 in turn: MEDIUM, BEGINNER,
+  EXPERT); `0xfc40e1` the race's end; `0xfc4226` the post-race task (installed at `0xfe65a7`). The page's title:
+  `0xfc3cff..0xfc3d11` (19 bytes) jumps through `0xfc3db6` by data index to `0xfc3ea0 / 0xfc3efe / 0xfc3f5c`, each
+  three calls of the string printer `0xffe8fb(string, tile address, attribute)`: the word (`0xfc400b` MEDIUM,
+  `0xfc4012` EXPERT, `0xfc4019` BEGINNER) in red (`0x8300`) at column 9 (BEGINNER 8), `0xfc3fe9` COURSE and
+  `0xfc3ff0` RANKING in white (`0x8200`) at 24 and 39 (26, 41) on the title row `0x700200` (2 columns a letter). The
+  printer draws each character (ASCII & 0x3f) as 2 × 3 tiles from the glyph table `0x2f2456` (6 bytes a code); the
+  font has A–Z, the digits and the space. Phase 22r's setter read the chosen course for every caller, so the attract
+  pages all showed the last chosen course's table; Phase 23b gives the attract page its own setter (by data index,
+  the original first, then the converted courses in its slot, one per loop) and routes the title through the shown
+  table's ranking id (`ranking.py`).
 - Initialiser `0xfc3b49`: R22 = `0xfcd5b9` (normal) or `0xfcd5c5` (operator flag `0x40dc8c`), R21 = `0xfcf16d`
   (checkpoint records), R23 = `0xfc3c1b` ((defaults `0xfc4dc0`, table) pairs), 3 iterations: the level-0 record's
   first 5 × [checkpoints] words summed, divided by 1920 (a minute in 1/32 s) and rounded up → the first entry's time;

@@ -1,4 +1,4 @@
-# Virtua Racing Extended v0.1.4
+# Virtua Racing Extended v0.1.5
 
 Virtua Racing Extended is the 1992 Sega Model 1 arcade Virtua Racing with ten courses: its own three
 (Big Forest, Bay Bridge, Acropolis) and the seven the 1995 Saturn port added (Alpine, Amazon Falls,
@@ -11,9 +11,9 @@ https://continuearcade.com/virtua-racing-extended/
 This repository is a patch: one command builds the game on your machine from your own copies of the
 arcade game and of the Saturn port. It holds none of either (see "What is in the patch").
 
-> **v0.1.4 is an early release, not a finished one.** All ten courses load and race, with opponents,
+> **v0.1.5 is an early release, not a finished one.** All ten courses load and race, with opponents,
 > pit lanes, walls, checkpoints, the in-race map and a best-time table per course, but the tuning
-> and the finish are still being worked on: see "Known issues in v0.1.4" and "Planned".
+> and the finish are still being worked on: see "Known issues in v0.1.5" and "Planned".
 
 ## What you need
 
@@ -68,6 +68,16 @@ you want them.
 (`pace`), its checkpoint time extensions (`time_factor`) and sets its race length (`laps`, 1 to 7);
 repeat `--tune` per course. The defaults are 5 laps and the values the build was tested with.
 
+## What's new in v0.1.5
+
+- **The rankings name their course:** after a race on a converted course, its best-time table is titled with its
+  name ("AMAZON FALLS COURSE RANKING"); before, it showed its host course's BEGINNER / MEDIUM / EXPERT. In the
+  attract mode, each original course's ranking page now shows the converted courses in its slot by name on later
+  loops, one per loop.
+- **Fixed:** since v0.1, the attract mode's three ranking pages all showed the table of the last course chosen
+  (Bay Bridge's on a fresh boot): each original's page shows its own table again (EXPERT: Acropolis's 5'00 times).
+  Best times already saved are kept.
+
 ## What's new in v0.1.4
 
 - **The title says so:** the attract mode's V.R. / Virtua Racing logo now reads "Extended" under "Racing",
@@ -92,7 +102,7 @@ repeat `--tune` per course. The defaults are 5 laps and the values the build was
 
 The game the patch builds changes on those four courses only. v0.1.1 changed the tests only.
 
-## Known issues in v0.1.4
+## Known issues in v0.1.5
 
 - **Music:** races on the seven converted courses play the select screen's track, not the Saturn
   course's music.
