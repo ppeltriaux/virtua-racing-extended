@@ -1,4 +1,4 @@
-# Virtua Racing Extended v0.2
+# Virtua Racing Extended v0.2.1
 
 Virtua Racing Extended is the 1992 Sega Model 1 arcade Virtua Racing with ten courses: its own three
 (Big Forest, Bay Bridge, Acropolis) and the seven the 1995 Saturn port added (Alpine, Amazon Falls,
@@ -11,10 +11,10 @@ https://continuearcade.com/virtua-racing-extended/
 This repository is a patch: one command builds the game on your machine from your own copies of the
 arcade game and of the Saturn port. It holds none of either (see "What is in the patch").
 
-> **v0.2 is an early release, not a finished one.** All ten courses load and race, with opponents,
+> **v0.2.1 is an early release, not a finished one.** All ten courses load and race, with opponents,
 > pit lanes, walls, checkpoints, the in-race map and a best-time table per course, and the seven
 > converted courses can be raced in reverse, but the tuning and the finish are still being worked on:
-> see "Known issues in v0.2" and "Planned".
+> see "Known issues in v0.2.1" and "Planned".
 
 ## What you need
 
@@ -28,8 +28,10 @@ arcade game and of the Saturn port. It holds none of either (see "What is in the
   the build refuses them and names the file it could not find.
 - **Python 3.12 or later.**
 - **MAME 0.289** to play (and, optionally, to run the build's smoke test).
-- Tested on macOS (Apple silicon) with Homebrew's MAME 0.289. Linux should work the same; Windows is
-  untried (WSL2 is the safe bet).
+- **Systems:** built and played on macOS (Apple silicon) with Homebrew's MAME 0.289. On **Windows** and Linux the
+  tool installs and passes its tests that need no game data (run on each release by GitHub Actions on Windows, macOS
+  and Ubuntu); a full build has not been run by us on Windows or Linux yet. If you build there, an issue saying how it
+  went is welcome.
 
 None of the game is included here, linked to, or sent on request.
 
@@ -43,6 +45,22 @@ python3 -m venv .venv && .venv/bin/pip install -e .
 .venv/bin/vrtools build --roms ~/roms/vr --saturn ~/saturn/"Virtua Racing (Europe).cue" --out ~/vr-extended --smoke
 mame vr -rompath ~/vr-extended
 ```
+
+On **Windows** (PowerShell; Python 3.12 or later from python.org or the Microsoft Store, `mame.exe` 0.289 from
+mamedev.org):
+
+```powershell
+git clone https://github.com/ppeltriaux/virtua-racing-extended.git
+cd virtua-racing-extended
+py -m venv .venv
+.venv\Scripts\pip install -e .
+.venv\Scripts\vrtools check --roms C:\roms\vr --saturn "C:\saturn\Virtua Racing (Europe).cue" --out C:\vr-extended
+.venv\Scripts\vrtools build --roms C:\roms\vr --saturn "C:\saturn\Virtua Racing (Europe).cue" --out C:\vr-extended
+C:\mame\mame.exe vr -rompath C:\vr-extended
+```
+
+`--smoke` needs `mame.exe` on your `PATH` (or run the game yourself as in the last line). Not yet run by us on
+Windows: see "What you need".
 
 - `--roms` is the folder holding `vr.zip`, `model1io.zip` and `m1comm.zip`; `--saturn` the disc's
   `.cue`; `--out` a new folder (it must not be the ROM folder: your files are only read, never
@@ -64,6 +82,8 @@ METROPOLIS, PACIFIC COAST, SURFERS OVAL, SURFERS ROAD. Grand Prix is untouched.
 the course twice, NORMAL on the left and REVERSE on the right. It starts on NORMAL; turn the wheel right for
 REVERSE (bring it to the centre or left first if it is already to the right), and press the gas to start. Doing
 nothing races the normal way. The three original courses have no reverse and go straight to the race.
+Since v0.2.1 each converted course keeps its four best reverse times, apart from its normal table; they are shown in
+the attract mode after the course's own table (see "What's new in v0.2.1"). In v0.2 a reverse race recorded no best time.
 
 **Best times:** each course keeps its own ranking table in the game's battery-backed RAM. On the first
 boot of the patched set the game finds its RAM laid out for three tables and initialises it for ten,
@@ -74,13 +94,29 @@ you want them.
 (`pace`), its checkpoint time extensions (`time_factor`) and sets its race length (`laps`, 1 to 7);
 repeat `--tune` per course. The defaults are 5 laps and the values the build was tested with.
 
+## What's new in v0.2.1
+
+Built and tested with the test autopilot in MAME; not yet played by hand (see "Known issues in v0.2.1").
+
+- **Best times for reverse races:** each of the seven converted courses keeps its four best reverse times, apart from
+  its normal table. A reverse race that finishes at or under the fourth time asks for your name, as a normal race does,
+  and the time is kept in the game's battery-backed RAM. Each table starts with the same four default times as the
+  course's normal table.
+- **In the attract mode:** each reverse table is shown in the ranking pages right after its course's own table, one
+  table a loop, as one screen of four rows titled with the course's name and REVERSE ("AMAZON FALLS REVERSE RANKING").
+- **Saved times kept:** upgrading from v0.2 keeps every best time already saved; the reverse tables are added on the
+  first boot. The test menu's backup RAM clear resets them with the others.
+- **Windows:** the tool's tests that need no game data now run on Windows, macOS and Ubuntu on each release, the
+  README has the Windows steps, and a missing MAME is reported by name instead of a system error. A full build has
+  not been run by us on Windows yet (see "What you need").
+
 ## What's new in v0.2
 
 - **Every converted course in reverse:** the seven Saturn courses can be raced the other way round, chosen
   on a new COURSE DIRECTION screen after the course select (see "In the game"). The opponents, the
   checkpoints and time extensions, the in-race map, the start grid and the pit stop all run in reverse;
-  the pit lane is entered where a normal race leaves it. A reverse race records no best time. The attract
-  mode and linked play stay in the normal direction.
+  the pit lane is entered where a normal race leaves it. A reverse race records no best time (in v0.2: see
+  "What's new in v0.2.1"). The attract mode and linked play stay in the normal direction.
 - **The course's name in the race:** on a converted course the bottom-right label of the race screen reads
   the course's name (ALPINE, AMAZON FALLS, ...) where it showed its host's BEGINNER / MEDIUM / EXPERT.
 - **The road's look:** dark wedges on the road are gone (about a sixth to nearly half of the road faces of a
@@ -130,7 +166,12 @@ repeat `--tune` per course. The defaults are 5 laps and the values the build was
 
 The game the patch builds changes on those four courses only. v0.1.1 changed the tests only.
 
-## Known issues in v0.2
+## Known issues in v0.2.1
+
+- **Reverse best times (new in v0.2.1):** the tables, the name entry and the attract pages were tested with the test
+  autopilot in one-lap races, not yet played by hand; a full five-lap reverse race to a record and a typed name were not
+  run. After you enter a reverse best time, the attract mode shows the next table of its rotation, so yours can take a
+  while to come round (the game does the same for normal tables).
 
 - **Reverse:** the reverse pit stops and Diablo Canyon's trimmed pit lane were measured with the test
   autopilot on all seven courses, not yet driven through by hand on each. On Alpine, Diablo Canyon and

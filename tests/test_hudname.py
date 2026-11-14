@@ -140,11 +140,12 @@ def test_hudname_prints_the_name_right_aligned_in_the_levels_colour(romset_zip):
 
 def test_hudname_follows_the_direction_screens_routines(romset_zip):
     """The routine and its 3-byte table join the directory image after the direction screen's "dirtext" (plan D10's room); the
-    image stays inside the 6 500-byte bound (tests/test_directory.py's; stage 4 Task 5, decision L2: 6 000 -> 6 500)."""
+    image stays inside the 6 900-byte bound (tests/test_directory.py's; stage 4 Task 5, decision L2: 6 000 -> 6 500; Phase 27
+    Task 1: 6 374 bytes; Task 3: 6 856 bytes, 6 500 -> 6 900)."""
     from vrtools.arcade.dirscreen import LABELS, TITLE
     from vrtools.arcade.hudname import ROUTINES, hudname_size
     rs, out, lay = _installed(romset_zip)
     assert ROUTINES == ("hudname", "hudattr")
     assert lay["hudname"] == lay["dirtext"] + len(TITLE) + 1 + sum(len(t) + 1 for t in LABELS)
     assert lay["dirtext"] < lay["hudname"] < lay["hudattr"] < lay["end"] and lay["end"] - lay["hudname"] == hudname_size()
-    assert lay["end"] - lay["loader"] < 6500
+    assert lay["end"] - lay["loader"] < 6900

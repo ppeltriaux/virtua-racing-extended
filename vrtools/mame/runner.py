@@ -36,6 +36,8 @@ def run_mame(script: Path, seconds: int, workdir: Path, rom_dir: Path, env: dict
         proc = subprocess.run(cmd, cwd=workdir, env=full_env, capture_output=True, text=True, timeout=timeout)
     except subprocess.TimeoutExpired as e:
         raise MameError(f"mame did not end within {timeout} s and was killed") from e
+    except FileNotFoundError as e:                       # no such program: say so instead of the system's own error
+        raise MameError(f"{mame!r} was not found: MAME 0.289 must be on the PATH (mame.exe on Windows)") from e
     if proc.returncode != 0 or "Average speed" not in proc.stdout:
         raise MameError(f"mame exited {proc.returncode}: {proc.stdout[-500:]}\n{proc.stderr[-1500:]}")
     return proc

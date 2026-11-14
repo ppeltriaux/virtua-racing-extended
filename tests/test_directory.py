@@ -17,14 +17,17 @@ SPANS = ({(0xFE48ED, 0xB7), (0xFE8E8F, 0xD), (0xFC270B, 4), (0xFC28A3, 4), (0xFC
           (0xFFE007, 7), (0xFFE49E, 7),                                   # Phase 18b: the backdrop directory readers
           (0xFC4208, 30), (0xFC3B78, 3), (0xFC3B4F, 7), (0xFC3B5E, 7), (0xFC3B6C, 12), (0xFC3BF6, 36),   # Phase 22r: the ranking setter, the
           (0xFE69F7, 7), (0xFE6A18, 7), (0xFC270F, 9),      # S-RAM initialiser's count, arrays and slot stores, the magic, the id store, the boot clear
-          (0xFC3C33, 10), (0xFC3CFF, 19)}                    # Phase 23b: the attract page's setter call, the ranking title
+          (0xFC3C33, 10), (0xFC3CFF, 19),                    # Phase 23b: the attract page's setter call, the ranking title
+          (0xFC40F9, 7), (0xFC4184, 7), (0xFC3CA1, 6), (0xFC3D8C, 10),   # Phase 27: the insert's two offsets, the page's end and rows,
+          (0xFE69F0, 7)}                                                  # Task 3: the S-RAM check's call of the reverse block's tag check
          | {(s, 0x16) for s in (0xFE1D37, 0xFE2160, 0xFE2B07, 0xFE2CF7, 0xFE415B)}
          | {(s, 16) for s in (0xFE8D0B, 0xFE8F97, 0xFE9147, 0xFE92FD, 0xFEA927, 0xFEAA82, 0xFEAB05, 0xFEBD50, 0xFF2205, 0xFF241C, 0xFF4C9E)}
          | {(s, 14) for s in (0xFEC003, 0xFEC152, 0xFFCFFC)}                    # Phase 26: the fourteen command-0x1800 sites (direction.py)
          | {(0xFE41D6, 9)}                                                      # stage 2 (D6): the crew-start bit's site (direction.py)
          | {(0xFC0EA5, 14)}                                                     # stage 2 (D7): the start figures' placement end (direction.py)
          | {(s, 6) for s in (0xFF5E13, 0xFF5E1F, 0xFF6A18, 0xFF6A2C, 0xFF6C25, 0xFF6C41)} | {(0xFF6712, 7)}    # Task 13: their animation
-         | {(0xFE3CCE, 8), (0xFC40CE, 16)}                                      # stage 3: mode 0x10 state 0's clear, the ranking gate (dirscreen.py)
+         | {(0xFE3CCE, 8)}                                                      # stage 3: mode 0x10 state 0's clear (dirscreen.py; the ranking
+                                                                                # gate's 0xfc40ce is the original's again since Phase 27)
          | {(0xFC2788, 9)}                                                      # stage 3 Task 2: the course lock's handler, `dirlock`
          | {(0xFF4799, 6)}                                                      # stage 3 Task 6: the HUD label's print, `hudname`
          | {(s, 7) for s in (0xFF2518, 0xFF26F0, 0xFF2735, 0xFF277A)})       # stage 4 Task 5: the crew spawns' sites, `crewturn<state>`
@@ -32,6 +35,15 @@ SPANS = ({(0xFE48ED, 0xB7), (0xFE8E8F, 0xD), (0xFC270B, 4), (0xFC28A3, 4), (0xFC
 
 def _ten():
     return (ORIGINALS * 4)[:10]
+
+
+def _blobbed(rs, d):
+    """`rs` with a race blob (tests/test_reverse_ranking.py's `_blob`) at each race address of `d`'s entries 3..9, erased ROM on the
+    original set: the build reads the blob's records for the course's default times (Phase 27: `ranking.reverse_defaults`)."""
+    from tests.test_reverse_ranking import _blob
+    for at in sorted({e.race for e in d[3:] if e.race}):
+        rs, _ = _blob(rs, at, 4, 0x200)
+    return rs
 
 
 def test_originals_directory_round_trips_and_patches_only_the_sites(romset_zip):
@@ -136,8 +148,8 @@ def test_music_and_fallback_route_through_the_directory(romset_zip):
 def test_load_record_carries_race_blob_and_laps(romset_zip):
     import struct
     from vrtools.arcade.directory import LOAD_FIELDS, LOAD_FORMAT
-    rs = RomSet.from_zip(romset_zip)
     d = list(ORIGINALS) + [replace(ORIGINALS[0], name=f"X{i}", race=0x280000 + 0x800 * i, laps=3 + i % 5) for i in range(7)]
+    rs = _blobbed(RomSet.from_zip(romset_zip), d)
     out = install_directory(rs, d)
     back = decode_directory(out)
     assert [e.race for e in back] == [0, 0, 0] + [0x280000 + 0x800 * i for i in range(7)]
@@ -149,8 +161,8 @@ def test_load_record_carries_race_blob_and_laps(romset_zip):
 
 
 def test_loader_and_car_routines_serve_the_entry(romset_zip):
-    rs = RomSet.from_zip(romset_zip)
-    out = install_directory(rs, list(ORIGINALS) + [replace(ORIGINALS[0], name=f"X{i}", race=0x280000, laps=5) for i in range(7)])
+    d = list(ORIGINALS) + [replace(ORIGINALS[0], name=f"X{i}", race=0x280000, laps=5) for i in range(7)]
+    out = install_directory(_blobbed(RomSet.from_zip(romset_zip), d), d)
     lay = directory_layout()
     loader = [l.text for l in listing(out, lay["loader"], 90)]
     assert any("40DC8C" in t for t in loader) and any("501105" in t for t in loader)        # both variant flags still tested
@@ -159,18 +171,22 @@ def test_loader_and_car_routines_serve_the_entry(romset_zip):
     assert any("FCD395" in t for t in cars) and any("FCD195" in t for t in cars) and "rsr" in cars
     assert [l.text.split()[0] for l in listing(out, 0xFE8A91, 2)] == ["jsr", "nop"]
     assert listing(out, 0xFE8AA7, 1)[0].text.startswith("and.w")                            # the instruction after the span is intact
-    assert directory_layout()["end"] - directory_layout()["loader"] < 6500                  # routines stay small (Phase 21: + picture (unrolled for speed), start; 22i: the pit
+    assert directory_layout()["end"] - directory_layout()["loader"] < 6900                  # routines stay small (Phase 21: + picture (unrolled for speed), start; 22i: the pit
                                                                                             # routines; 22r: the ranking arrays and routines, 0x1b0 bytes; 23b: the
                                                                                             # attract groups, the names and seven 100-byte title routines, ~0x380;
                                                                                             # Phase 26 stage 3 (plan D10): the direction screen's routines, ~0x3a0;
-                                                                                            # stage 4 Task 5 (decision L2: 6 000 -> 6 500): the crew's half turn)
+                                                                                            # stage 4 Task 5 (decision L2: 6 000 -> 6 500): the crew's half turn;
+                                                                                            # Phase 27 Task 1: the setter's reverse choice, its arrays, the page's
+                                                                                            # two hooks, less `rankgate`: 6 251 -> 6 374, the bound holds;
+                                                                                            # Task 3: the reverse block's initialiser, boot tag check and title,
+                                                                                            # its arrays, ids 10..16's title words: 6 374 -> 6 856, 6 500 -> 6 900)
 
 
 def test_laps_are_written_only_in_the_normal_game_mode(romset_zip):
     """Review (Phase 9): the game sets 4 laps under the operator flag 0x40dc8c and 20 in linked play (both under
     that flag); writing the entry's 5 there would change those modes and leak into an original raced afterwards."""
-    rs = RomSet.from_zip(romset_zip)
-    out = install_directory(rs, list(ORIGINALS) + [replace(ORIGINALS[0], name=f"X{i}", race=0x280000, laps=5) for i in range(7)])
+    d = list(ORIGINALS) + [replace(ORIGINALS[0], name=f"X{i}", race=0x280000, laps=5) for i in range(7)]
+    out = install_directory(_blobbed(RomSet.from_zip(romset_zip), d), d)
     lay = directory_layout()
     texts = [l.text for l in listing(out, lay["loader"], 120)]
     k = next(i for i, t in enumerate(texts) if t.endswith("5011A4"))

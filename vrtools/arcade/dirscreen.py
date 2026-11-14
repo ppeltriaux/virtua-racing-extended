@@ -1,7 +1,7 @@
 """Phase 26 stage 3: the COURSE DIRECTION screen (design §2 item 3, §6.6; docs/spike/2026-11-phase26-stage3-recon.md).
 
 Task 1 (recon §6-§8): the room for the screen's routines (they join the directory image after the direction routines, plan
-D10), the direction flag's life and the ranking gate.
+D10), the direction flag's life and the ranking gate (removed by Phase 27: a reverse race records in its own table, ranking.py).
 
 - The flag `course.DIRECTION_RAM` stays the byte 0x502294; the word's three other bytes are the screen's cells (plan D12):
   DIR_PHASE (0 no direction screen, 1 choosing, 2 locked), DIR_ARMED (1 once the wheel has been at or left of the threshold),
@@ -14,14 +14,12 @@ D10), the direction flag's life and the ranking gate.
 - The two linked course loads among `course.BANK_SITES` (LINKED_BANK_SITES: 0xfe2b07, mode 5; 0xfe1d37, a cabinet joining a
   linked race) call `bankdemo`, as the attract's two do (`directory.ATTRACT_BANK_SITES`): `bankdemo` is `bank` with the flag
   cleared first and nothing else, so a linked load right after a reverse race serves the normal record.
-- A reverse race records nothing (recon §8, plan D9): at the race's end 0xfe4b49 calls 0xfc40ce, which clears the record flag
-  0x5018fc and tests bit 1 of 0x501174 (the race finished); its `be FC417C` (rsr) skips the setter, the record and the bubble,
-  and with 0x5018fc 0 the name entry is skipped (0xfe4b4f, 0xfe658c). RANK_SITE's two instructions become `jsr rankgate`;
-  `rankgate` clears 0x5018fc as the original, then returns with Z set while the flag is set, else with the original `test1`'s
-  flags, so the `be` that follows takes the race-without-a-record path in reverse.
+- Until Phase 27 a reverse race recorded nothing (recon §8, plan D9): the race end's 0xfc40ce (the record flag 0x5018fc
+  cleared, bit 1 of 0x501174 tested) called `rankgate`, which made its `be FC417C` skip the record in reverse. Phase 27 removed
+  it (design L7): 0xfc40ce is the original's again and the setter picks the reverse table (ranking.py).
 
-Both sites are entered only at their first byte: the state table's `br FE3CCE` (0xfe3cb9) and `jsr FC40CE[PC]` (0xfe4b49) are
-the only branches to them in the original boot ROM's listing, and no 32-bit word of the boot or program ROM points inside them.
+STATE0_SITE is entered only at its first byte: the state table's `br FE3CCE` (0xfe3cb9) is the only branch to it in the
+original boot ROM's listing, and no 32-bit word of the boot or program ROM points inside it.
 
 Task 2 (recon §1.2 option (a), §4, §5): the screen as behaviour, drawn over the course select's tiles until Tasks 3-5.
 - The course lock: the gas edge (or the course select's countdown) makes 0xfc26c5 install the lock handler 0xfc277c, which on
@@ -112,11 +110,6 @@ DIR_SHOWN = DIRECTION_RAM + 3          # 0x502297: the choice the labels and fra
 STATE0_SITE = 0xFE3CCE                 # mode 0x10 state 0's first instruction: mov.b #0, 5019C0[PC]
 STATE0_PATTERN = bytes.fromhex("0980e0f2f2dc51ff")
 STATE0_CLEAR = 0x5019C0                # the linked-play cell the original clears there
-RANK_SITE = 0xFC40CE                   # movz.bw #0, 5018FC[PC]; test1 #1, 501174[PC] (the `be FC417C` after them stays)
-RANK_PATTERN = bytes.fromhex("0d80e0f22ed853ff" "8780e1f29ed053ff")
-RECORD_FLAG = 0x5018FC                 # set by the record (0xfc4174); the name entry follows when it is set
-RACE_STATE = 0x501174                  # bit 1: the race finished
-TEST1_RACE_FINISHED = bytes.fromhex("8780e1f3") + RACE_STATE.to_bytes(4, "little")    # test1 #1, 501174 (absolute: no asm form)
 LINKED_BANK_SITES = (0xFE2B07, 0xFE1D37)    # mode 5's linked course load; a cabinet joining a linked race (course.BANK_SITES)
 # Task 2 (recon §1, §4, §5)
 COURSE_LOCK = 0xFC277C                 # the course select's lock handler: timer := 0x20, then LOCK_SITE, then the cursor object's fields
@@ -165,7 +158,7 @@ CAPTION_CELL = (31, 8)                 # the wheel panel's cell dirgfx.CAPTION_P
 SENSE_FIELD = 0x38                     # the load record's map_cross (directory.LOAD_FIELDS): non-zero when the entry's lap is
                                        # anticlockwise (tencourse.interior_on_the_left: the HUD map shifts right), so its NORMAL side
                                        # shows the anticlockwise arrow
-ROUTINES = ("dirclear", "rankgate", "dirlock", "dirsel", "dirdone", "dircursor", "dirdraw", "dirshow", "dirsides", "dirtext")
+ROUTINES = ("dirclear", "dirlock", "dirsel", "dirdone", "dircursor", "dirdraw", "dirshow", "dirsides", "dirtext")
 READS = ROUTINES + ("reverse", "pictures", "slot_tile", "picture", "load")     # the layout addresses the routines read
 
 
@@ -181,9 +174,8 @@ def _text() -> bytes:
 
 def dirscreen_routines(base: int, lay: dict[str, int]) -> dict[str, bytes]:
     """The screen's routines at `base`, in ROM order. Task 1: "dirclear" (from STATE0_SITE: the original's clear of 0x5019c0,
-    then the flag and the screen's three cells; no register or condition flag written) and "rankgate" (from RANK_SITE: 0x5018fc
-    cleared as the original; Z set when the flag is set, else the flags of the original `test1 #1, 501174`; no register
-    written). Task 2: "dirlock", "dirsel", "dirdone", "dircursor", "dirdraw", "dirshow" (see the module's docstring) and the
+    then the flag and the screen's three cells; no register or condition flag written; Task 1's "rankgate" was removed by
+    Phase 27). Task 2: "dirlock", "dirsel", "dirdone", "dircursor", "dirdraw", "dirshow" (see the module's docstring) and the
     table "dirsides" (per choice the cursor frame's x, y as floats). Task 3: `dirdraw` filled, the tables "dirmaps" (per map of
     MAPS its address and layer-0 tile address) and "dirtext" (the title and labels, NUL-ended). Task 4: `dirshow` and `dirdone`
     filled (`dirdone` ends where `dircursor` begins, into which it falls). Task 5: `dirdraw` runs its phase's rows of dirgfx's
@@ -200,16 +192,6 @@ def dirscreen_routines(base: int, lay: dict[str, int]) -> dict[str, bytes]:
     b.emit("mov.w imm,abs", 0, DIRECTION_RAM)               # the flag, DIR_PHASE, DIR_ARMED, DIR_SHOWN
     b.emit("rsr")
     out["dirclear"] = b.bytes()
-    b = Block(here())
-    b.emit("movz.bw imm,abs", 0, RECORD_FLAG)               # the original's own clear of the record flag
-    b.emit("cmp.b imm,abs", 0, DIRECTION_RAM)
-    b.branch("be", "normal")
-    b.emit("cmp.b abs,abs", DIRECTION_RAM, DIRECTION_RAM)   # a reverse race: Z set, the `be FC417C` after the site skips the record
-    b.emit("rsr")
-    b.label("normal")
-    b.raw(TEST1_RACE_FINISHED)                              # the original's own test
-    b.emit("rsr")
-    out["rankgate"] = b.bytes()
     b = Block(here())                                       # dirlock, at LOCK_SITE in COURSE_LOCK; R0 kept
     b.emit("push reg", "r0")
     b.emit("cmp.b imm,abs", 0, LINKED)
@@ -428,12 +410,10 @@ def dirscreen_size() -> int:
 
 
 def patch_dirscreen_sites(rs: RomSet, lay: dict[str, int]) -> None:
-    """STATE0_SITE: `jsr dirclear`, nop-padded to its eight bytes; RANK_SITE: `jsr rankgate`, nop-padded to its sixteen;
-    LOCK_SITE: `jsr dirlock`, nop-padded to its nine. All are checked before any is written; PatchError naming the first whose
-    bytes are not its pattern. (The linked bank sites are routed by `directory.install_directory` with the other bank sites.)"""
+    """STATE0_SITE: `jsr dirclear`, nop-padded to its eight bytes; LOCK_SITE: `jsr dirlock`, nop-padded to its nine. Both are
+    checked before either is written; PatchError naming the first whose bytes are not its pattern. (The linked bank sites are routed by `directory.install_directory` with the other bank sites.)"""
     spans = []
     for site, pattern, name, what in ((STATE0_SITE, STATE0_PATTERN, "dirclear", "mode 0x10 state 0's clear"),
-                                      (RANK_SITE, RANK_PATTERN, "rankgate", "ranking gate"),
                                       (LOCK_SITE, LOCK_PATTERN, "dirlock", "course lock's handler")):
         have = rs.boot[site - V60_BOOT:site - V60_BOOT + len(pattern)]
         if have != pattern:

@@ -2,12 +2,17 @@
 -- "x,z" arcade points (one per line, in lap order, evenly spaced). The player's position comes from the first
 -- TGP collision call (0x1b01) of each frame via autoplay's FIFO hook; heading from the last two positions.
 -- Wheel = centre + GAIN * (signed angle to a lookahead point); VR_AUTOPILOT_SIGN flips it, VR_AUTOPILOT_GAIN scales.
-local pts = {}
-for line in io.lines(os.getenv("VR_AUTOPILOT")) do
-  local x, z = line:match("^%s*([-%d.eE]+)%s*,%s*([-%d.eE]+)")
-  if x then pts[#pts + 1] = {tonumber(x), tonumber(z)} end
+-- Phase 27: _G.vr_autopilot_load(path) drives another line from then on (race_end.lua's VR_END_NEXT: a second race in the session).
+local function read_line(path)
+  local p = {}
+  for line in io.lines(path) do
+    local x, z = line:match("^%s*([-%d.eE]+)%s*,%s*([-%d.eE]+)")
+    if x then p[#p + 1] = {tonumber(x), tonumber(z)} end
+  end
+  assert(#p >= 3, "autopilot: centreline needs points")
+  return p
 end
-assert(#pts >= 3, "autopilot: centreline needs points")
+local pts = read_line(os.getenv("VR_AUTOPILOT"))
 local sign = tonumber(os.getenv("VR_AUTOPILOT_SIGN") or "-1")     -- calibrated on the original Big Forest: -1 follows the line
 local gain = tonumber(os.getenv("VR_AUTOPILOT_GAIN") or "160")
 local lookahead = tonumber(os.getenv("VR_AUTOPILOT_LOOKAHEAD") or "6")       -- points ahead
@@ -28,6 +33,10 @@ end
 local lift = tonumber(os.getenv("VR_AUTOPILOT_LIFT") or "0.6")              -- |steering angle| (rad) above which the pedal is released
 local last_k = 1
 local last_ang, last_off, last_speed = 0.0, 0.0, 0.0
+_G.vr_autopilot_load = function(path)                   -- the new line, searched afresh from the next position seen
+  pts, last_k = read_line(path), 1
+  px, pz, lx, lz = nil, nil, nil, nil
+end
 local function nearest()
   -- search near the last index first (the car moves forward), fall back to a full scan
   local best, bestd = last_k, math.huge

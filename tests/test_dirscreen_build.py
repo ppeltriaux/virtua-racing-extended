@@ -1,10 +1,10 @@
 """Phase 26 stage 3 in MAME: the COURSE DIRECTION screen on the seven-course set (`tests.test_tgp_build._seven`, one conversion
 per session).
 
-Task 1: the direction flag's life and the ranking gate. race_end.lua makes the race one lap long with the clock held (recon §8's
-`finish.lua`), logs the modes, the flag, the record flag 0x5018fc and the select handler at every change, taps the course's
-ranking table from the race load on, and puts a coin in after the attract's sixth pit scene. Three runs, each made once per
-session:
+Task 1: the direction flag's life (the ranking gate's test is Phase 27's record test now, tests/test_reverse_ranking.py).
+race_end.lua makes the race one lap long with the clock held (recon §8's `finish.lua`), logs the modes, the flag, the record
+flag 0x5018fc and the select handler at every change, taps the course's ranking table from the race load on, and puts a coin in
+after the attract's sixth pit scene. Three runs, each made once per session:
 
 - "reverse": Metropolis reverse under the autopilot (since Task 2 chosen on the screen, autoplay.lua answering REVERSE), its one
   lap, the results, the attract and its pit scenes, then a coin and START: the second game's select screen starts.
@@ -43,7 +43,10 @@ METROPOLIS = 6
 TABLE = NEW_TABLES[METROPOLIS - 3]          # Metropolis's ranking table (0x40f340, 24 entries of 24 bytes)
 PIT_SCENES = 6                              # the attract pit scenes (mode 0x07) watched before the coin (recon §7 measured six)
 # The modes from the finish to the attract (recon §8): the finish (0x19, 0x1a), the results (0x15, 0x16), the race-end ranking
-# page (0x1b-0x1d), the name entry (0x1e) only after a record, then the attract load (0x02)
+# page (0x1b-0x1d), the name entry (0x1e) only after a record, then the attract load (0x02). Phase 27: the reverse race records
+# in its own table (tests/test_reverse_ranking.py::test_a_reverse_race_records_in_its_own_table replaces the `rankgate` test
+# that stood here); NO_RECORD is a time slower than a reverse table's fourth too
+# (tests/test_reverse_ranking.py::test_a_reverse_time_slower_than_the_fourth_records_nothing)
 NO_RECORD = (0x19, 0x1A, 0x15, 0x16, 0x1B, 0x1C, 0x1D, 0x02)
 RECORD = (0x19, 0x1A, 0x15, 0x16, 0x1B, 0x1C, 0x1D, 0x1E, 0x02)
 NAME_ENTRY = 0x1E
@@ -149,19 +152,6 @@ def _modes_after_finish(run):
         if l.mode == 0x02:
             return tuple(modes)
     return tuple(modes)
-
-
-def test_a_reverse_race_records_nothing(tmp_path_factory, romset_zip, saturn_cue):
-    """Recon §8: a finished reverse race wrote Metropolis's table and entered the name. With `rankgate` nothing is written into
-    the table from the race load on, the record flag stays 0, mode 0x1e never comes, and the modes after the finish are a race
-    without a record's."""
-    run = _run(tmp_path_factory, romset_zip, saturn_cue, "reverse")
-    race = _race(run)
-    assert race and all(l.flag == 1 for l in race), race[:3]                 # the loader served the variant
-    assert run.writes == [], run.writes[:5]
-    assert all(l.record == 0 for l in _after_load(run)), [l for l in _after_load(run) if l.record][:3]
-    assert NAME_ENTRY not in {l.mode for l in run.lines}
-    assert _modes_after_finish(run) == NO_RECORD, [hex(m) for m in _modes_after_finish(run)]
 
 
 def test_a_normal_race_still_enters_the_name(tmp_path_factory, romset_zip, saturn_cue):

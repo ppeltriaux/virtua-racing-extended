@@ -18,6 +18,12 @@ def test_bad_rompath_raises(tmp_path):
         run_mame(LUA_DIR / "dlist_log.lua", 1, tmp_path, tmp_path / "nowhere")
 
 
+def test_a_missing_mame_is_a_mame_error_naming_the_program(tmp_path):
+    """Windows support: without the program on the PATH the runner raises its own error, not FileNotFoundError."""
+    with pytest.raises(MameError, match="no-such-mame-program.*PATH"):
+        run_mame(LUA_DIR / "dlist_log.lua", 1, tmp_path, tmp_path / "nowhere", mame="no-such-mame-program")
+
+
 def test_parse_rate_reads_render_rate_lines(tmp_path):
     from vrtools.mame.runner import parse_rate
 

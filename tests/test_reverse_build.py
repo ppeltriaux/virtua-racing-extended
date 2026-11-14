@@ -418,8 +418,11 @@ def test_a_reverse_lap_has_the_normal_laps_time(romset_zip, saturn_cue):
 def test_the_variant_only_adds_bytes(romset_zip, saturn_cue):
     """With the variants, the set is the set without them plus bytes on erased ROM: the annex [lo, hi) in the program ROM, each
     variant's blob in its entry's data bank, and the entries' words of the directory's reverse table: nothing of the normal
-    build moves or is overwritten. The boot ROM is the same: the direction sites are patched with or without the variants."""
+    build moves or is overwritten. The boot ROM is the same: the direction sites are patched with or without the variants.
+    Phase 27 (L3): the ranking image's attract groups also differ, by exactly each variant's reverse id after its course's id
+    (`ranking.attract_groups`); the groups' 48 bytes stay where they are."""
     import numpy as np
+    from vrtools.arcade.ranking import GROUP_BYTES, REVERSE_ID_SHIFT, attract_groups, ranking_layout
     a = ten_course_set(*_built(romset_zip, saturn_cue), reverse=False)
     b, _ = _seven(romset_zip, saturn_cue)
     assert (a.boot, a.polygons, a.copro_data, a.tgp_program) == (b.boot, b.polygons, b.copro_data, b.tgp_program)
@@ -439,8 +442,15 @@ def test_the_variant_only_adds_bytes(romset_zip, saturn_cue):
     prog = np.flatnonzero(ap != bp)
     assert len(prog)
     words = (table <= prog) & (prog < table + 40)
-    assert ((lo - V60_PROGRAM <= prog[~words]) & (prog[~words] < hi - V60_PROGRAM)).all(), [hex(V60_PROGRAM + i) for i in prog[~words][:8]]
-    assert (ap[prog[~words]] == 0xFF).all()                                      # the annex was erased
+    groups = ranking_layout(directory_layout()["ranking"])["groups"] - V60_PROGRAM   # the three attract groups (Phase 27, L3)
+    grp = (groups <= prog) & (prog < groups + 3 * GROUP_BYTES)
+    read = lambda p: [[int(i) for i in p[groups + GROUP_BYTES * k + 1:groups + GROUP_BYTES * k + 1 + int(p[groups + GROUP_BYTES * k])]]
+                      for k in range(3)]
+    assert read(bp) == attract_groups(d) and read(ap) == attract_groups(decode_directory(a))
+    assert read(ap) == [[i for i in g if i < 3 + REVERSE_ID_SHIFT] for g in read(bp)] != read(bp)   # only the reverse ids added
+    rest = ~words & ~grp
+    assert ((lo - V60_PROGRAM <= prog[rest]) & (prog[rest] < hi - V60_PROGRAM)).all(), [hex(V60_PROGRAM + i) for i in prog[rest][:8]]
+    assert (ap[prog[rest]] == 0xFF).all()                                        # the annex was erased
     assert (ap[table:table + 40] == 0).all()                                     # no reverse record in the set without
 
 

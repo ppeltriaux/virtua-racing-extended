@@ -190,7 +190,7 @@ def build(roms: Path, saturn: Path, out: Path, tune: dict[str, dict[str, float |
         lines.append(line)
         rc = 0 if ok else 3
     lines.append(f"run: mame vr -rompath {out}")
-    (out / "build-report.txt").write_text("\n".join(lines) + "\n")
+    (out / "build-report.txt").write_text("\n".join(lines) + "\n", encoding="utf-8")
     print("\n".join(lines))
     return rc
 
@@ -252,6 +252,9 @@ def _parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
+    for stream in (sys.stdout, sys.stderr):          # a console or a pipe whose encoding lacks a character of a message
+        if hasattr(stream, "reconfigure"):            # (Windows' legacy code pages) prints "?" for it instead of raising
+            stream.reconfigure(errors="replace")
     parser = _parser()
     args = parser.parse_args(argv)
     roms, saturn, out = _paths(args, parser)

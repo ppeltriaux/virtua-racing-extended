@@ -3,7 +3,8 @@ on the original set (docs/spike/2026-11-phase26-stage3-recon.md §6-§8).
 
 The flag `course.DIRECTION_RAM` is cleared with the screen's three cells whenever a select screen starts (mode 0x10 state 0,
 STATE0_SITE, both screens and every cabinet) and at the two linked course loads (they call `bankdemo`, as the attract's two
-do); a reverse race records nothing in the rankings (RANK_SITE calls `rankgate`).
+do). The ranking gate (`rankgate`) is gone since Phase 27: the race end's record test is the original's again
+(tests/test_reverse_ranking.py has the reverse tables).
 
 Plan Task 2: the course lock hands the select entity to `dirsel` on an entry with a reverse variant (LOCK_SITE calls `dirlock`);
 the wheel and a new gas press decide, the flag is written, and the game's lock handler takes the race on; `start` sends the
@@ -68,23 +69,15 @@ def test_the_state0_site_clears_the_flag_and_the_screen_cells(romset_zip):
     assert not any(re.search(r"\bR\d+\b", t) for t in texts)
 
 
-def test_the_rank_gate_skips_a_reverse_race(romset_zip):
-    """At the race's end 0xfc40ce clears the record flag 0x5018fc and tests bit 1 of 0x501174 (the race finished); `be FC417C`
-    (rsr) skips the setter and the record. Installed the two instructions (16 bytes, entered only from `jsr FC40CE[PC]` at
-    0xfe4b49) are `jsr rankgate` and nops, and the `be` stays; `rankgate` clears 0x5018fc as the original, then returns with Z
-    set when the flag is set (the flag compared with itself), else with the flags of the original `test1`."""
-    from vrtools.arcade.dirscreen import RANK_PATTERN, RANK_SITE
+def test_the_race_end_s_record_test_is_the_original(romset_zip):
+    """Phase 27 (design L7): `rankgate` is removed. At the race's end 0xfc40ce clears the record flag 0x5018fc and tests bit 1
+    of 0x501174 (the race finished), then `be FC417C`: installed, those 19 bytes are the original's and no routine of the
+    directory image is called "rankgate"."""
     rs, out, lay = _installed(romset_zip)
-    at = RANK_SITE - 0xFC0000
-    assert RANK_SITE == 0xFC40CE and len(RANK_PATTERN) == 16 and rs.boot[at:at + 16] == RANK_PATTERN
-    assert [l.text for l in listing(rs, RANK_SITE, 3)] == ["movz.bw #0, 5018FC[PC]", "test1   #1, 501174[PC]", "be      FC417C"]
-    lines = _span(out, RANK_SITE, 16)
-    assert lines[0].text == f"jsr     {lay['rankgate']:X}" and [l.text for l in lines[1:]] == ["nop"] * 10
-    assert listing(out, RANK_SITE + 16, 1)[0].text == "be      FC417C"
-    lines = _routine(out, lay, "rankgate")
-    texts = [l.text for l in lines]
-    assert texts == ["movz.bw #0, 5018FC", f"cmp.b   #0, {DIRECTION_RAM:X}", f"be      {lines[5].addr:X}",
-                     f"cmp.b   {DIRECTION_RAM:X}, {DIRECTION_RAM:X}", "rsr", "test1   #1, 501174", "rsr"]
+    at = 0xFC40CE - 0xFC0000
+    assert out.boot[at:at + 19] == rs.boot[at:at + 19] == bytes.fromhex("0d80e0f22ed853ff" "8780e1f29ed053ff" "749e00")
+    assert [l.text for l in listing(out, 0xFC40CE, 3)] == ["movz.bw #0, 5018FC[PC]", "test1   #1, 501174[PC]", "be      FC417C"]
+    assert "rankgate" not in lay
 
 
 def test_the_linked_bank_sites_clear_the_flag(romset_zip):
@@ -101,12 +94,12 @@ def test_the_linked_bank_sites_clear_the_flag(romset_zip):
     assert [l.text for l in listing(out, lay["bankdemo"], 2)] == [f"mov.b   #0, {DIRECTION_RAM:X}", f"jmp     {lay['bank']:X}"]
 
 
-@pytest.mark.parametrize("site,offset", [(0xFE3CCE, 2), (0xFC40CE, 11), (0xFE2B07, 0), (0xFE1D37, 0), (0xFC2788, 3)],
-                         ids=["state0", "rank", "linked-mode5", "linked-join", "lock"])
+@pytest.mark.parametrize("site,offset", [(0xFE3CCE, 2), (0xFE2B07, 0), (0xFE1D37, 0), (0xFC2788, 3)],
+                         ids=["state0", "linked-mode5", "linked-join", "lock"])
 def test_a_changed_site_is_refused(romset_zip, site, offset):
     rs = RomSet.from_zip(romset_zip)
     boot = bytearray(rs.boot)
-    boot[site - 0xFC0000 + offset] ^= 0x01                       # state 0: #1 for #0; rank: test1 #0; linked: another opcode; lock: another handler
+    boot[site - 0xFC0000 + offset] ^= 0x01                       # state 0: #1 for #0; linked: another opcode; lock: another handler
     object.__setattr__(rs, "boot", bytes(boot))
     with pytest.raises(PatchError, match=f"{site:#x}"):
         install_directory(rs, (ORIGINALS * 4)[:10])

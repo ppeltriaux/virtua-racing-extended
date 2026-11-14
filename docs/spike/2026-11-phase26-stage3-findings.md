@@ -36,6 +36,7 @@ the suite (§8). The set with Task 8's change, `out/p26play5`, has not been driv
   the record flag 0x5018fc is cleared as the game does, and with the flag set the `be FC417C` after the site skips the record and
   the name entry. After a reverse race the game takes the flow of a race without a record (the race-end ranking page shows the
   normal course's table). Stage 1's open item "a reverse race writes the course's ranking table" is closed.
+  *Correction (15 Nov 2026, Phase 27 recon §3): modes 0x1b-0x1d are the RESULT / GAME OVER screen, not a ranking page; the game shows a ranking page only in the attract mode. The same applies to "race-end ranking page" in §7's table and test notes.*
 - **The screen as behaviour** (Task 2, recon §1.2 option (a)). The course lock handler's `mov.w #FC27BE, A[R25]` (0xfc2788) becomes
   `jsr dirlock`. On an entry with a reverse record, in single play, `dirlock` hands the select entity to `dirsel` with the timer at
   0x140 (10 s). `dirsel` reads the wheel each logic frame (NORMAL until the wheel has been at or left of the threshold 0x1c on this

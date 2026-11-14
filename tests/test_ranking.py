@@ -11,12 +11,20 @@ from vrtools.arcade.romset import RomSet, V60_BOOT
 
 
 def _converted(i: int) -> CourseEntry10:
+    """A made-up converted entry, its race blob address in erased program ROM (Phase 27: the build reads the blob's records for
+    the reverse table's default times; `_romset` writes one there)."""
     return CourseEntry10(f"COURSE {i}", i % 3, 1 + i % 3, 0x100000, 3 + i, i % 3, 0x2F0000 + i * 0x1000, 0xFD0000 + i * 0x100, None,
-                         0x1E0000, 0x1E0400, 0, 0xB001, race=0x2E0000 + i * 0x1000)
+                         0x1E0000, 0x1E0400, 0, 0xB001, race=0x2B2000 + i * 0x800)
 
 
 def _directory():
     return list(ORIGINALS) + [_converted(i) for i in range(3, 10)]
+
+
+def _romset(romset_zip) -> RomSet:
+    """The original set with a race blob at each of `_directory`'s made-up race addresses (tests/test_reverse_ranking.py's)."""
+    from tests.test_reverse_ranking import _with_blobs
+    return _with_blobs(RomSet.from_zip(romset_zip), _directory())
 
 
 def test_ranking_ids_keep_the_originals_on_their_data_index_and_give_each_converted_course_its_own():
@@ -37,7 +45,7 @@ def test_the_ranking_image_holds_ten_entry_arrays_the_magic_and_the_three_routin
     from vrtools.arcade.directory import CHECKPOINTS_OFFSET
     from vrtools.arcade.ranking import (DEFAULT_NAMES, NEW_MAGIC, NEW_SLOTS, NEW_TABLES, ORIG_SLOTS, ORIG_TABLES, RANKING_INDEX,
                                         TABLE_BYTES, ranking_image, ranking_layout, ranking_size)
-    rs = RomSet.from_zip(romset_zip)
+    rs = _romset(romset_zip)
     d = _directory()
     base = CODE_FREE[0]
     lay = ranking_layout(base)
@@ -71,7 +79,7 @@ def test_install_ranking_patches_the_boot_sites_it_expects_and_points_them_at_th
     from vrtools.arcade.patch import PatchError
     from vrtools.arcade.ranking import (INIT_ARRAYS, INIT_COUNT, INIT_PROLOGUE, RANKING_SITE, SETTER, SRAM_MAGIC_SITES, install_ranking,
                                         ranking_layout)
-    rs = RomSet.from_zip(romset_zip)
+    rs = _romset(romset_zip)
     d = _directory()
     base = CODE_FREE[0]
     out = install_ranking(rs, d, base)
@@ -95,7 +103,10 @@ def test_a_fresh_battery_ram_gets_ten_ranking_tables_from_the_game_s_own_initial
     patched loop over ten tables — the originals' three as before and seven new ones in the never-touched run — each
     24 entries of rank 1..24, the default names (YU., RNS, TKG...) and times stepping 5 s (0xa0) from a base the
     game rounds up to the minute from 5 laps × sectors of the level-0 record's words; the ten slots hold their table.
-    A second boot on the same battery RAM keeps the new tables (they lie in the persistent part)."""
+    A second boot on the same battery RAM keeps the new tables (they lie in the persistent part). Phase 27 Task 3: the seven
+    reverse tables are made with them (ranks 1..4, `reverse_defaults`, the first four names, their slots, the tag) and kept; each
+    reverse table's four times are its course's normal table's first four as the game wrote them (the session lead's ruling of
+    15 Nov)."""
     import math
     import shutil
     from vrtools.arcade.directory import install_directory
@@ -135,6 +146,19 @@ def test_a_fresh_battery_ram_gets_ten_ranking_tables_from_the_game_s_own_initial
             assert (rank, time, zero, minus, time2) == (k + 1, base_time + 0xA0 * k, 0, 0xFFFFFFFF, base_time + 0xA0 * k), (r, k)
             assert mem[e + 0x14:e + 0x18] == names[k], (r, k)
     assert ranking_ids(d)[:3] == [2, 0, 1]
+    from vrtools.arcade.ranking import REVERSE_SLOTS, REVERSE_TABLES, REVERSE_TAG, REVERSE_TAG_BYTES, reverse_defaults
+    defaults = reverse_defaults(rs, d)                            # Phase 27 Task 3: the reverse block with them; no entry has a variant
+    first = {0: 0x1E00, 1: 0x2580, 2: 0x1E00}                     # here: its template's defaults (4'00, 5'00, 4'00), never chosen
+    assert defaults == [[first[d[r].template] + 0xA0 * j for j in range(4)] for r in range(3, 10)]
+    assert defaults == [[struct.unpack_from("<I", mem, at(NEW_TABLES[k]) + 24 * j + 4)[0] for j in range(4)] for k in range(7)]
+    for k, table in enumerate(REVERSE_TABLES):
+        assert struct.unpack_from("<I", mem, at(REVERSE_SLOTS + 4 * k))[0] == table
+        for j in range(4):
+            e = at(table) + 24 * j
+            assert struct.unpack_from("<5I", mem, e) == (j + 1, defaults[k][j], 0, 0xFFFFFFFF, defaults[k][j]), (k, j)
+            assert mem[e + 0x14:e + 0x18] == names[j], (k, j)
+        assert mem2[at(table):at(table) + 96] == mem[at(table):at(table) + 96]
+    assert mem[at(REVERSE_TAG):at(REVERSE_TAG) + 4] == mem2[at(REVERSE_TAG):at(REVERSE_TAG) + 4] == REVERSE_TAG_BYTES
 
 
 def test_the_attract_groups_put_each_original_first_then_the_courses_in_its_slot():
@@ -144,6 +168,11 @@ def test_the_attract_groups_put_each_original_first_then_the_courses_in_its_slot
     g = attract_groups(_directory())
     assert g == [[0, 3, 6, 9], [1, 4, 7], [2, 5, 8]]                              # _converted(i) is hosted by i % 3
     assert attract_groups((list(ORIGINALS) * 4)[:10]) == [[0], [1], [2]]           # copies of originals have no table of their own
+    from dataclasses import replace                                                # Phase 27: a course with a reverse variant is
+    from vrtools.arcade.directory import ReverseRecord                             # followed by its reverse id (entry + 7)
+    d = [replace(e, reverse=ReverseRecord(0x2C0000 + 0x80 * i, replace(e, race=0))) if i in (3, 7) else e
+         for i, e in enumerate(_directory())]
+    assert attract_groups(d) == [[0, 3, 10, 6, 9], [1, 4, 7, 14], [2, 5, 8]]
 
 
 def test_title_columns_centre_the_line_like_the_originals():
@@ -168,7 +197,7 @@ def test_the_image_holds_the_attract_groups_and_a_title_per_ranking_id(romset_zi
     from vrtools.arcade.disasm import listing_bytes
     from vrtools.arcade.ranking import (COURSE_STRING, RANKING_STRING, STRING_PRINT, TITLE_ROW, TITLE_TABLE, attract_groups,
                                         ranking_image, ranking_layout, title_columns)
-    rs = RomSet.from_zip(romset_zip)
+    rs = _romset(romset_zip)
     d = _directory()
     base = CODE_FREE[0]
     lay = ranking_layout(base)
@@ -177,7 +206,8 @@ def test_the_image_holds_the_attract_groups_and_a_title_per_ranking_id(romset_zi
     for k, g in enumerate(attract_groups(d)):
         row = img[at(lay["groups"]) + 16 * k: at(lay["groups"]) + 16 * k + 16]
         assert row[0] == len(g) and list(row[1:1 + len(g)]) == g
-    titles = struct.unpack_from("<10I", img, at(lay["titles"]))
+    titles = struct.unpack_from("<17I", img, at(lay["titles"]))
+    assert titles[10:] == (lay["revtitle"],) * 7                                   # Phase 27: the reverse ids' shared title
     for r in range(3):
         assert titles[r] == struct.unpack_from("<I", rs.boot, TITLE_TABLE - V60_BOOT + 4 * r)[0]
     for r in range(3, 10):
@@ -196,7 +226,7 @@ def test_the_image_holds_the_attract_groups_and_a_title_per_ranking_id(romset_zi
 
 def test_install_ranking_routes_the_attract_page_and_the_title_through_the_image(romset_zip):
     from vrtools.arcade.ranking import ATTRACT_SITE, TITLE_SITE, install_ranking, ranking_layout
-    rs = RomSet.from_zip(romset_zip)
+    rs = _romset(romset_zip)
     assert rs.boot[ATTRACT_SITE - V60_BOOT: ATTRACT_SITE - V60_BOOT + 10] == bytes.fromhex("0d20f33419500048ce05")
     out = install_ranking(rs, _directory(), CODE_FREE[0])
     lay = ranking_layout(CODE_FREE[0])
@@ -229,10 +259,12 @@ def _pages(log) -> list[tuple[int, int, int, list[int]]]:
 def test_attract_and_race_end_rankings_name_their_course(tmp_path, romset_zip, saturn_cue):
     """MAME, the full ten-course set: the attract mode's ranking pages show each original's own table under its own
     title (EXPERT shows Acropolis's 5'00 table again, not the last chosen course's), then, a loop later, the converted
-    courses in its slot under their names; after a race on Amazon Falls the ranking is Amazon Falls' under its name."""
+    courses in its slot under their names; after a race on Amazon Falls the ranking is Amazon Falls' under its name.
+    Phase 27 Task 3: the groups hold the reverse ids too (the directory read back, with its variants): a reverse page shows
+    its reverse table under "<NAME> REVERSE RANKING" (tests/test_reverse_ranking.py covers every member)."""
     import shutil
-    from vrtools.arcade.directory import ORIGINALS
-    from vrtools.arcade.ranking import NEW_TABLES, ORIG_TABLES, attract_groups, title_columns
+    from vrtools.arcade.directory import ORIGINALS, decode_directory
+    from vrtools.arcade.ranking import NEW_TABLES, ORIG_TABLES, REVERSE_TABLES, attract_groups, reverse_title_columns, title_columns
     from vrtools.arcade.select import WHEEL_FOR_ENTRY
     from vrtools.arcade.tencourse import COURSES as PLANS, build_all, ten_course_set
     from vrtools.mame.runner import LUA_DIR, run_mame
@@ -244,20 +276,25 @@ def test_attract_and_race_end_rankings_name_their_course(tmp_path, romset_zip, s
     for extra in ("model1io.zip", "m1comm.zip"):
         shutil.copy(romset_zip.parent / extra, build / extra)
     names = [e.name for e in ORIGINALS] + [p.name for p in PLANS]
-    d = list(ORIGINALS) + [c.entry for c in conv]
+    d = decode_directory(out)
+    assert [e.name for e in d] == [e.name for e in ORIGINALS] + [c.entry.name for c in conv]
     groups = attract_groups(d)
-    table = lambda r: ORIG_TABLES[r] if r < 3 else NEW_TABLES[r - 3]
+    table = lambda r: (ORIG_TABLES + NEW_TABLES + REVERSE_TABLES)[r]
     original_title = {0: ("MEDIUM", 9), 1: ("EXPERT", 9), 2: ("BEGINNER", 8)}
 
     def check(page):
         d_index, shown, base, words = page
         assert base == table(shown), page[:3]
         if shown < 3:
-            text, col = original_title[shown]
-        else:
-            text, col = d[shown].name, title_columns(d[shown].name)[0]
-        for c, w in _title_words(out, text, col, 0x8300):
-            assert words[c] == w, (text, c, hex(words[c]), hex(w))
+            want = _title_words(out, *original_title[shown], 0x8300)
+        elif shown < 10:
+            want = _title_words(out, d[shown].name, title_columns(d[shown].name)[0], 0x8300)
+        else:                                                                            # Phase 27: a reverse table
+            name = d[shown - 7].name
+            n, c, r = reverse_title_columns(name)
+            want = _title_words(out, name, n, 0x8300) + _title_words(out, "REVERSE", c, 0x8300) + _title_words(out, "RANKING", r, 0x8200)
+        for c, w in want:
+            assert words[c] == w, (shown, c, hex(words[c]), hex(w))
 
     run_mame(LUA_DIR / "ranking_title_log.lua", 300, tmp_path / "a", build, env={"VR_RANKING_LOG": str(tmp_path / "a.log")}, timeout=1500)
     pages = _pages(tmp_path / "a.log")
@@ -282,7 +319,7 @@ def test_the_attract_and_title_routines_decode_as_intended(romset_zip):
     takes the shown id (the data index when it was never set) and calls its title routine through the table."""
     from vrtools.arcade.disasm import listing_bytes
     from vrtools.arcade.ranking import ATTRACT_COUNTERS, SHOWN_ID, ranking_image, ranking_layout
-    rs = RomSet.from_zip(romset_zip)
+    rs = _romset(romset_zip)
     base = CODE_FREE[0]
     lay = ranking_layout(base)
     img = ranking_image(rs, _directory(), base)
@@ -290,6 +327,8 @@ def test_the_attract_and_title_routines_decode_as_intended(romset_zip):
     attract = text("attract", "title")
     assert attract[2] == "movz.bw 501934, R0" and attract[-1] == f"jmp {lay['common']:X}"
     assert f"mov.b R3, {ATTRACT_COUNTERS:X}(R0)" in attract and f"movz.bw {lay['groups'] + 1:X}(R1), R0" in attract
-    title = text("title", "title3")
+    title = text("title", "pagecmp")
     assert title[0] == f"movz.bw {SHOWN_ID:X}, R0" and title[-2:] == ["jsr [R0]", "rsr"]
-    assert text("setter", "slot_init")[1] == f"mov.b R0, {SHOWN_ID:X}" and lay["common"] == lay["setter"] + 7
+    setter = listing_bytes(img[lay["setter"] - base:lay["slot_init"] - base], lay["setter"])     # Phase 27: `common` follows the
+    common = [l for l in setter if l.addr >= lay["common"]]                                      # reverse id choice
+    assert " ".join(common[0].text.split()) == f"mov.b R0, {SHOWN_ID:X}" and setter[0].addr == lay["setter"] < lay["common"]

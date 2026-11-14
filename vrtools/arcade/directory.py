@@ -32,8 +32,9 @@ to `figures`, which turns the three figures half a turn round the player while i
 spawn sites call `crewturn<state>`, which turns the crew half a turn about the served box while it is set.
 
 Stage 3 (dirscreen.py): the COURSE DIRECTION screen's routines follow the direction routines (plan D10); Task 1: mode 0x10's
-state 0 clears the flag and the screen's cells (`dirclear`), a reverse race records nothing (`rankgate`), and the two linked
-bank sites call `bankdemo` as the attract's two do (BANKDEMO_SITES). Task 2: the course lock's handler site (0xfc2788) calls
+state 0 clears the flag and the screen's cells (`dirclear`), a reverse race recorded nothing (`rankgate`, removed by Phase 27:
+the ranking block's setter takes the reverse table, ranking.py), and the two linked bank sites call `bankdemo` as the attract's
+two do (BANKDEMO_SITES). Task 2: the course lock's handler site (0xfc2788) calls
 `dirlock`, which on an entry with a reverse variant hands the select entity to the screen's `dirsel`; `start` sends the locked
 screen to `dirdone`. Task 6 (hudname.py, after the screen's routines): the race HUD's level word (0xff4799) calls `hudname`,
 which prints a converted course's name from its load record (the name field NUL-padded, names up to 13 letters).
@@ -222,7 +223,7 @@ def maps_offset() -> int:
 def directory_layout(code_base: int = CODE_FREE[0]) -> dict[str, int]:
     """Addresses inside the code area: select table, load table, band table, empty spawn list, maps table, reverse table,
     routines (ROUTINES order from "entry"; "loader" is the loader's own address), select routines, ranking block, the direction
-    routines ("dirattr", "startbit", "figures", ...), the direction screen's routines ("dirclear", "rankgate", ...), the HUD name's
+    routines ("dirattr", "startbit", "figures", ...), the direction screen's routines ("dirclear", "dirlock", ...), the HUD name's
     ("hudname", "hudattr"), end."""
     lay = _table_layout(code_base)
     code = _routines(lay)
@@ -735,7 +736,7 @@ def install_directory(rs: RomSet, d: Directory, code_base: int = CODE_FREE[0], c
                                                                  # the crew-start bit's site `startbit` (stage 2 D6), the start
                                                                  # figures' `figures` (stage 2 D7), the crew spawns `crewturn<state>`
                                                                  # (stage 4 Task 5)
-    patch_dirscreen_sites(out, lay)                              # stage 3: mode 0x10 state 0's `dirclear`, the ranking gate's `rankgate`
+    patch_dirscreen_sites(out, lay)                              # stage 3: mode 0x10 state 0's `dirclear`, the course lock's `dirlock`
     hudname.patch_hudname_sites(out, lay)                        # stage 3 Task 6: the HUD's level word, `hudname`
     for site in BANK_SITES:
         have = rs.boot[site - 0xFC0000:site - 0xFC0000 + BANK_SITE_LEN]

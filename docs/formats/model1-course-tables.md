@@ -696,7 +696,7 @@ Measurements in `docs/spike/2026-11-phase26-stage3-findings.md`; recon `docs/spi
   | site | bytes | original | becomes |
   |---|---|---|---|
   | 0xfe3cce | 8 | `mov.b #0, 5019C0[PC]`, mode 0x10 state 0's first instruction (every select screen, every cabinet) | `jsr dirclear` + nops |
-  | 0xfc40ce | 16 | `movz.bw #0, 5018FC[PC]; test1 #1, 501174[PC]` (the race end's record test) | `jsr rankgate` + nops; the `be FC417C` after it stays |
+  | 0xfc40ce | 16 | `movz.bw #0, 5018FC[PC]; test1 #1, 501174[PC]` (the race end's record test) | `jsr rankgate` + nops; the `be FC417C` after it stays (**the original's again since Phase 27**: `rankgate` removed, §21) |
   | 0xfe2b07, 0xfe1d37 | 0x16 | the linked course loads' bank switch (`jsr bank`) | `jsr bankdemo` |
   | 0xfc2788 | 9 | `mov.w #FC27BE, A[R25]` in the course select's lock handler 0xfc277c | `jsr dirlock` + nops |
   | 0xff4799 | 6 | `jsr FF8926[PC]`, the race HUD's level word print in 0xff471b | `jsr hudname` |
@@ -722,7 +722,7 @@ Measurements in `docs/spike/2026-11-phase26-stage3-findings.md`; recon `docs/spi
   `chosen` or `grey` set (the chosen side in colour) and falls into `dircursor`. `dircursor` draws the game's course cursor frame
   (0xfc2880's body from 0xfc28a7) at the `dirsides` record of `DIR_SHOWN`: (−112.0, 65.0) NORMAL, (112.0, 65.0) REVERSE.
   `rankgate` returns with Z set while the flag is set (the `be` skips the record and so the name entry), else with the original
-  `test1`'s flags.
+  `test1`'s flags. (Phase 27 removed `rankgate`: a reverse race records in its own table, §21.)
 - **The screen's tile layout** (64 × 64 cells a layer, 0x80 bytes a row; `dirscreen.tile_address`):
 
   | piece | layer | cells (row, column) | drawn by |
@@ -835,3 +835,59 @@ Measurements in `docs/spike/2026-11-phase26-stage4-findings.md`; recon `docs/spi
   TGP plane), cut into the fewest convex quads. On Diablo one quad (index 1689) becomes two (1689, 1690); the later wall quads
   shift by one; tarmac and verge indices do not move. Diablo's lists grow from 9 911 to 9 913 words. The spot names the number
   of quads it trims (`WallTrim(rect, quads=1)`); a build that trims none or another number raises `ConvertError`.
+
+## 21. The reverse races' best-time tables (Phase 27, `ranking.py`)
+
+Design `docs/superpowers/specs/2026-11-14-reverse-ranking-design.md`; recon `docs/spike/2026-11-phase27-reverse-ranking-recon.md`;
+measurements `docs/spike/2026-11-phase27-findings.md`. The game's own insert, name entry and page (§17) run on 4-entry tables.
+
+- **The reverse block in the battery RAM** (the free runs `0x40ee80..0x40efff` and `0x40fc6d..0x40fdff`, recon §5; 709 of their
+  787 bytes; `0x40fc6d..0x40fc6f` and `0x40fdb5..0x40fdff` stay free, the stack's 208-byte margin `0x40fe00..0x40fecf` untouched):
+
+  | address | bytes | what |
+  |---|---|---|
+  | `0x40ee80`, `0x40eee0`, `0x40ef40`, `0x40efa0` | 4 × 96 | the reverse tables of entries 3..6 (Alpine, Amazon Falls, Diablo Canyon, Metropolis): 4 entries of the game's 24 bytes |
+  | `0x40fc70`, `0x40fcd0`, `0x40fd30` | 3 × 96 | the reverse tables of entries 7..9 (Pacific Coast, Surfers Oval, Surfers Road) |
+  | `0x40fd90..0x40fdab` | 7 × 4 | the seven slot words, entry order (the table's base; the insert writes the new entry's address) |
+  | `0x40fdac` | 4 | the tag "REV4" (0xff on a fresh battery RAM) |
+  | `0x40fdb0` | 4 | the last entry's offset, written by every setter call: 0x228 (24 entries) or 0x48 (4) |
+  | `0x40fdb4` | 1 | the page's row count, written by every setter call: 6 or 4 |
+
+  An entry as §17's: rank 1..4 at +0 (written only by the initialiser: the insert never writes it), the time at +4 and +0x10,
+  the view at +8, −1 at +0xc, the name at +0x14. The S-RAM magic (`S-RAM CHECK OK 10`) is unchanged.
+- **Ranking ids.** A reverse table's id is its entry + 7 (10..16); the setter's `bases` and `slots` arrays in the directory
+  image run over ids 0..16. The setter's entry (0xfc4208's jump: the race's end `0xfc40e8` and the name entry `0xfc422d`) loads
+  the id from `0x40fc68` and adds 7 when the direction flag `0x502294` is not 0 and the id is 3..9; the attract page's entry
+  (`common`) takes the id in R0 and never reads the flag. Every call stores the shown id (`0x40fc69`), the table base
+  (`0x5018f0`), the slot address (`0x501918`) and both cells (0x228 / 6 for ids 0..9, 0x48 / 4 for 10..16).
+- **Boot sites** (each checked against its original bytes first; `PatchError` naming the address; listed in
+  `tests/test_directory.py`'s allowed spans):
+
+  | site | bytes | original | becomes |
+  |---|---|---|---|
+  | 0xfc40f9 | 7 | `add.w #228, R1` (the qualify test's last entry) | `add.w 40FDB0, R1` |
+  | 0xfc4184 | 7 | `add.w #228, R0` (the bubble's start) | `add.w 40FDB0, R0` |
+  | 0xfc3ca1 | 6 | `cmp.b #18, 36[R25]` (the page's end test; its `bnl FC3CEC` stays) | `jsr pagecmp`: with the row cell at 4 `cmp.b #4, 36[R25]` (one screen), else the original compare |
+  | 0xfc3d8c | 10 | `mov.w R1, 501924[PC]; mov.w #6, R3` (the first row's tile address; six rows) | `jsr pagerows` + 4 nops: the store, then `movz.bw 40FDB4, R3` |
+  | 0xfe69f0 | 7 | `mov.w FE6A47[PC], R0` (the S-RAM check's first instruction: the magic's length) | `jsr revtag` + nop: `revinit` when the tag is missing, then the instruction (absolute) |
+  | 0xfc40ce | 16 | — | the original's again (stage 3's `rankgate` removed) |
+
+- **`revinit`** (128 bytes; R0-R4 saved): for k = 0..6 the base and slot address from the setter's arrays at id 10 + k, the base
+  into the slot, four entries (rank 1..4, the time from the image's `firsts[k]` stepping 0xa0 = 5 s, +8 = 0, +0xc = −1, the time
+  again, the game's default names from `0xfc4dc4` stepping 8: YU., RNS, TKG, NAG), then the tag. Called from `slot_init` (so the
+  stock initialiser on a battery RAM without the magic, and the test mode's backup clear `0xfc76eb` → `0xfc3b49`, make the block)
+  and from `revtag` (a battery RAM with the magic but not the tag: the block alone, no saved time touched). On a fresh battery RAM
+  it runs twice in one boot (`revtag`, then `slot_init`), on frame 6, with the same bytes.
+- **The default times** (`reverse_defaults`, computed at build time, never read from the battery): each reverse table starts
+  with its course's normal table's four defaults (the stock rule on the normal race blob, or an original's copy's template
+  tables, as the initialiser gives the course's ranking id). On the seven-course set: Alpine and Diablo Canyon 5'00, 5'05, 5'10,
+  5'15; the five others 4'00 .. 4'15.
+- **The attract and the title.** Each reverse id follows its course's id in its host's group (Bay Bridge's `0, 4, 11, 7, 14, 8,
+  15, 9, 16`, Acropolis's `1, 5, 12, 6, 13`, Big Forest's `2, 3, 10` on the seven-course set), one member a loop as before. A
+  reverse page is one screen of four rows (396 frames; rows 5 and 6 blank). `title` sends ids 10..16 to `revtitle` (112 bytes),
+  which prints the course's name and REVERSE in red (0x8300) and RANKING in white (0x8200) by three string-printer calls indexed
+  by the shown id ("DIABLO CANYON REVERSE RANKING"; a 15-letter name, which no course has, would get "<NAME> REVERSE" alone).
+- **Room.** The directory image's `end − loader` is 6 856 bytes (main 6 251; the test bound 6 900): the setter 114 (was 45),
+  `pagecmp` 23, `pagerows` 15, `revinit` 128, `revtag` 28, `revtitle` 112, `slot_init` +6, `title` +4, the arrays (+56 for ids
+  10..16, the titles +28, "REVERSE" 8, `firsts` 28, `revtitle`'s arguments 140); `rankgate`'s 40 gone. Room left: the free run below
+  the start-gantry block is 2 000 bytes at 0x28f1a0 (main 2 592 at 0x28ef50); the image is 44 bytes under the test bound of 6 900.
