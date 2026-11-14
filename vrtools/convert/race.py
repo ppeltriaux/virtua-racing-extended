@@ -41,20 +41,32 @@ def _sector_lengths(n_points: int, checkpoints: tuple[int, ...]) -> list[int]:
     return [b - a for a, b in zip(cps, cps[1:])]
 
 
+def lap_total(record: TimeRecord, checkpoints: tuple[int, ...]) -> int:
+    """Phase 26 stage 2: the clock a lap adds, the sum of the record's first `len(checkpoints)` extensions (one per
+    checkpoint record entry, the start line included)."""
+    return sum(record.extensions[:len(checkpoints)])
+
+
 def time_records_for(template: TimeRecord, template_points: int, template_checkpoints: tuple[int, ...], n_points: int,
-                     checkpoints: tuple[int, ...], factor: float = 1.0) -> TimeRecord:
+                     checkpoints: tuple[int, ...], factor: float = 1.0, lap_total: int | None = None) -> TimeRecord:
     """The template's initial clock; extension k (1-based) belongs to the converted sector `(k - 1) % sectors` and
     equals the template's first extension scaled by that sector's length over the template's mean sector, times
-    `factor`, clamped to [EXTENSION_MIN, EXTENSION_MAX]."""
+    `factor`, clamped to [EXTENSION_MIN, EXTENSION_MAX]. With `lap_total` (Phase 26 stage 2, plan D4: a reverse lap with
+    another number of sectors than the normal one) every raw extension, before rounding and clamping, is also multiplied by
+    `lap_total` over the first lap's sum of the record the same call gives without it: equal totals make the factor exactly 1
+    and the same record."""
     if len(checkpoints) < 2 or checkpoints[0] != 0 or checkpoints[-1] >= n_points:
         raise ConvertError(f"checkpoints {checkpoints} do not fit a lap of {n_points} points")
     mean = template_points / len(template_checkpoints)
     sectors = _sector_lengths(n_points, checkpoints)
-    ext = []
-    for k in range(EXTENSIONS):
-        v = round(template.extensions[0] * sectors[k % len(sectors)] / mean * factor)
-        ext.append(min(EXTENSION_MAX, max(EXTENSION_MIN, v)))
-    return TimeRecord(template.initial, tuple(ext))
+
+    def extensions(scale: float) -> tuple[int, ...]:
+        return tuple(min(EXTENSION_MAX, max(EXTENSION_MIN, round(template.extensions[0] * sectors[k % len(sectors)] / mean * factor * scale)))
+                     for k in range(EXTENSIONS))
+    plain = extensions(1.0)
+    if lap_total is None:
+        return TimeRecord(template.initial, plain)
+    return TimeRecord(template.initial, extensions(lap_total / sum(plain[:len(checkpoints)])))
 
 
 def max_laps(checkpoints: tuple[int, ...]) -> int:
@@ -69,10 +81,18 @@ def check_laps(laps: int, checkpoints: tuple[int, ...]) -> None:
                            f"({len(checkpoints)} per lap: at most {max_laps(checkpoints)})")
 
 
-def car_table_for(original: list[CarEntry], pace: float = 1.0) -> list[CarEntry]:
-    """The original car table with the opponents' performance scaled by `pace` (the player, car 0, untouched)."""
+def car_table_for(original: list[CarEntry], pace: float = 1.0, start_points: tuple[int, ...] | None = None) -> list[CarEntry]:
+    """The original car table with the opponents' performance scaled by `pace` (the player, car 0, untouched). With
+    `start_points` (Phase 26 stage 2, after the owner's drive: a reverse grid, `tencourse.BANK_ONE_GRID`) car k starts on road
+    point `start_points[k]` instead; models, lines and performance stay. The grid may only rearrange the opponents on the
+    table's own start points, the player's kept: ConvertError otherwise."""
+    if start_points is not None:
+        if len(start_points) != len(original) or start_points[0] != original[0].start_point \
+                or sorted(start_points[1:]) != sorted(c.start_point for c in original[1:]):
+            raise ConvertError(f"start points {start_points} do not rearrange the opponents of the grid "
+                               f"{tuple(c.start_point for c in original)}")
     out = [original[0]]
-    for c in original[1:]:
+    for k, c in enumerate(original[1:], 1):
         perf = min(PERF_MAX, max(PERF_MIN, c.perf * pace))
-        out.append(CarEntry(c.models, c.line, c.start_point, perf))
+        out.append(CarEntry(c.models, c.line, c.start_point if start_points is None else start_points[k], perf))
     return out

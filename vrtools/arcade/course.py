@@ -39,6 +39,9 @@ MAP_TX_RAM = 0x50231C                       # the map section's screen translate
                                             # made once at boot (149.0) and read by the display-list writer every frame
 MAP_CROSS_RAM = 0x502328                    # our tile-byte offset of the player's cross (0 = the game's cell), in the never-touched padding
 OFF_COURSE_RAM = 0x50232C                   # our off-course limit in logic frames (the game's immediate was 128), same padding
+# Phase 26: the reverse-direction flag (0 normal, 1 reverse): the lowest 4-aligned word of the map record's RAM block that the game
+# neither reads nor writes in attract or in a Metropolis race (docs/spike/2026-11-phase26-stage1-findings.md §1)
+DIRECTION_RAM = 0x502294
 # Phase 18b: the backdrop's upload directory is word 0 of the course header; the game read it at window 0x100000 (the
 # bank's original header). Both readers call the `gfx` routine, which takes the current entry's own header's directory
 GFX_DIR_SITES = (0xFFE007, 0xFFE49E)        # `mov.w 100000, R20`: the course-load uploads (phases 0-1), the per-frame streaming

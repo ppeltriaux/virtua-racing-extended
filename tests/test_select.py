@@ -56,9 +56,27 @@ def test_draw_copies_the_slot_picture():
     assert sum(1 for t in draw if "FF9436" in t) == 2                              # layer A, and layer B without a picture
     pic = [l.text for l in listing_bytes(code["picture"], lay["picture"])]
     assert pic[-1] == "rsr"
-    for name in ("slot_char", "slot_pal", "slot_tile", "slot_b"):
+    for name in ("slot_char", "slot_pal"):
         assert any(f"{lay[name]:X}" in t for t in pic), name
     assert SLOT_CHAR == (0x3300, 0x3480, 0x3600) and SLOT_PAL == (0x900CC0, 0x900D20, 0x900D80)
+
+
+def test_draw_passes_each_slots_destination_and_tile_base():
+    """Phase 26 stage 3 (Task 3): `picture` takes the map's destination in R12 and the tile base in R13 (the direction screen
+    draws its pictures elsewhere); the course select's `draw` loads, per slot R10, SLOT_B's word (layer B) and the slot's tile
+    base word (lay["slot_tile"]) right before its `jsr picture`, so the course select draws as before. `picture` no longer reads
+    either table, reads R12 for the blanking and for the map and R13 for the map, and writes neither (R12 and R13 survive it);
+    `draw` saves and restores both."""
+    lay = directory_layout(CODE_FREE[0])
+    code = select_routines(lay)
+    draw = [l.text for l in listing_bytes(code["draw"], lay["draw"])]
+    k = draw.index(f"jsr     {lay['picture']:X}")
+    assert draw[k - 2:k] == [f"mov.w   {lay['slot_b']:X}(R10), R12", f"mov.w   {lay['slot_tile']:X}(R10), R13"]
+    assert "push    R13" in draw and "pop     R13" in draw and "push    R12" in draw and "pop     R12" in draw
+    pic = [l.text for l in listing_bytes(code["picture"], lay["picture"])]
+    assert not any(f"{lay[name]:X}" in t for t in pic for name in ("slot_b", "slot_tile"))
+    assert pic.count("mov.w   R12, R6") == 2 and pic.count("mov.w   R13, R7") == 1
+    assert not any(t.endswith((", R12", ", R13")) for t in pic) and not any(t.split()[0] in ("push", "pop") and t.split()[1] in ("R12", "R13") for t in pic)
 
 
 def test_start_greys_the_slots_not_chosen():

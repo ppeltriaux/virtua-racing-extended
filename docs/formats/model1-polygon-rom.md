@@ -33,6 +33,23 @@ Parsing stops at the first record with `flags & 3 == 0`.
 | 17–20 | light mode |
 | 22 | second light bank (adds 0x80 to light mode) |
 
+## Back-face test (bit 14 clear)
+
+Measured in Phase 26 stage 2 (`docs/spike/2026-11-phase26-stage2-findings.md` §11.2). MAME skips a record whose bit 14 is clear
+when `view_determinant(old_p1, old_p0, p0) > 0`: in view space, `P1 · ((P2 − P1) × (P3 − P1))` over the drawn quad's first
+three corners. The record is drawn from the side that its first three drawn corners' right-hand normal faces. The vertex
+order decides that side; the stored normal does not take part and only lights the quad.
+
+- **The originals:** every culled ground record of the three courses is wound that way (Big Forest: 9 177 of 9 793
+  horizontal culled records face up), and its stored normal points the other way (20 362 of 20 362 on Big Forest).
+- **The Saturn's winding** gives the opposite right-hand normal (the converted road's points down). A converted face written
+  culled in the Saturn's order is therefore drawn from behind only. In MAME, with bit 14 cleared on Amazon Falls' START
+  lettering, the letters disappeared from the front and still read "TRATS" from behind. With their stored normals negated
+  as well, they were seen from the same side, lit brighter.
+- **A repeated corner** among the first three gives a determinant of 0, and the face is drawn from both sides. The
+  converter's one-sided quads are rotated so that those three corners are distinct (`polyrom._one_sided_corners`).
+- **Per record:** the bit is set per record, so one object mixes two-sided and one-sided quads (`Quad.one_sided`).
+
 ## Link modes (quad strip)
 
 Each record with link ≠ 0 emits the quad `(old_p1, old_p0, p0, p1)`, then

@@ -10,6 +10,9 @@ from vrtools.arcade.tgp import slot_table
 from tests.test_convert_collision import _saturn_course
 
 
+BANK_ONE_FLOOR = 13_000     # Phase 26 stage 2: bytes bank 1 keeps in its largest free run (recon §2: 13 488 with three stored reverse lines)
+
+
 def replace_copro_free(rs: RomSet, words: int) -> RomSet:
     """A RomSet whose free TGP area keeps only `words` free words: the rest of every free run is filled with a
     marker word, so the allocator sees less space."""
@@ -30,6 +33,43 @@ def test_course_plan_table_is_consistent():
     assert next(p for p in COURSES if "SPEEDWAY" in p.path).min_coverage == 0.8
     assert all(p.min_coverage == 0.98 for p in COURSES if "SPEEDWAY" not in p.path)
     assert isinstance(COURSES[0], CoursePlan) and COURSES[0].thin == 0.0
+    assert all(p.reverse for p in COURSES)                                   # Phase 26 stage 2: a reverse variant on every course
+    assert {p.name: p.reverse_pairs for p in COURSES if p.reverse_pairs != tuple(range(8))} == {   # plan D2: three stored lines on the
+        **{n: (0, 7, 7, 5, 5, 5, 5, 7) for n in ("AMAZON FALLS", "PACIFIC COAST", "SURFERS OVAL", "SURFERS ROAD")},   # bank-1 courses;
+        "METROPOLIS": (0, 7, 2, 3, 5, 5, 6, 7)}                              # after the owner's drive: Metropolis's ±8 cars on ±5
+    assert all(p.bank == 1 for p in COURSES if len(set(p.reverse_pairs)) == 3)
+
+
+def test_the_bank_one_reverse_grid_interleaves_its_two_lines():
+    """Phase 26 stage 2, after the owner's drive (stage 2 findings §11.5): on the four courses whose variant shares three stored
+    lines (BANK_ONE_PAIRS) the reverse grid is the measured `grid_alt`: cars 5-12 (the +5 line) on points 1, 3, ..., 15, cars 1-4
+    and 13-15 (the -5 line) on 2, 4, ..., 14, so no two cars of one stored line stand on neighbouring points (10 units nose to
+    tail, where the game's contact B turned them on the standing grid). Every other course keeps the normal table's grid."""
+    from tests.test_convert_race import CAR_LINES
+    from vrtools.arcade.tencourse import BANK_ONE_GRID, BANK_ONE_PAIRS
+    assert {k: BANK_ONE_GRID[k] for k in range(5, 13)} == {5: 1, 6: 3, 7: 5, 8: 7, 9: 9, 10: 11, 11: 13, 12: 15}
+    assert {k: BANK_ONE_GRID[k] for k in (1, 2, 3, 4, 13, 14, 15)} == {1: 2, 2: 4, 3: 6, 4: 8, 13: 10, 14: 12, 15: 14}
+    assert BANK_ONE_GRID[0] == 0 and sorted(BANK_ONE_GRID) == list(range(16))
+    assert {p.name for p in COURSES if p.reverse_grid is not None} == {"AMAZON FALLS", "PACIFIC COAST", "SURFERS OVAL", "SURFERS ROAD"}
+    assert all((p.reverse_grid == BANK_ONE_GRID) == (p.reverse_pairs == BANK_ONE_PAIRS) for p in COURSES)
+
+    def neighbours_on_one_line(grid):
+        at = {grid[k]: BANK_ONE_PAIRS[CAR_LINES[k]] for k in range(1, 16)}           # opponent's point -> stored line
+        return [(p, p + 1) for p in range(1, 15) if at[p] == at[p + 1]]
+    assert neighbours_on_one_line(tuple(range(16)))                                  # the normal grid: cars 1-4 on -5 in a row ...
+    assert not neighbours_on_one_line(BANK_ONE_GRID)                                 # ... grid_alt: the two lines alternate
+
+
+def test_backdrop_headers_list_every_variant():
+    """Phase 26: the `gfx` routine reads [header] of a variant as of a normal entry, so the GFX_MAGIC check covers both."""
+    from vrtools.arcade.directory import ORIGINALS, CourseEntry10, ReverseRecord
+    from vrtools.arcade.tencourse import backdrop_headers
+    from dataclasses import replace
+    a = CourseEntry10("ALPINE", 0, 3, 0x15A2B0, 3, 2, 0x27B000, 0x28C000, None, 0x1E0000)
+    m = CourseEntry10("METROPOLIS", 1, 2, 0x18ACD0, 6, 1, 0x27C000, 0x28D000, None, 0x1E015C)
+    m = replace(m, reverse=ReverseRecord(0x28EA00, replace(m, header_base=0x1A0000)))
+    assert backdrop_headers([a, m]) == [(3, 0x15A2B0), (2, 0x18ACD0), (2, 0x1A0000)]
+    assert backdrop_headers(list(ORIGINALS)) == [(3, 0x100000), (1, 0x100000), (2, 0x100000)]
 
 
 def test_tgp_budget_counts_the_free_words(romset_zip):
@@ -57,7 +97,7 @@ def test_build_all_fits_the_budgets(romset_zip, saturn_cue):
     assert [c.entry.name for c in conv] == [p.name for p in COURSES]
     assert [c.entry.tgp_slot for c in conv] == list(range(3, 10))
     assert 0 <= tgp_budget(out) < before
-    assert tgp_budget(out) >= 9_500                                      # Phase 22l: the flag starts' split before the line (9 621 left at p22play90 with the apron's slices split too — to the road alone the Oval's field stalled); Phase 22k (Pascal): walls following the drawn faces, BARRIER_CHORD_TOL 2.0 (11 185 left at p22play80; 10 725 at p22play85 with the wall_min floor of the run's line); Phase 22j: 12 000 (15 681 left at p22play61); Phase 19 review: 30 000 -> 25 000 (Pascal), Phase 22: 17 500
+    assert tgp_budget(out) >= 7_500                                      # Phase 25 (Pascal): the grass runs end where the road's slope changes, GRASS_CHORD_TOL 0.15 (7 651 left at p25play2; 9 864 before); Phase 22l: 9 500, the flag starts' split before the line (9 621 left at p22play90 with the apron's slices split too — to the road alone the Oval's field stalled); Phase 22k (Pascal): walls following the drawn faces, BARRIER_CHORD_TOL 2.0 (11 185 left at p22play80; 10 725 at p22play85 with the wall_min floor of the run's line); Phase 22j: 12 000 (15 681 left at p22play61); Phase 19 review: 30 000 -> 25 000 (Pascal), Phase 22: 17 500
     assert slot_table(out)[:3] == slot_table(rs)[:3]                      # the originals' slots untouched
     bases = sorted((c.entry.bank, c.entry.header_base) for c in conv)
     for (b1, h1), (b2, h2) in zip(bases, bases[1:]):
@@ -165,6 +205,42 @@ def test_interior_on_the_left_from_the_signed_area(romset_zip):
         assert not interior_on_the_left(road_centreline(road_lines(rs, e)))
 
 
+def test_the_direction_screens_block_tops_the_colour_run(romset_zip):
+    """Phase 26 stage 3 (plan D11, Task 5): `dirscreen_block()` is dirgfx's block, at most 8 192 bytes ending at the colour-table
+    run's end 0x2c0000, 16-aligned, erased in the original; the annex's colour-run region ends at its start and no annex region
+    meets it or the start-gantry block; the select pictures' free-run search leaves it out; and `install_dirscreen_block` gives a
+    new set with block_image there (nothing else changed, the given set untouched), keeps a set that has it, and refuses ROM that
+    is neither erased nor the block."""
+    from vrtools.arcade.course import CODE_FREE
+    from vrtools.arcade.dirgfx import BLOCK_LIMIT, block_image, block_start
+    from vrtools.arcade.gantry import BLOCK_BYTES
+    from vrtools.arcade.picture import free_runs
+    from vrtools.arcade.romset import V60_PROGRAM
+    from vrtools.arcade.tencourse import (COLOUR_RUN_TAIL, annex_regions, dirscreen_block, install_dirscreen_block, picture_exclusions,
+                                          start_gantry_address)
+    lo, hi = dirscreen_block()
+    assert (lo, hi) == (block_start(), 0x2C0000) and hi == COLOUR_RUN_TAIL[1] and hi - lo <= BLOCK_LIMIT == 8192 and lo % 16 == 0
+    assert COLOUR_RUN_TAIL[0] < lo
+    rs = RomSet.from_zip(romset_zip)
+    assert set(rs.program[lo - V60_PROGRAM:hi - V60_PROGRAM]) == {0xFF}
+    assert annex_regions()[-1] == (COLOUR_RUN_TAIL[0], lo)
+    gantry = (start_gantry_address(), start_gantry_address() + BLOCK_BYTES)
+    for a, b in annex_regions():
+        assert b <= lo or a >= hi
+        assert b <= gantry[0] or a >= gantry[1]
+    assert gantry[1] <= lo and (lo, hi - lo) in picture_exclusions()
+    assert all(a + n <= lo or a >= hi for a, n in free_runs(rs, picture_exclusions()))
+    out = install_dirscreen_block(rs)
+    assert out.program[lo - V60_PROGRAM:hi - V60_PROGRAM] == block_image(lo)[0]
+    assert out.program[:lo - V60_PROGRAM] == rs.program[:lo - V60_PROGRAM] and out.program[hi - V60_PROGRAM:] == rs.program[hi - V60_PROGRAM:]
+    assert set(rs.program[lo - V60_PROGRAM:hi - V60_PROGRAM]) == {0xFF}
+    assert install_dirscreen_block(out).program == out.program
+    prog = bytearray(out.program)
+    prog[lo - V60_PROGRAM] ^= 1
+    with pytest.raises(PatchError, match=f"{lo:#x}"):
+        install_dirscreen_block(RomSet(bytes(prog), rs.boot, rs.data, rs.polygons, rs.copro_data, rs.tgp_program))
+
+
 def test_the_ten_course_set_keeps_polygon_rom_free(romset_zip, saturn_cue):
     """Phase 18: with the Saturn's terrain, road paint and structures on all seven courses the polygon ROM keeps
     POLY_FLOOR_BYTES free; only small distant terrain is thinned, never half of a course's terrain."""
@@ -180,8 +256,11 @@ def test_the_ten_course_set_keeps_polygon_rom_free(romset_zip, saturn_cue):
         assert c.report["terrain_thinned"] < 0.5 * terrain, (plan.name, c.report["terrain_thinned"], terrain)
         if plan.terrain_thin == 0 and plan.thin == 0:                    # nothing thinned: every polygon of every layer is drawn
             hidden = 27 * c.report["hidden_gates"]                       # Phase 22t: a C.P. gate that is no checkpoint (27 faces) is left out
-            assert c.report["quads"] == sum(len(course_quads(sat, (g,))) for g in range(5)) - hidden, plan.name   # (review: no verge holes)
+            copies = c.report["lettering_copies"]                         # Phase 26 stage 2: the gates' mirrored lettering
+            assert c.report["quads"] == sum(len(course_quads(sat, (g,))) for g in range(5)) - hidden + copies, plan.name   # (review: no verge holes)
     assert {plan.name: c.report["hidden_gates"] for plan, c in zip(COURSES, conv) if c.report["hidden_gates"]} == {"PACIFIC COAST": 1}
+    assert {plan.name: c.report["lettering_copies"] for plan, c in zip(COURSES, conv)} == {   # START 14 faces, C.P. 7, each copied
+        plan.name: 21 if plan.name == "PACIFIC COAST" else 28 for plan in COURSES}
 
 
 def test_every_course_has_its_own_backdrop(romset_zip, saturn_cue):
@@ -200,7 +279,10 @@ def test_every_course_has_its_own_backdrop(romset_zip, saturn_cue):
     for bank in (1, 2, 3):
         a, b = read_panorama(rs, course_entry_at(rs, bank)), read_panorama(out, course_entry_at(out, bank))
         assert a.tiles == b.tiles and a.palettes == b.palettes and (a.map == b.map).all() and a.uploads == b.uploads, bank
-        assert sum(n for _, n in free_runs(out, bank)) >= 16 * 1024, bank
+        if bank == 1:                                                      # Phase 26 stage 2: design §6.4 (Pascal) spends bank 1's free space on the
+            assert max(n for _, n in free_runs(out, bank, min_size=16)) >= BANK_ONE_FLOOR, bank   # reverse lines (99 888 of 113 380 bytes), so the
+        else:                                                              # Phase 18b reserve no longer applies there; a later writer that does not
+            assert sum(n for _, n in free_runs(out, bank)) >= 16 * 1024, bank   # fit fails in place_blob with the sizes
     for c in conv:
         host = read_panorama(rs, course_entry_at(rs, c.entry.bank))
         p = read_panorama(out, course_entry_at(out, c.entry.bank, c.entry.header_base))

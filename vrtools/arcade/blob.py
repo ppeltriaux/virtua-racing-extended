@@ -4,7 +4,8 @@ An original course has its header at the bank window's base (0x100000); the ten-
 read a header anywhere in the mapped bank, so a converted course can live in the free space of banks 1–3 next
 to the host course, whose graphics directory (backdrop, palette) it inherits. Layout from the blob's base:
 header (0x20) · segment array (+0x20, entry 0 = counts) · pointer block · eight road lines with wrap points ·
-collision map (128 × 128 halfwords) · surface table (one byte per collision quad).
+collision map (128 × 128 halfwords) · surface table (one byte per collision quad). A reverse variant (Phase 26,
+`build_variant_blob`) is the first four parts alone, its pointer block naming the normal blob's collision and surface.
 """
 from __future__ import annotations
 
@@ -25,6 +26,47 @@ def _align(n: int, a: int = 16) -> int:
     return (n + a - 1) // a * a
 
 
+def _road_part(tables: RoadTables, window_base: int, gfx_dir: int, collision: int | None, surface: int | None, pairs: tuple[int, ...],
+               what: str, surface_len: int = 0) -> tuple[bytearray, int]:
+    """Phase 26 (plan D3): header · segment array · pointer block · road lines, the part both blob builders lay out alike.
+    Each distinct line of `pairs` is stored once, in order of first use, and pair k of the pointer block names line
+    `pairs[k]` of the tables (the identity pairs store all eight). `collision` and `surface` are the pointer block's window
+    addresses; None for both puts the course's own collision map and surface table (`surface_len` bytes) after the lines,
+    where the second value returned is the collision map's offset in the blob. The graphics directory pointer is `gfx_dir`."""
+    import struct
+    if not (WINDOW <= window_base < WINDOW + BANK_SIZE) or window_base % 16:
+        raise BankError(f"window base {window_base:#x} is not a 16-aligned window address")
+    if len(tables.lines) != LINES or any(len(l) != len(tables.lines[0]) for l in tables.lines):
+        raise BankError(f"{LINES} road lines of equal length are needed")
+    n_pts, n_seg = len(tables.lines[0]), len(tables.segments)
+    if not (WRAP_POINTS <= n_pts <= 0xFFFF) or not (1 <= n_seg <= 0xFFFE):
+        raise BankError(f"{n_pts} road points / {n_seg} segments")
+    stored = list(dict.fromkeys(pairs))                                           # distinct lines, order of first use
+    seg_off = 0x20
+    seg_blob = struct.pack("<4H", n_pts, 0, n_seg, 0) + b"".join(encode_segment(s) for s in tables.segments)
+    ptr_off = _align(seg_off + len(seg_blob))
+    line_off = _align(ptr_off + 8 + 8 * LINES)
+    stride = POINT_BYTES * (n_pts + WRAP_POINTS)
+    col_off = _align(line_off + stride * len(stored))
+    own = collision is None
+    end = _align(col_off + COLLISION_BYTES + surface_len) if own else col_off
+    if window_base - WINDOW + end > BANK_SIZE:
+        raise BankError(f"a {end} byte {what} at {window_base:#x} runs past the bank")
+    w = lambda off: window_base + off
+    lines_ptrs = tuple((w(line_off + stride * stored.index(p)), n_pts) for p in pairs)
+    header = BankHeader(gfx_dir, w(seg_off), w(ptr_off), w(ptr_off + 4), w(ptr_off + 8),
+                        lines_ptrs[0][0], lines_ptrs[0][0], lines_ptrs[0][0], n_pts, n_seg)
+    blob = bytearray(b"\xff" * end)
+    blob[0:0x20] = encode_header(header)
+    blob[seg_off:seg_off + len(seg_blob)] = seg_blob
+    pb = encode_pointer_block(PointerBlock(w(col_off) if own else collision, w(col_off + COLLISION_BYTES) if own else surface, lines_ptrs))
+    blob[ptr_off:ptr_off + len(pb)] = pb
+    for slot, k in enumerate(stored):
+        enc = encode_line(tables.lines[k])
+        blob[line_off + stride * slot:line_off + stride * slot + len(enc)] = enc
+    return blob, col_off
+
+
 def build_course_blob(rs: RomSet, host_course: int, tables: RoadTables, collision_cells: list[int], surface: bytes,
                       window_base: int, gfx_dir: int | None = None) -> bytes:
     """The course's tables as one image to be placed at `window_base` of the host course's bank; every pointer
@@ -33,38 +75,29 @@ def build_course_blob(rs: RomSet, host_course: int, tables: RoadTables, collisio
     if not (WINDOW <= window_base < WINDOW + BANK_SIZE) or window_base % 16:
         raise BankError(f"window base {window_base:#x} is not a 16-aligned window address")
     host = course_entry_at(rs, COURSE_BANK[host_course])                         # menu index -> bank (BF 3, BB 1, AC 2)
-    if len(tables.lines) != LINES or any(len(l) != len(tables.lines[0]) for l in tables.lines):
-        raise BankError(f"{LINES} road lines of equal length are needed")
-    n_pts, n_seg = len(tables.lines[0]), len(tables.segments)
-    if not (WRAP_POINTS <= n_pts <= 0xFFFF) or not (1 <= n_seg <= 0xFFFE):
-        raise BankError(f"{n_pts} road points / {n_seg} segments")
     if len(collision_cells) != 128 * 128:
         raise BankError("the collision map has 128 × 128 cells")
-    import struct
-    seg_off = 0x20
-    seg_blob = struct.pack("<4H", n_pts, 0, n_seg, 0) + b"".join(encode_segment(s) for s in tables.segments)
-    ptr_off = _align(seg_off + len(seg_blob))
-    line_off = _align(ptr_off + 8 + 8 * LINES)
-    stride = POINT_BYTES * (n_pts + WRAP_POINTS)
-    col_off = _align(line_off + stride * LINES)
-    sur_off = col_off + COLLISION_BYTES
-    end = _align(sur_off + len(surface))
-    if window_base - WINDOW + end > BANK_SIZE:
-        raise BankError(f"a {end} byte course at {window_base:#x} runs past the bank")
-    w = lambda off: window_base + off
-    lines_ptrs = tuple((w(line_off + stride * k), n_pts) for k in range(LINES))
-    header = BankHeader(host.header.gfx_dir if gfx_dir is None else gfx_dir, w(seg_off), w(ptr_off), w(ptr_off + 4), w(ptr_off + 8),
-                        lines_ptrs[0][0], lines_ptrs[0][0], lines_ptrs[0][0], n_pts, n_seg)
-    blob = bytearray(b"\xff" * end)
-    blob[0:0x20] = encode_header(header)
-    blob[seg_off:seg_off + len(seg_blob)] = seg_blob
-    pb = encode_pointer_block(PointerBlock(w(col_off), w(sur_off), lines_ptrs))
-    blob[ptr_off:ptr_off + len(pb)] = pb
-    for k, line in enumerate(tables.lines):
-        enc = encode_line(line)
-        blob[line_off + stride * k:line_off + stride * k + len(enc)] = enc
+    blob, col_off = _road_part(tables, window_base, host.header.gfx_dir if gfx_dir is None else gfx_dir, None, None,
+                               tuple(range(LINES)), "course", len(surface))
     blob[col_off:col_off + COLLISION_BYTES] = encode_collision_map(collision_cells)
+    sur_off = col_off + COLLISION_BYTES
     blob[sur_off:sur_off + len(surface)] = surface
+    return bytes(blob)
+
+
+def build_variant_blob(tables: RoadTables, window_base: int, gfx_dir: int, collision: int, surface: int,
+                       pairs: tuple[int, ...] = tuple(range(LINES))) -> bytes:
+    """Phase 26 (plan D3): a reverse variant's direction-dependent tables as one image for `window_base` of the normal
+    course's bank: header · segment array · pointer block · road lines, laid out as `build_course_blob` lays its
+    first four parts. The pointer block names the normal blob's collision map and surface table (`collision`, `surface`,
+    window addresses: both directions race on one collision, design §6.3) and header word 0 its backdrop directory
+    (`gfx_dir`), so the variant adds no collision and no backdrop (Metropolis: 52 080 bytes with eight lines, recon §3.1; 40 144 with the six of `tencourse.METROPOLIS_PAIRS`).
+    Pair k of the pointer block names line `pairs[k]` of the tables and each distinct line is stored once, in order of
+    first use (plan D2: a course whose cars all share three lines stores three, 16 × (n + 8) bytes each); `pairs[0]` is 0
+    (the header's line pointers are line 0's) and the default is the eight lines of the tables."""
+    if len(pairs) != LINES or pairs[0] != 0 or any(not (0 <= p < LINES) for p in pairs):
+        raise BankError(f"pairs {pairs}: {LINES} line numbers 0..{LINES - 1} starting with 0 are needed")
+    blob, _ = _road_part(tables, window_base, gfx_dir, collision, surface, tuple(pairs), "variant")
     return bytes(blob)
 
 

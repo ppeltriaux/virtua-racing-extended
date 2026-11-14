@@ -21,6 +21,7 @@ import dataclasses
 import shutil
 
 from vrtools import config
+from vrtools.arcade.directory import decode_directory
 from vrtools.arcade.patch import PatchError
 from vrtools.arcade.romset import EXPECTED, OTHER_FILES, RomSet, RomSetError
 from vrtools.arcade.tencourse import COURSES, CoursePlan, build_all, poly_budget, report_lines, ten_course_set, tgp_budget
@@ -182,7 +183,7 @@ def build(roms: Path, saturn: Path, out: Path, tune: dict[str, dict[str, float |
     for name in EXTRA_ZIPS:
         if (roms / name).is_file():
             shutil.copy(roms / name, out / name)
-    lines = report_lines(before, tgp_budget(patched), converted, plans, poly_left=poly_budget(patched))
+    lines = report_lines(before, tgp_budget(patched), converted, plans, poly_left=poly_budget(patched), directory=decode_directory(patched))
     rc = 0
     if smoke:
         ok, line = run_smoke(out, seconds=seconds)

@@ -9,7 +9,7 @@ from vrtools.arcade.tgp import Quad16
 from vrtools.convert.collision import saturn_collision
 from vrtools.convert.geometry import ConvertError
 from vrtools.convert.lap import Lap, order_slices
-from vrtools.convert.road import RoadTables, heading_word, road_tables
+from vrtools.convert.road import RoadTables, heading_word, road_tables, segment_credits, segment_links, unwrap_headings
 from tests.test_convert_geometry import _saturn_course
 from tests.test_convert_lap import _square_loop
 
@@ -110,21 +110,54 @@ def test_segments_pin_the_lap_ends(saturn_cue):
         progress = max(progress, s.road_point)
 
 
-def test_links_name_a_segment_the_car_has_reached(saturn_cue):
-    """Phase 10 (formats §15): an opponent's cursor advances past line point p only when the segment named by the
-    point's link (high half) has a road point the car has reached, so every point names a segment with the GREATEST
-    road point at or before it (the first segment before any; Phase 22m: by road point, not list position, since a
-    credit may step back within SEGMENT_BACK); the named road points are monotone and exact at the pinned ends."""
+def _cursor_stop(named_rp: list[int], credited: int, start: int) -> int:
+    """The game's cursor rule (formats §15): from `start`, the cursor passes every line point whose named segment's road
+    point the car has reached; where it stops."""
+    c = start
+    while c < len(named_rp) - 1 and named_rp[c] <= credited:
+        c += 1
+    return c
+
+
+def test_the_cursor_stops_one_point_past_the_cars_own_piece():
+    """Phase 25 (Pascal: "opponent still have a high number of self crash on Alpine"): an opponent steers at its cursor
+    + 2 points, and the game jolts and slows it whenever its centre is off the tarmac (boot 0xfea9a8). A piece is
+    credited the point at its front; with each line point naming the piece at or BEFORE it, the points inside the
+    next piece named the car's own, and the cursor ran on to the NEXT piece's front: with 40-unit pieces the target
+    stood 60-100 units ahead of the car (the originals: 30-40), the cars turned in early and ran wide (Alpine: 148
+    jolts in a 150-s race, the originals 1-13; cursor 2-4 points ahead 45 % of the time, the originals 0.6 %). Each
+    point names the piece at or AFTER it: the cursor stops one point past the car's own piece (target 30-70 ahead).
+    Measured: Alpine 78, every converted course lower, no opponent stalled."""
+    lap, quads = _circle_lap_and_quads()
+    t = road_tables(lap, quads[::4], spacing=10.0)                         # a piece every fourth slice: long pieces
+    segs = t.segments
+    named_rp = [segs[pt.link >> 16].road_point for pt in t.lines[1]]
+    credits = sorted({s.road_point for s in segs})
+    assert max(b - a for a, b in zip(credits, credits[1:])) >= 3           # the pieces' fronts stand points apart
+    for a, c in zip(credits, credits[1:-1]):                               # the car enters the piece credited c from the one before
+        assert _cursor_stop(named_rp, c, start=a + 1) == c + 1, (a, c, _cursor_stop(named_rp, c, a + 1))
+
+
+def test_links_name_the_segment_ahead(saturn_cue):
+    """Formats §15: an opponent's cursor passes line point p only when the segment named by the point's link (high
+    half) has a road point the car has reached. Phase 25: every point names a segment with the SMALLEST road point at
+    or after it (the greatest of all past the last; Phase 10-24 named the greatest at or before it, see the test
+    above); by road point, not list position, since a credit may step back within SEGMENT_BACK (Phase 22m). The named
+    road points are monotone and exact at the pinned ends, and a car on a piece is never held: the point after its
+    credit is the first it cannot pass."""
     t = _big_forest_tables(saturn_cue)
     n = len(t.lines[0]); segs = t.segments
+    rps = sorted({s.road_point for s in segs})
     for line in t.lines:
         named = [pt.link >> 16 for pt in line]
-        assert all(segs[s].road_point <= p for p, s in enumerate(named)), [(p, s, segs[s].road_point) for p, s in enumerate(named) if segs[s].road_point > p][:5]
+        assert all(segs[s].road_point >= p or segs[s].road_point == rps[-1] for p, s in enumerate(named))
         assert all(segs[b].road_point >= segs[a].road_point for a, b in zip(named, named[1:]))
         assert segs[named[0]].road_point == 0 and segs[named[-1]].road_point == n - 1
         exact = sum(1 for p, s in enumerate(named) if segs[s].road_point == p)
-        assert exact >= len({s.road_point for s in segs})
-        assert all(segs[named[p]].road_point == max(s.road_point for s in segs if s.road_point <= p) for p in range(0, n, 7))
+        assert exact >= len(rps)
+        assert all(segs[named[p]].road_point == min((r for r in rps if r >= p), default=rps[-1]) for p in range(0, n, 7))
+        named_rp = [segs[s].road_point for s in named]
+        assert all(_cursor_stop(named_rp, c, start=0) == c + 1 for c in rps[:-1])
 
 
 def test_segments_credit_the_front_of_each_quad(saturn_cue):
@@ -529,3 +562,13 @@ def test_road_tables_take_per_point_lanes():
         p = t.lines[1 + i][3]
         assert math.hypot(p.x - c.x, p.z - c.z) == pytest.approx(abs(off) * (0.5 if off > 0 else 1.0), abs=1e-3)
         assert (t.lines[1 + i][5].x, t.lines[1 + i][5].z) == (plain.lines[1 + i][5].x, plain.lines[1 + i][5].z)
+
+
+def test_the_walk_the_link_rule_and_the_unwrap_stand_alone():
+    lap, _ = _ring_lap_with_slices(n=60, spacing=10.0)
+    quads = _ring_quads(lap, length=14.0)
+    t = road_tables(lap, quads, spacing=10.0)
+    pts = [(p.x, p.z) for p in t.lines[0]]
+    assert segment_credits(pts, quads) == t.segments
+    assert segment_links(t.segments, len(pts)) == [p.link >> 16 for p in t.lines[0]]
+    assert unwrap_headings([100, 16300, 16000, 15000]) == [100, -84, -384, -1384]

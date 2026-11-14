@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import math
 from collections import defaultdict
-from typing import Callable
+from typing import Callable, NamedTuple
 
 import numpy as np
 
@@ -150,7 +150,11 @@ MARGIN = 40.0                  # arcade units added on each side of a slice: the
                                # arcade start grid places the player 30 units left of the single lane past the grid
 
 
-VERGE_SINK = 0.3               # a verge sits this far from the tarmac edge's height, away from zero (Phase 11: ties went to the verge)
+VERGE_SINK = 0.0               # a verge sits this far from the tarmac edge's height, away from zero. Phase 24: 0, the run-off
+                               # level with the road as the originals have it (Pascal rec141: with 0.3 a car with one side on
+                               # the grass or snow leaned 11.5 degrees, either way by the road's height sign). Phase 11 set
+                               # 0.3 for the TGP's pick at the edge; the parked fields it was meant to cure were verges
+                               # OVERLAPPING the tarmac, fixed since (measured edges): all seven races pass at 0.05 and at 0
 GROUND_DECK = 2.0              # Phase 22o: the drawn ground is the verge's only where it continues the step's inner corner within this
                                # over GROUND_PROBE units (the Oval's kerb lip stands 1.0 at the edge and its bank 1.7 two units out;
                                # Metropolis's junction
@@ -1842,6 +1846,171 @@ def pit_box(sat: SaturnCourse, col, centreline) -> tuple[float, float, float, in
     return float(x), float(y), float(z), int(heading)
 
 
+# Phase 26 stage 4, Task 1 (Pascal, 14 Nov, design §6.8: "Ok b, I follow your recommendation", shown the top view): the named
+# spots where a run-off wall quad is trimmed off the pit lane's tarmac, keyed by the TRCK file's SHA-1 prefix as
+# `place.PIT_LANES`; the world rectangle (x0, x1, z0, z1) holds the footprint of the wall quad(s) concerned and nothing else.
+# Diablo Canyon: the main road's right-side wall step between centreline points 23 and 24 (recon
+# docs/spike/2026-11-phase26-stage4-recon.md §3 item 3: a reverse car on the lane's centre hit it at (-389.7, 41.4)). Its end at
+# point 23 stands on the drawn rock between the road and the lane (`barrier_faces` meets the rock's slope 30 out); points 24-27
+# have no drawn face within reach, so `fill_faces` bridges 23 -> 28 with a straight line across the lane, and of the steps laid
+# on that line the centre-on-tarmac checks kept this one only (its centre lies on the sand). By Pascal's decision only the part
+# over the lane's tarmac slices goes: the wall keeps its end on the rock, its part over the sand and its edge facing the road.
+class WallTrim(NamedTuple):
+    """A named spot: the world rectangle (x0, x1, z0, z1) and the number of wall quads the trim is expected to cut there
+    (`trim_walls_off_the_lane` refuses another number, as it refuses none: the final review's Minor 6)."""
+    rect: tuple[float, float, float, float]
+    quads: int
+
+
+PIT_LANE_WALL_TRIMS: dict[str, WallTrim] = {
+    "a0a0bed1d9fca843": WallTrim((-409.5, -388.0, 31.0, 43.5), 1),    # Diablo Canyon (footprint x -408.7..-388.9, z 31.7..42.8)
+}
+TRIM_EPS = 1e-6                # xz units: corners this close are one corner
+
+
+def wall_trim_of(sat) -> WallTrim | None:
+    """The named spot of the Saturn course `sat` (`PIT_LANE_WALL_TRIMS`, by its TRCK file's key), None for a course without."""
+    import hashlib
+    return PIT_LANE_WALL_TRIMS.get(hashlib.sha1(sat.trck.data).hexdigest()[:16]) if sat.trck is not None else None
+
+
+def _xz_cross(a, b, p) -> float:
+    return (b[0] - a[0]) * (p[1] - a[1]) - (b[1] - a[1]) * (p[0] - a[0])
+
+
+def _poly_area(p) -> float:
+    return sum(p[k][0] * p[(k + 1) % len(p)][1] - p[(k + 1) % len(p)][0] * p[k][1] for k in range(len(p))) / 2
+
+
+def _clip_half(poly, a, b, sign: float):
+    """The convex xz polygon `poly` cut to the side of the line a -> b where sign * cross >= 0 (Sutherland-Hodgman; the
+    polygon's own winding is kept)."""
+    out = []
+    for k in range(len(poly)):
+        p, q = poly[k], poly[(k + 1) % len(poly)]
+        sp, sq = sign * _xz_cross(a, b, p), sign * _xz_cross(a, b, q)
+        if sp >= 0:
+            out.append(p)
+        if (sp >= 0) != (sq >= 0):
+            t = sp / (sp - sq)
+            out.append((p[0] + t * (q[0] - p[0]), p[1] + t * (q[1] - p[1])))
+    return out
+
+
+def _clean(poly):
+    """`poly` without repeated corners (TRIM_EPS) and corners on the line through their neighbours."""
+    out = []
+    for p in poly:
+        if not out or math.dist(p, out[-1]) > TRIM_EPS:
+            out.append(p)
+    while len(out) > 1 and math.dist(out[0], out[-1]) <= TRIM_EPS:
+        out.pop()
+    k = 0
+    while len(out) > 3 and k < len(out):
+        a, p, b = out[k - 1], out[k], out[(k + 1) % len(out)]
+        if abs(_xz_cross(a, b, p)) <= TRIM_EPS * max(math.dist(a, b), 1.0):
+            out.pop(k); k = 0
+        else:
+            k += 1
+    return out
+
+
+def _xz_overlap(p, q) -> bool:
+    """Two convex xz polygons overlap in an area (separating-axis test; touching along an edge or at a corner is not)."""
+    for poly in (p, q):
+        for k in range(len(poly)):
+            a, b = poly[k], poly[(k + 1) % len(poly)]
+            ax, az = -(b[1] - a[1]), b[0] - a[0]
+            pa = [ax * x + az * z for x, z in p]; pb = [ax * x + az * z for x, z in q]
+            if max(pa) <= min(pb) + TRIM_EPS or max(pb) <= min(pa) + TRIM_EPS:
+                return False
+    return True
+
+
+def _minus_convex(poly, t):
+    """The convex xz polygon `poly` less the convex polygon `t`, as disjoint convex pieces: the part beyond t's first edge,
+    then of the rest the part beyond its second edge, and so on (what lies inside every edge is t's)."""
+    sign = 1.0 if _poly_area(t) > 0 else -1.0                   # t's inside is where sign * cross >= 0 for each edge
+    pieces, rest = [], poly
+    for k in range(len(t)):
+        a, b = t[k], t[(k + 1) % len(t)]
+        beyond = _clean(_clip_half(rest, a, b, -sign))
+        if len(beyond) >= 3 and abs(_poly_area(beyond)) > 0.0:
+            pieces.append(beyond)
+        rest = _clean(_clip_half(rest, a, b, sign))
+        if len(rest) < 3:
+            break
+    return pieces
+
+
+def trim_walls_off_the_lane(walls: list[Quad16], lane, rect: tuple[float, float, float, float],
+                            quads: int | None = None) -> tuple[list[Quad16], int]:
+    """Phase 26 stage 4, Task 1 (`PIT_LANE_WALL_TRIMS`): each wall quad whose footprint lies inside `rect` (x0, x1, z0, z1)
+    loses the part over the pit lane's tarmac slices (`lane`, xz polygons); the rest stays, as the fewest quads that cover it
+    exactly (one when it is a quadrilateral; a pentagon or hexagon is cut into two along the chord from the middle of its
+    longest new edge, so every edge of the old quad that survives whole stays one edge). Corners keep the old quad's heights
+    (an old corner its own, a new one the old quad's TGP plane there, `tgp_height`) and the attribute. Every other wall is
+    returned as it was, in its place. Returns (walls, number of quads trimmed).
+
+    ConvertError (the review of Task 1): when nothing in `rect` is trimmed (no wall quad wholly inside it, or none over the
+    lane: a named spot must not build silently once the course's geometry has moved); with `quads` (the spot's `WallTrim.quads`,
+    the final review's Minor 6) when the number trimmed is another; when a remainder is not one piece of
+    4-6 corners; when a cut quad is not convex. The subtraction cuts along every edge line of each overlapping slice in turn
+    (`_minus_convex`), so a remainder that is one convex shape can come out in several pieces, depending on the slices' order
+    and corner order (a reviewer's probe: a 10 x 10 wall less two adjacent slices over its east half, 26 of 32 orders); that
+    case raises too: the pieces are not merged. Diablo Canyon's spot comes out in one piece (one quad, two slices)."""
+    x0, x1, z0, z1 = rect
+    out, trimmed = [], 0
+    for w in walls:
+        if not all(x0 <= c[0] <= x1 and z0 <= c[2] <= z1 for c in w.corners):
+            out.append(w)
+            continue
+        old = [(c[0], c[2]) for c in w.corners]
+        pieces = [old]
+        for t in lane:                                           # only the slices over the quad: a far slice's edge lines
+            tp = _clean([(c[0], c[2]) for c in t])               # would cut the remainder into needless pieces
+            if len(tp) < 3 or not _xz_overlap(old, tp):
+                continue
+            pieces = [r for p in pieces for r in _minus_convex(p, tp)]
+        if not pieces:
+            raise ConvertError(f"the trim at {rect} leaves nothing of the wall quad at {old}: it lies wholly on the lane")
+        if len(pieces) > 1:
+            raise ConvertError(f"the trim at {rect} leaves {len(pieces)} pieces of the wall quad at {old}")
+        rem = pieces[0]
+        if rem == old or (len(rem) == 4 and all(any(math.dist(p, o) <= TRIM_EPS for o in old) for p in rem)):
+            out.append(w)                                        # nothing over the lane
+            continue
+        if not 4 <= len(rem) <= 6:
+            raise ConvertError(f"the trim at {rect} leaves a remainder of {len(rem)} corners: {rem}")
+        on_old = lambda p, q: any(abs(_xz_cross(old[k], old[(k + 1) % 4], p)) <= TRIM_EPS * 10 and
+                                  abs(_xz_cross(old[k], old[(k + 1) % 4], q)) <= TRIM_EPS * 10 for k in range(4))
+        if len(rem) == 5:                                        # a sixth corner in the middle of the longest new edge
+            k = max((k for k in range(5) if not on_old(rem[k], rem[(k + 1) % 5])),
+                    key=lambda k: math.dist(rem[k], rem[(k + 1) % 5]))
+            a, b = rem[k], rem[(k + 1) % 5]
+            rem = rem[k + 1:] + rem[:k + 1] + [((a[0] + b[0]) / 2, (a[1] + b[1]) / 2)]
+            rem = rem[-1:] + rem[:-1]                            # start at the new corner: the chord is its diagonal
+        parts = [rem] if len(rem) == 4 else [rem[0:4], rem[3:6] + rem[0:1]]
+        def corner(p):
+            for c in w.corners:
+                if math.hypot(c[0] - p[0], c[2] - p[1]) <= TRIM_EPS:
+                    return c
+            return (p[0], tgp_height(w.corners, p[0], p[1]), p[1])
+        for part in parts:
+            c = tuple(corner(p) for p in part)
+            q = Quad16(c, _mean(c), w.attr)
+            if not _convex(c) or abs(xz_area(q)) <= MIN_AREA_QUAD or (xz_area(q) < 0) != (xz_area(w) < 0):
+                raise ConvertError(f"the trim at {rect} cuts a quad that is not convex or keeps no area: {c}")
+            out.append(q)
+        trimmed += 1
+    if not trimmed:
+        raise ConvertError(f"the named spot {rect} trims no wall quad: none lies wholly inside it over the pit lane (moved "
+                           f"geometry, or the late wall drop already took a wall standing on tarmac)")
+    if quads is not None and trimmed != quads:
+        raise ConvertError(f"the named spot {rect} trims {trimmed} wall quads where it names {quads}")
+    return out, trimmed
+
+
 def trim_tarmac(tarmac: list[Quad16], pts, faces, height_of=None, keep=()) -> tuple[list[Quad16], int]:
     """Phase 22a: the tarmac cut back to BARRIER_SETBACK inside the drawn face (never inside WALL_MIN_LATERAL) where the
     Saturn's road slice reaches past it (Diablo 115-122: tarmac to 29.5, the drawn road ends in a lip at 23.8 with
@@ -2018,6 +2187,8 @@ def clip_at_walls(grass: list[Quad16], walls: list[Quad16], height: HeightFn | N
 BANK_SPLIT_TOL = 0.75          # a road quad whose two triangles lie more than this under the height function is split across
 BANK_SPLIT_DEPTH = 2           # ... at most this deep (a quad becomes at most 4)
 BANK_SPLIT_DECK = 6.0          # samples further off than this are another deck, not a bank
+BANK_SPLIT_INSET = 0.03        # Phase 24: the samples 'on' an edge lie this fraction inside it (a kerb standing AT the road's
+                               # edge is not a knee under the quad: Metropolis's hump 110 units after the line)
 
 
 def split_bank_quads(quads: list[Quad16], height: HeightFn, tol: float = BANK_SPLIT_TOL, depth: int = BANK_SPLIT_DEPTH) -> list[Quad16]:
@@ -2031,6 +2202,7 @@ def split_bank_quads(quads: list[Quad16], height: HeightFn, tol: float = BANK_SP
         for u in (0.05, 0.15, 0.25, 0.35, 0.45, 0.55, 0.65, 0.75, 0.85, 0.95):
             for v in (0.0, 0.1, 0.3, 0.5, 0.7, 0.9, 1.0):        # (on the edges too: Oval 55's quad was lowest on one)
                 for uu, vv in ((u, v), (v, u)):                   # (fine along both pairs of edges)
+                    uu, vv = min(max(uu, BANK_SPLIT_INSET), 1 - BANK_SPLIT_INSET), min(max(vv, BANK_SPLIT_INSET), 1 - BANK_SPLIT_INSET)
                     x = (1 - uu) * (1 - vv) * c[0][0] + uu * (1 - vv) * c[1][0] + uu * vv * c[2][0] + (1 - uu) * vv * c[3][0]
                     z = (1 - uu) * (1 - vv) * c[0][2] + uu * (1 - vv) * c[1][2] + uu * vv * c[2][2] + (1 - uu) * vv * c[3][2]
                     d = height(x, z) - tgp_height(c, x, z)        # under the road (a car goes through it): over it a car
@@ -2057,7 +2229,8 @@ def split_bank_quads(quads: list[Quad16], height: HeightFn, tol: float = BANK_SP
         for pair in (0, 1):                                       # either pair of opposite edges
             for i in range(3, 38):
                 t = i / 40
-                dv = max(dev(c, *(bil(c, t, w) if pair == 0 else bil(c, w, t))) for w in (0.0, 0.25, 0.5, 0.75, 1.0))
+                dv = max(dev(c, *(bil(c, t, w) if pair == 0 else bil(c, w, t)))
+                         for w in (BANK_SPLIT_INSET, 0.25, 0.5, 0.75, 1 - BANK_SPLIT_INSET))
                 if best is None or dv > best[0]:
                     best = (dv, pair, t)
         _, pair, t = best
@@ -2331,13 +2504,25 @@ def road_verges(tarmac: list[Quad16], pts, height: HeightFn, width: float | list
                            and line(k) - VERGE_SCAN_STEP - WALL_OVERLAP >= wall_min(k % n, side) - 1e-6 for k in range(a + 1, b))
             if jump(p):                                           # a run starting with a jump segment keeps it alone
                 max_run = 1
+            def road_h(k):                                        # Phase 25: the built road's height a unit inside its edge
+                k %= n
+                lat = max(edges[k][side] - 1.0, 0.0)
+                return tarmac_h(pts[k][0] + sign * lat * dirs[k][1], pts[k][1] - sign * lat * dirs[k][0])
+            def level_ok(a, b):                                   # Phase 25: the road's edge between a and b keeps within
+                if walls or b - a < 2:                            # GRASS_CHORD_TOL of the straight line from a's height to
+                    return True                                   # b's (the run's inner line: one quad's edge)
+                ha, hb = road_h(a), road_h(b)
+                if ha is None or hb is None:
+                    return True
+                hs = [(k, road_h(k)) for k in range(a + 1, b)]
+                return all(h is None or abs(h - (ha + (hb - ha) * (k - a) / (b - a))) <= GRASS_CHORD_TOL for k, h in hs)
             while run < max_run and p + run < n and mid_ok(p) and mid_ok(p + run) and abs(edges[p + run][side] - edges[p][side]) <= tol \
                     and abs(widths[p + run][side] - widths[p][side]) <= (tol if walls else GRASS_WIDTH_TOL) and abs(insets[p + run][side] - insets[p][side]) <= tol \
                     and math.degrees(math.acos(max(-1.0, min(1.0, dirs[p][0] * dirs[p + run][0] + dirs[p][1] * dirs[p + run][1])))) <= turn \
                     and not (walls and fine is not None and not fine[p][side]
                              and abs(edges[p + run][side] + insets[p + run][side] - edges[p][side] - insets[p][side]) > BARRIER_LAT_TOL) \
                     and not (run >= 1 and jump(p + run)) \
-                    and chord_ok(p, p + run + 1):                     # Phase 22k: the segment before a jump stays its own run
+                    and chord_ok(p, p + run + 1) and level_ok(p, p + run + 1):   # Phase 22k: the segment before a jump stays its own run
                 run += 1                                          # (Phase 22a: a barrier run breaks where its points' own
                                                                   # lateral moves: Diablo 91-97, the rock curving away)
             if shore and run > 1 and edges[(p + run) % n][side] > max(edges[(p + j) % n][side] for j in range(run)):
@@ -2584,6 +2769,7 @@ def _racing_line_samples(pts, dense: bool = True) -> np.ndarray:
     return arr
 
 
+GRASS_CHORD_TOL = 0.15         # Phase 25: a grass run ends where the road's edge leaves the straight line between its ends by more (see test)
 GRASS_WIDTH_TOL = 1.0          # Phase 22a: a grass run spans widths this far apart (it takes the widest: no gap before a wall)
 GRASS_CLEARANCE = 0.5          # Phase 22a: grass over tarmac is dropped only this near a racing line (walls: WALL_CLEARANCE).
                                # Narrowed by a drawn barrier, a grass step's centre lies on the tarmac of a wider neighbour
@@ -3314,6 +3500,14 @@ def saturn_collision(sat: SaturnCourse, height: HeightFn, y_offset: float = 0.0,
             first, nw = n_tarmac + coverage["verges"], coverage["walls"]
             kept_walls = [w for w in quads[first:first + nw] if not _on_tarmac(w, quads[:n_tarmac])]
             coverage["walls_dropped"] += nw - len(kept_walls); coverage["walls"] = len(kept_walls)
+            # Phase 26 stage 4, Task 1 (Pascal, 14 Nov; `PIT_LANE_WALL_TRIMS`): at a named spot only the part of a wall quad
+            # over the pit lane's tarmac slices goes. It acts on the walls alone, after the drop above, so the tarmac and the
+            # verges keep their order and indices (the walls follow them; the pit pairs are tarmac indices).
+            spot = wall_trim_of(sat)
+            if spot is not None:
+                kept_walls, coverage["walls_trimmed"] = trim_walls_off_the_lane(kept_walls, pit_lane_polygons(sat), spot.rect,
+                                                                                quads=spot.quads)
+                coverage["walls"] = len(kept_walls)
             quads = quads[:first] + kept_walls + quads[first + nw:]
     if cover and lap is not None:
         # Phase 22j (Pascal, p22play56: "even on the main we get pulled into the pit"): the game's PIT WORK check fires on

@@ -68,6 +68,8 @@ class Quad:
     normal: Point
     flags: int
     tex_adr: int
+    one_sided: bool = False      # encode_object: drawn from one side only (bit 14 clear on its record) whatever `no_cull` says:
+                                 # from the side its first three corners' right-hand normal faces (Phase 26 stage 2, measured)
 
 
 def decode_object(words: bytes, poly_adr: int, size: int = 0, max_records: int = 65536) -> Object:
@@ -146,14 +148,28 @@ def _key(pt: Point) -> tuple[float, float, float]:
     return (round(pt[0], 3), round(pt[1], 3), round(pt[2], 3))
 
 
+def _one_sided_corners(p: tuple[Point, Point, Point, Point]) -> tuple[Point, Point, Point, Point]:
+    """`p` rotated (cyclic order kept) so its first three corners are distinct where it has three: MAME's back-face test
+    takes the drawn polygon's first three corners, and a repeated corner among them (a triangle) gives a determinant of
+    0, drawn from both sides."""
+    for k in range(4):
+        r = p[k:] + p[:k]
+        if len({_key(r[0]), _key(r[1]), _key(r[2])}) == 3:
+            return r
+    return p
+
+
 def _chains(run: list[Quad]) -> list[list[tuple[tuple[Point, Point, Point, Point], int, Quad]]]:
     """Chains of one tex run: lists of (drawn corners, exit link, quad). A record with link 1, 2 or 3 draws
     D = (old_p1, old_p0, p0, p1) and keeps as the next old edge (D1, D2), (D2, D3) or (D3, D0) respectively; the next
     polygon starts with that edge reversed, so a polygon sharing an edge with the previous one costs one record.
     Chains start in input order and take the lowest-index unused neighbour (ties: link 2, 1, 3); the last
-    polygon of a chain keeps link 2."""
+    polygon of a chain keeps link 2. A one-sided quad (Phase 26 stage 2) is a chain of its own, its corners as given
+    (`_one_sided_corners`): its winding decides the side it is drawn from."""
     index: dict[tuple, list[tuple[int, int]]] = {}
     for i, qd in enumerate(run):
+        if qd.one_sided:
+            continue
         for k in range(4):
             a, b = _key(qd.p[k]), _key(qd.p[(k + 1) % 4])
             if a != b:
@@ -164,6 +180,9 @@ def _chains(run: list[Quad]) -> list[list[tuple[tuple[Point, Point, Point, Point
         if used[s]:
             continue
         used[s] = True
+        if run[s].one_sided:
+            out.append([(_one_sided_corners(tuple(run[s].p)), 2, run[s])])
+            continue
         d = tuple(run[s].p)
         chain = [[d, 2, run[s]]]
         while True:
@@ -223,7 +242,7 @@ def encode_object(quads: list[Quad], tex_start: int, no_cull: bool = False, max_
             out += _pack_record(0x1 | Z_MODE_MAX | advance, q0.normal, d0[1], d0[0])
             advance = 0
             for d, link, qd in chain:
-                out += _pack_record(draw | (link << 8), qd.normal, d[2], d[3])
+                out += _pack_record((draw & ~0x4000 if qd.one_sided else draw) | (link << 8), qd.normal, d[2], d[3])
             records += 1 + len(chain)
     if records > max_records:
         raise ConvertError(f"{records} records exceed the {max_records} cap; split the object")

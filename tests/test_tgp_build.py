@@ -220,16 +220,25 @@ def test_operator_fixed_course_still_loads_the_original(tmp_path, romset_zip):
     assert len(b) > 200 and [(s.x, s.z, s.quad) for s in b] == [(s.x, s.z, s.quad) for s in a]
 
 
+_BUILT: dict = {}
 _SEVEN: dict = {}
+
+
+def _built(romset_zip, saturn_cue):
+    """build_all's result once per session (Phase 26: the reverse tests make a second set from it without the variant)."""
+    from vrtools.arcade.tencourse import build_all
+    key = str(romset_zip)
+    if key not in _BUILT:
+        _BUILT[key] = build_all(RomSet.from_zip(romset_zip), saturn_cue)
+    return _BUILT[key]
 
 
 def _seven(romset_zip, saturn_cue):
     """build_all + ten_course_set once per session (the six drives share it)."""
-    from vrtools.arcade.tencourse import build_all, ten_course_set
+    from vrtools.arcade.tencourse import ten_course_set
     key = str(romset_zip)
     if key not in _SEVEN:
-        rs = RomSet.from_zip(romset_zip)
-        out, conv = build_all(rs, saturn_cue)
+        out, conv = _built(romset_zip, saturn_cue)
         _SEVEN[key] = (ten_course_set(out, conv), conv)
     return _SEVEN[key]
 

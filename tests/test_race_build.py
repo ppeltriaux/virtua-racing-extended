@@ -4,7 +4,10 @@ from pathlib import Path
 
 import pytest
 
+from vrtools.arcade.course import DIRECTION_RAM
+from vrtools.arcade.directory import decode_directory
 from vrtools.arcade.select import WHEEL_FOR_ENTRY
+from vrtools.convert.reverse import reverse_points
 from vrtools.convert.lap import arc_of
 from vrtools.mame.runner import LUA_DIR, _no_hit, lap_progress, parse_attitude, parse_collision, parse_hudmap, run_mame, write_centreline
 from tests.test_tgp_build import _build, _seven
@@ -27,14 +30,22 @@ def _drive_line(c):
     return out
 
 
-def _drive_entry(tmp_path, out, romset_zip, entry, c, seconds=90, extra_env=None, autopilot=True):
-    """Race menu entry `entry` of the ten-course set `out` under the autopilot; returns the collision samples."""
+def _drive_entry(tmp_path, out, romset_zip, entry, c, seconds=90, extra_env=None, autopilot=True, reverse=False):
+    """Race menu entry `entry` of the ten-course set `out` under the autopilot; returns the collision samples. Phase 26:
+    `reverse` sets the direction flag and drives the line read backwards. Stage 3 (plan D14): on an entry with a reverse variant
+    the course lock opens the COURSE DIRECTION screen and autoplay.lua answers it (REVERSE with VR_DIRECTION=1, else NORMAL); on
+    one without, where no screen sets the flag, direction.lua holds it at 1 on the select screen (VR_DIRECTION_FORCE)."""
     tmp_path.mkdir(parents=True, exist_ok=True)
     build = _build(tmp_path, romset_zip, out)
     wd = tmp_path / f"entry{entry}"
     env = {"VR_COURSE": "0", "VR_WHEEL": str(WHEEL_FOR_ENTRY[entry]), "VR_COLLISION_LOG": str(wd / "c.txt"), "VR_SNAPS_AFTER_START": "600,2000"}
     if c is not None and autopilot:                            # without it (an original, or a swerve test) the autoplay's own steering drives
-        env["VR_AUTOPILOT"] = str(write_centreline(wd / "centreline.csv", _drive_line(c)))
+        line = _drive_line(c)
+        env["VR_AUTOPILOT"] = str(write_centreline(wd / "centreline.csv", reverse_points(line) if reverse else line))
+    if reverse:
+        env["VR_DIRECTION"] = "1"
+        if decode_directory(out)[entry].reverse is None:
+            env.update({"VR_DIRECTION_FORCE": "1", "VR_DIRECTION_RAM": f"{DIRECTION_RAM:x}"})
     env.update(extra_env or {})
     run_mame(LUA_DIR / "autoplay.lua", seconds, wd, build, env=env)
     return parse_collision(wd / "c.txt")
@@ -87,14 +98,15 @@ def test_banking_ab_on_the_surfers_courses(tmp_path, romset_zip, saturn_cue, nam
         assert results[chosen]["forward"] >= 0.9 * forward, results
 
 
-def _race(tmp_path, out, romset_zip, entry, c, seconds=150):
-    """Race `entry` under the autopilot with RAM and entity-pool dumps every 250 frames from 1600; returns the workdir."""
+def _race(tmp_path, out, romset_zip, entry, c, seconds=150, reverse=False, extra_env=None):
+    """Race `entry` under the autopilot with RAM and entity-pool dumps every 250 frames from 1600; returns the workdir.
+    Phase 26: `extra_env` adds loggers (the reverse race's race, edge and field logs)."""
     from vrtools.mame.runner import DUMP_STEP
     frames = ",".join(str(f) for f in range(1600, int(seconds * 57.5), DUMP_STEP))
     wd = tmp_path / f"entry{entry}"
-    _drive_entry(tmp_path, out, romset_zip, entry, c, seconds=seconds,
+    _drive_entry(tmp_path, out, romset_zip, entry, c, seconds=seconds, reverse=reverse,
                  extra_env={"VR_TRACE_LOG": str(wd / "trace.log"), "VR_TRACE_DUMP": frames, "VR_TRACE_FROM": "0", "VR_TRACE_TO": "0",
-                            "VR_RATE_LOG": str(wd / "rate.txt")})
+                            "VR_RATE_LOG": str(wd / "rate.txt"), **(extra_env or {})})
     return wd
 
 
@@ -478,7 +490,10 @@ def test_the_select_sweep_shows_every_picture(tmp_path, romset_zip, saturn_cue):
     base = dumps.pop(min(dumps))
     seen, bad, blank_seen, prev = set(), [], 0, None
     for frame, (menu, tile, char, pal) in sorted(dumps.items()):
-        if frame < 735 or frame > 1390:                                    # the select screen: after START (720), before the pedal (1400)
+        # the select screen: after START (720), before the course press: 1400 on an original, 1200 (autoplay.lua's DIR_PRESS) on an
+        # entry with a reverse variant, whose lock opens the direction screen. The window is kept: this run dumps only on changes of
+        # the shown index, and the sweep (735 + 300 frames) has stopped moving the index before 1200
+        if frame < 735 or frame > 1390:
             prev = menu
             continue
         for s, entry in enumerate(visible_entries(menu)):
@@ -500,20 +515,10 @@ def test_the_select_sweep_shows_every_picture(tmp_path, romset_zip, saturn_cue):
     assert not bad, bad[:6]
 
 
-def test_start_greys_the_other_courses(tmp_path, romset_zip, saturn_cue):
-    """Phase 21 (recon §3): with Diablo Canyon chosen (entry 5, the middle slot) the pedal keeps its palettes and greys
-    the slots of entries 4 and 6, as the originals' START does."""
-    import struct
-    from vrtools.arcade.select import SLOT_PAL, WHEEL_FOR_ENTRY
-    out, (table, recs, read), dumps = _select_run(tmp_path, romset_zip, saturn_cue, {"VR_WHEEL": str(WHEEL_FOR_ENTRY[5]), "VR_SELECT_DUMP": "1406,1415"})
-    got = {f: d for f, d in dumps.items() if f in (1406, 1415)}
-    assert got, sorted(dumps)
-    for frame, (menu, tile, char, pal) in got.items():
-        assert menu == 5
-        slot = lambda s: struct.unpack_from("<48H", pal, SLOT_PAL[s] - 0x900000)
-        assert slot(1) == struct.unpack("<48H", read(recs[5].chosen_addr, 96)), frame
-        assert slot(0) == struct.unpack("<48H", read(recs[4].grey_addr, 96)), frame
-        assert slot(2) == struct.unpack("<48H", read(recs[6].grey_addr, 96)), frame
+# Phase 21's test_start_greys_the_other_courses (Diablo Canyon, entry 5: the chosen slot in colour, its neighbours grey at
+# 1406/1415) is retired with Phase 26 stage 3: on a course with a reverse variant the course lock opens the COURSE DIRECTION
+# screen (plan D7), and a converted course's START look is the direction screen's, pinned from Task 4 by
+# tests/test_dirscreen_build.py::test_the_lock_keeps_the_chosen_picture_in_colour.
 
 
 def test_start_on_an_original_greys_its_neighbours(tmp_path, romset_zip, saturn_cue):

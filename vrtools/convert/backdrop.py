@@ -23,6 +23,7 @@ TILES_PER_PALETTE = 128
 CODE_LIMIT = 0x4000                 # palettes 96-127 (0x900c00-0x900fff; the polygon palette starts at 0x902000)
 MAX_PALETTES = (CODE_LIMIT - TOP_CODE) // TILES_PER_PALETTE
 MAX_TILES = 2600
+TOP_FADE = 48                       # Phase 25: under its first tile row (the fill above it), the band fades in over this many pixels
 SEED = 18
 
 
@@ -82,6 +83,11 @@ def convert_panorama(sat: SaturnPanorama, top_row: float, column_offset: int, fi
     if not (0 <= f_pal < n_pal) or fill_code == TOP_CODE:
         raise ValueError(f"fill code {fill_code:#x} is outside the {n_pal} palettes below {code_limit:#x}")
     top_colour, bottom_colour = target[0].mean(0), target[-1].mean(0)
+    # Phase 25: layer 3 above the band is one flat colour, so a sky that is not flat at the picture's top (clouds) met it
+    # on a hard line. The band's first tile row is that colour and the picture fades in under it (smoothstep).
+    t = np.clip((np.arange(len(target)) - 7.5) / TOP_FADE, 0.0, 1.0)
+    t = (t * t * (3 - 2 * t))[:, None, None]
+    target = target + (top_colour - target) * (1 - t)
     tiles = target.reshape(rows, 8, ARCADE_WIDTH // 8, 8, 3).transpose(0, 2, 1, 3, 4).reshape(-1, 64, 3)  # row-major tiles
     n = len(tiles)
 
@@ -145,6 +151,7 @@ def convert_panorama(sat: SaturnPanorama, top_row: float, column_offset: int, fi
     out_tiles[fill_code] = pack(np.full(64, 15, np.uint8))
 
     palettes = {FIRST_PALETTE + g: (0x8000,) + tuple(_word(c) for c in colours[g]) for g in range(n_pal)}
+    code_of_tile[:ARCADE_WIDTH // 8] = TOP_CODE                                             # Phase 25: the first row is the fill
     code_of_tile[0], code_of_tile[(rows - 1) * (ARCADE_WIDTH // 8)] = TOP_CODE, fill_code   # the game fills layer 3 from
     tile_map = code_of_tile.reshape(rows, ARCADE_WIDTH // 8).astype(np.uint16)                # these two entries (boot 0xffe034)
     uploads, run = [], []

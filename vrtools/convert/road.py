@@ -100,44 +100,24 @@ def heading_word(dx: float, dz: float) -> int:
     return hi << 16
 
 
-def unwrapped_headings(dirs: list[tuple[float, float]]) -> list[int]:
-    """Signed headings (1/16384 turn) continuous along the lap, as the arcade stores them: the first in
+def unwrap_headings(raw: list[int]) -> list[int]:
+    """Raw headings (0..16383, 1/16384 turn) as signed continuous ones, as the arcade stores them: the first in
     -8192..8192, each next one the previous plus the shortest signed change, so a lap accumulates a full turn
     (Big Forest runs 56 → −16493) and no neighbouring points differ by a turn."""
-    raw = [heading_word(dx, dz) >> 16 for dx, dz in dirs]
     out = [((raw[0] + 8192) % 16384) - 8192] if raw else []
     for r in raw[1:]:
         out.append(out[-1] + ((r - out[-1] + 8192) % 16384) - 8192)
     return out
 
 
-def road_tables(lap: Lap, tarmac_quads: list[Quad16], spacing: float = 10.0,
-                ai_offsets: tuple[float, ...] = AI_OFFSETS, attitude: list[tuple[int, int]] | None = None,
-                lanes: list[tuple[float, float]] | None = None) -> RoadTables:
-    """Centreline (resampled every `spacing` units from the lap start), seven AI lines at `ai_offsets` (the arcade's
-    are hand-made racing lines within about 13 units of the centre), and the segment array: segment k = tarmac
-    quad k, road point = the centreline point nearest to the quad's front edge, flag 1 throughout (66 is the arcade's
-    pit lane; a converted course has none). Every line point carries its own heading word and, in the high half of
-    `link`, the index of the last segment whose road point is at or before it (the opponent cursor rule, formats §15);
-    the first and last segments are pinned to road points 0 and n-1 (END_SNAP). With `attitude` (one (roll, pitch) per
-    centreline point, `attitude_words`) the low halves of every line point's heading and link words carry them (Phase 15);
-    without it they are 0. With `lanes` (one (left, right) scale per centreline point, `collision.lane_scales`) each
-    point's AI offsets are scaled by their side's (Phase 22c: the lines narrow where a curb stands at the road, so its wall
-    can stand there); a third entry moves the seven lines sideways by that much (Phase 22n, `collision.lane_shift`: onto
-    the Saturn's own tarmac band where the route's strip is the road's edge one). Raises ConvertError when there are no tarmac quads, when a line
-    would have fewer than 2 or more than 0xffff points, when points come closer than 2 units, or when `attitude` has not
-    one entry per point."""
-    if not tarmac_quads:
-        raise ConvertError("no tarmac quads to build the segment array from")
-    if len(ai_offsets) != LINES - 1:
-        raise ConvertError(f"{LINES - 1} AI lines are needed")
-    pts = centreline(lap, spacing=spacing)
+def unwrapped_headings(dirs: list[tuple[float, float]]) -> list[int]:
+    """Signed headings (1/16384 turn) continuous along the lap (`unwrap_headings` of each direction's heading word)."""
+    return unwrap_headings([heading_word(dx, dz) >> 16 for dx, dz in dirs])
+
+
+def _directions(pts: list[tuple[float, float]]) -> tuple[list[tuple[float, float]], list[tuple[float, float]]]:
+    """Each centreline point's direction (neighbour to neighbour, unit) and the same averaged over five."""
     n = len(pts)
-    if not (2 <= n <= 0xFFFF):
-        raise ConvertError(f"{n} centreline points (need 2..65535)")
-    for a, b in zip(pts, pts[1:]):
-        if math.dist(a, b) < MIN_POINT_GAP:
-            raise ConvertError(f"centreline points closer than {MIN_POINT_GAP} units (spacing {spacing})")
     dirs = []
     for k in range(n):
         (ax, az), (bx, bz) = pts[k - 1], pts[(k + 1) % n]
@@ -149,6 +129,14 @@ def road_tables(lap: Lap, tarmac_quads: list[Quad16], spacing: float = 10.0,
         sz = sum(dirs[(k + j) % n][1] for j in range(-2, 3))   # road's edge reads as past the point (collision._smooth_dirs)
         m = math.hypot(sx, sz)
         smooth.append((sx / m, sz / m) if m > 1e-9 else dirs[k])
+    return dirs, smooth
+
+
+def segment_credits(pts: list[tuple[float, float]], tarmac_quads: list[Quad16]) -> list[Segment]:
+    """The segment array's walk: segment k = tarmac quad k, road point = the last centreline point of `pts` the quad's
+    front edge has reached (the wrap and straddler branches, the END_SNAP pins), flag FLAG_PLAIN."""
+    n = len(pts)
+    _, smooth = _directions(pts)
 
     def nearest(x: float, z: float, around: int | None = None, reached: bool = False) -> int:
         """The centreline point nearest (x, z); with `around`, among the points from SEGMENT_BACK behind to SEGMENT_WINDOW
@@ -203,18 +191,63 @@ def road_tables(lap: Lap, tarmac_quads: list[Quad16], spacing: float = 10.0,
         segments[0] = Segment(0, 0, FLAG_PLAIN)
     if segments[-1].road_point >= n - 1 - END_SNAP:
         segments[-1] = Segment(len(segments) - 1, n - 1, FLAG_PLAIN)
-    # segment named by each road point's link: the segment with the greatest road point at or before it (the last listed
-    # of them; the first segment before any). An opponent's line cursor advances past a point only once the car's own
-    # road point (its lap-position quad's segment) has reached the named segment's road point (formats §15); naming a
-    # later segment stalls the field. (Phase 22m: the credits no longer rise with the list, so this is by road point.)
+    return segments
+
+
+def segment_links(segments: list[Segment], n: int) -> list[int]:
+    """Per road point (of `n`) the segment its link names."""
+    # segment named by each road point's link. An opponent's line cursor passes a point only once the car's own road
+    # point (its lap-position quad's segment) has reached the named segment's road point (formats §15), and the car
+    # steers at the cursor + 2 points. Phase 25: each point names the segment with the smallest road point at or AFTER it
+    # (the last listed of them; the greatest of all past the last), so the cursor stops one point past the front of the
+    # car's own quad. Phase 10-24 named the greatest at or BEFORE it: the points inside the next quad then named the
+    # car's own and the cursor ran on to the next quad's front, the target 60-100 units ahead on 40-unit quads (the
+    # originals: 30-40), and the opponents turned in early and ran wide off the tarmac (Alpine: 148 jolts in 150 s
+    # against 78). Phase 6-9's "segment at or after" stalled the field because a quad was then credited its centre;
+    # it is credited its front since Phase 10. (Phase 22m: the credits do not rise with the list: by road point.)
     by_point: dict[int, int] = {}
     for s in segments:
         by_point[s.road_point] = s.index
+    rps = sorted(by_point)
     seg_at = [0] * n
-    named = 0
+    j = 0
     for p in range(n):
-        named = by_point.get(p, named)
-        seg_at[p] = named
+        while j < len(rps) - 1 and rps[j] < p:
+            j += 1
+        seg_at[p] = by_point[rps[j]]
+    return seg_at
+
+
+def road_tables(lap: Lap, tarmac_quads: list[Quad16], spacing: float = 10.0,
+                ai_offsets: tuple[float, ...] = AI_OFFSETS, attitude: list[tuple[int, int]] | None = None,
+                lanes: list[tuple[float, float]] | None = None) -> RoadTables:
+    """Centreline (resampled every `spacing` units from the lap start), seven AI lines at `ai_offsets` (the arcade's
+    are hand-made racing lines within about 13 units of the centre), and the segment array: segment k = tarmac
+    quad k, road point = the centreline point nearest to the quad's front edge, flag 1 throughout (66 is the arcade's
+    pit lane; a converted course has none). Every line point carries its own heading word and, in the high half of
+    `link`, the index of the segment whose road point is the first at or after it (the opponent cursor rule, formats §15; Phase 25);
+    the first and last segments are pinned to road points 0 and n-1 (END_SNAP). With `attitude` (one (roll, pitch) per
+    centreline point, `attitude_words`) the low halves of every line point's heading and link words carry them (Phase 15);
+    without it they are 0. With `lanes` (one (left, right) scale per centreline point, `collision.lane_scales`) each
+    point's AI offsets are scaled by their side's (Phase 22c: the lines narrow where a curb stands at the road, so its wall
+    can stand there); a third entry moves the seven lines sideways by that much (Phase 22n, `collision.lane_shift`: onto
+    the Saturn's own tarmac band where the route's strip is the road's edge one). Raises ConvertError when there are no tarmac quads, when a line
+    would have fewer than 2 or more than 0xffff points, when points come closer than 2 units, or when `attitude` has not
+    one entry per point."""
+    if not tarmac_quads:
+        raise ConvertError("no tarmac quads to build the segment array from")
+    if len(ai_offsets) != LINES - 1:
+        raise ConvertError(f"{LINES - 1} AI lines are needed")
+    pts = centreline(lap, spacing=spacing)
+    n = len(pts)
+    if not (2 <= n <= 0xFFFF):
+        raise ConvertError(f"{n} centreline points (need 2..65535)")
+    for a, b in zip(pts, pts[1:]):
+        if math.dist(a, b) < MIN_POINT_GAP:
+            raise ConvertError(f"centreline points closer than {MIN_POINT_GAP} units (spacing {spacing})")
+    dirs, _ = _directions(pts)
+    segments = segment_credits(pts, tarmac_quads)
+    seg_at = segment_links(segments, n)
     if attitude is not None and len(attitude) != n:
         raise ConvertError(f"attitude has {len(attitude)} entries for {n} road points")
     att = attitude or [(0, 0)] * n

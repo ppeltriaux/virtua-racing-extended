@@ -2,7 +2,7 @@
 import math
 import struct
 
-from vrtools.convert.hudmap import OUTLINE_WIDTH, OUTLINE_Y, encode_outline, outline_quads
+from vrtools.convert.hudmap import OUTLINE_DROP, OUTLINE_WIDTH, OUTLINE_Y, encode_outline, outline_quads
 
 
 def _loop(n=300, r=500.0):
@@ -51,3 +51,20 @@ def test_the_outline_carries_open_strips_along_the_pit_lanes():
     assert both[:len(loop)] == loop and len(both) > len(loop)
     assert all(any(_inside(q, x, z) for q in both[len(loop):]) for x, z in lane[1:-1])
     assert all(abs(p[1] - OUTLINE_Y) < 1e-6 for q in both for p in q.p)
+
+
+def test_the_outline_lies_under_the_road_it_follows():
+    """Phase 25 (Pascal: "the car seems to draw under the track map so they disappear at time"): the map section is
+    drawn in perspective from above and sorted by depth, so a car's marker is hidden wherever the car is lower than
+    the outline (the originals' roads lie 30-43 units up, over their outlines at 0.3; Diablo Canyon's runs from -35 to
+    67, Surfers Road's start at 0). With the road's height given, every corner of the strip lies under the lowest
+    road point of the two spans it joins, so no quad stands over a car on it, on the loop and on the pit lane."""
+    cl = _loop()
+    height = lambda x, z: 0.1 * x - 40.0                                             # a slope from -105 to 25
+    lane = [(800.0, -200.0 + 4.0 * t) for t in range(0, 101, 5)]                    # clear of the loop
+    qs = outline_quads(cl, extra=[lane], floor=height)
+    assert min(p[1] for q in qs for p in q.p) < -100 and max(p[1] for q in qs for p in q.p) > 0     # it follows the road
+    for x, z in cl + lane[1:-1]:
+        over = [q for q in qs if _inside(q, x, z)]
+        assert over and all(max(p[1] for p in q.p) <= height(x, z) - OUTLINE_DROP + 1e-6 for q in over), (x, z)
+    assert outline_quads(cl, extra=[lane]) == outline_quads(cl, extra=[lane], floor=None)      # without it: flat, as before

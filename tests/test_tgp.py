@@ -75,6 +75,25 @@ def test_words_follow_the_romset_not_a_recycled_id():
     assert seen == [0x111, 0x222, 0x333]
 
 
+def test_edge_values_of_two_synthetic_quads():
+    """Phase 26 (Task 9): the six results of TGP command 0x1500 on synthetic quads, corners front-left, front-right, back-right,
+    back-left; each value written out by hand from the fitted formulas in return order (+0xf1, +0xed, +0xf5, +0xf9, +0xfd, +0x101).
+    First a 20 x 10 rectangle heading +z (attribute 0, so the direction u is +z and the right r is +x). The rectangle cannot tell
+    c0 from c1 along u, or c2 from c3, and at attribute 0 the sine is 0. So, second (the whole-branch review), a skewed quad at
+    attribute 0x4000 (a quarter turn: u = (-sin a, cos a) = (-1, 0), r = (u.z, -u.x) = (0, 1)) whose corners all differ in x:
+    c0 for c1 in +0xf9, c3 for c2 in +0xfd, or +sin a in u would each change a value by 2 or more."""
+    from vrtools.arcade.tgp import edge_values
+    q = _q(((100, 0, 60), (120, 0, 60), (120, 0, 50), (100, 0, 50)), attr=0)
+    for (x, z), want in (((105, 55), (-5, 15, -5, 5, -5, 0)),        # (c0-p).r, (c1-p).r, -mean, (c1-p).u, (c2-p).u, -mean
+                         ((110, 58), (-10, 10, 0, 2, -8, 3)),
+                         ((118, 51), (-18, 2, 8, 9, -1, -4))):
+        assert edge_values(q, x, z) == pytest.approx(want, abs=1e-9), (x, z)
+    q = _q(((10, 0, 20), (12, 0, 30), (40, 0, 32), (36, 0, 18)), attr=0x4000)    # c0, c1 at the front (small x), c2, c3 behind
+    for (x, z), want in (((25, 24), (-4, 6, -1, 13, -15, 1)),         # r.(c0-p) = 20-24, 30-24; u.(c1-p) = -(12-25), -(40-25)
+                         ((20, 26), (-6, 4, 1, 8, -20, 6))):          # c0 for c1: 15 and 10; c3 for c2: -11 and -16; +sin: -r, -u
+        assert edge_values(q, x, z) == pytest.approx(want, abs=1e-9), (x, z)
+
+
 def test_collision_rejects_a_real_list_at_offset_zero():
     q = _q(((0, 0, 0), (1, 0, 0), (1, 0, 1), (0, 0, 1)))
     with pytest.raises(TgpError, match="offset 0"):

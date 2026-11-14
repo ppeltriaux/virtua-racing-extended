@@ -116,6 +116,27 @@ def test_build_writes_the_set_and_the_report(tmp_path, romset_zip, saturn_cue):
     assert report.count("coverage") >= 7 and "mame vr -rompath" in report
     assert "polygon ROM left" in report.splitlines()[0]                  # Phase 18: the scenery layers' budget
     assert report.count("layers g0-g4, terrain thinned ") == 7 and report.count("terrain thinned ") == 7
+    from vrtools.arcade.bank import POINT_BYTES, WRAP_POINTS
+    from vrtools.arcade.course import course_entry_at, decode_pointer_block
+    from vrtools.arcade.tencourse import METROPOLIS_PAIRS
+    d = decode_directory(built)                                          # Phase 26 stage 2: one reverse line after each entry's line
+    lines = report.splitlines()
+    for k, e in enumerate(d[3:10]):
+        at = next(i for i, line in enumerate(lines) if line.startswith(f"entry {3 + k} {e.name}:"))
+        rv = e.reverse
+        assert lines[at + 1].startswith(f"  entry {3 + k} reverse variant: load {rv.at:#x}, maps "), lines[at + 1]
+        assert f"header {rv.entry.header_base:#x}, race blob {rv.entry.race:#x}" in lines[at + 1]
+        # the tables' size as stored: from the variant's header to the end of its last stored road line (wrap points included),
+        # 16-aligned as the blob is laid out, read from the built bank (its pointer block's line pointers), not from the report
+        pb = decode_pointer_block(built, course_entry_at(built, e.bank, rv.entry.header_base))
+        last, n = max(pb.lines)
+        stored = (last + POINT_BYTES * (n + WRAP_POINTS) + 15) // 16 * 16 - rv.entry.header_base
+        assert f"tables {stored} bytes in bank {e.bank}, {len(set(pb.lines))} lines stored " in lines[at + 1], (stored, lines[at + 1])
+    metropolis = next(line for line in lines if line.startswith("  entry 6 reverse variant:"))
+    assert f"6 lines stored (pairs {METROPOLIS_PAIRS})" in metropolis and metropolis.endswith("checkpoints (0, 143, 239)")   # after the owner's drive
+    assert "8 lines stored (pairs (0, 1, 2, 3, 4, 5, 6, 7))" in next(line for line in lines if line.startswith("  entry 5 reverse variant:"))
+    assert "3 lines stored (pairs (0, 7, 7, 5, 5, 5, 5, 7))" in next(line for line in lines if line.startswith("  entry 7 reverse variant:"))
+    assert report.count("reverse variant:") == 7
 
 
 def test_build_copies_a_clone_set_through(tmp_path, romset_zip, saturn_cue):

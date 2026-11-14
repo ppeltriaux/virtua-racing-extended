@@ -5,6 +5,7 @@ and docs/spike/2026-11-tgp-collision.md.
 """
 from __future__ import annotations
 
+import math
 import struct
 from dataclasses import dataclass
 
@@ -114,6 +115,30 @@ def decode_quad(w, at: int) -> Quad16:
 def xz_area(q: Quad16) -> float:
     c = q.corners
     return sum(c[k][0] * c[(k + 1) % 4][2] - c[(k + 1) % 4][0] * c[k][2] for k in range(4)) / 2
+
+
+def edge_values(q: Quad16, x: float, z: float) -> tuple:
+    """Phase 26 (Task 9): the six results of TGP command 0x1500 (handler 0x34b) for the car at (x, z) on quad `q`, in return
+    order, as the V60 stores them at +0xf1, +0xed, +0xf5, +0xf9, +0xfd, +0x101. With a = the attribute's low 16 bits in
+    1/65536 turn, u = (-sin a, cos a) the quad's direction of travel, r = (u.z, -u.x) its right, p = (x, z) and c0, c1, c2 the
+    first three corners (front-left, front-right, back-right; the fourth is not used):
+      +0xf1   (c0 - p).r                 the front-left corner's lateral offset from the car (negative when it lies to the left)
+      +0xed   (c1 - p).r                 the front-right corner's
+      +0xf5   -(+0xf1 + +0xed) / 2       the car's lateral offset from the front edge's midpoint (positive to the right)
+      +0xf9   (c1 - p).u                 the front edge's distance ahead of the car (along u, through the front-right corner)
+      +0xfd   (c2 - p).u                 the back edge's (negative when behind the car; through the back-right corner)
+      +0x101  -(+0xf9 + +0xfd) / 2       the car's offset along u from the middle of the right side
+    Fitted on 54 112 fresh E lines over 393 quads of a normal Metropolis race and confirmed on a build with every slot-6 quad
+    turned round by `reverse_quad` (29 264 lines, 389 quads): every value within 1e-3 x max(1, |value|) on every line."""
+    a = (q.attr & 0xFFFF) * math.tau / 65536
+    ux, uz = -math.sin(a), math.cos(a)
+    rx, rz = uz, -ux
+    (c0x, _, c0z), (c1x, _, c1z), (c2x, _, c2z) = q.corners[:3]
+    left = (c0x - x) * rx + (c0z - z) * rz
+    right = (c1x - x) * rx + (c1z - z) * rz
+    front = (c1x - x) * ux + (c1z - z) * uz
+    back = (c2x - x) * ux + (c2z - z) * uz
+    return left, right, -(left + right) / 2, front, back, -(front + back) / 2
 
 
 def encode_quad(q: Quad16, strict: bool = True) -> bytes:

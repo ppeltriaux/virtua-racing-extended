@@ -20,6 +20,8 @@ FORMS = [
     ("mov.w disp[reg],reg", (0x1F2, "r19", "r0"), "mov.w 1F2[R19], R0"),
     ("mov.w [reg],reg", ("r10", "r1"), "mov.w [R10], R1"),
     ("mov.w [reg],abs", ("r11", 0x501954), "mov.w [R11], 501954"),
+    ("mov.w [reg],[reg]", ("r0", "r1"), "mov.w [R0], [R1]"),                  # stage 3 Task 5: dirdraw's rows
+    ("add.w disp[reg],reg", (0xC, "r9", "r1"), "add.w C[R9], R1"),
     ("mov.w abs,abs", (0x40D804, 0x40D808), "mov.w 40D804, 40D808"),
     ("mov.w abs(reg),reg", (0x278E00, "r10", "r0"), "mov.w 278E00(R10), R0"),
     ("mov.w abs(reg),abs", (0x278E00, "r10", 0x501948), "mov.w 278E00(R10), 501948"),
@@ -52,6 +54,8 @@ FORMS = [
     ("nop", (), "nop"),
     ("push reg", ("r25",), "push R25"),
     ("pop reg", ("r25",), "pop R25"),
+    ("pushm imm", (0x38E,), "pushm #38E"),
+    ("popm imm", (0x38E,), "popm #38E"),
 ]
 
 
@@ -64,7 +68,8 @@ def test_every_form_disassembles_as_intended(form, args, text):
 
 @pytest.mark.parametrize("cond,target,text", [("be", 0x278D83, "be 278D83"), ("bne", 0x278D00, "bne 278D00"),
                                               ("br", 0x278E70, "br 278E70"), ("bgt", 0x27A000, "bgt 27A000"),
-                                              ("ble", 0x278D70, "ble 278D70")])
+                                              ("ble", 0x278D70, "ble 278D70"), ("bnh", 0x278D90, "bnh 278D90"),
+                                              ("bh", 0x278D60, "bh 278D60")])
 def test_branches_are_relative_to_their_own_address(cond, target, text):
     blob = asm(cond, 0x278D70, target)                                   # (own address, target)
     [line] = listing_bytes(blob, 0x278D70)

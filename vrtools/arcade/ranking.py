@@ -113,20 +113,25 @@ def title_columns(name: str) -> tuple[int, int, int]:
     return start, course, course + 15
 
 
-def _print(attr: int, tile: int, string: int) -> bytes:
+# the call of STRING_PRINT once its three arguments are pushed (attribute, tile address, string: the string at 0[SP]), and the
+# caller's pop of them; it saves what it uses (R1, R2, R10, R21-R23)
+STRING_CALL = (b"\x49\x80\xf3" + struct.pack("<I", STRING_PRINT) + b"\x7f"      # call STRING_PRINT, [SP]
+               + bytes.fromhex("843fec"))                                       # add.w #C, SP
+
+
+def print_call(attr: int, tile: int, string: int) -> bytes:
     """The game's own call sequence for STRING_PRINT (as at 0xfc3ea0), with absolute operands."""
     return (bytes.fromhex("1da0f4") + struct.pack("<H", attr) + b"\xbf"            # movz.hw #attr, [-SP]
             + b"\x40\xa0\xf3" + struct.pack("<I", tile) + b"\xbf"                   # movea.b tile, [-SP]
             + b"\x40\xa0\xf3" + struct.pack("<I", string) + b"\xbf"                 # movea.b string, [-SP]
-            + b"\x49\x80\xf3" + struct.pack("<I", STRING_PRINT) + b"\x7f"           # call STRING_PRINT, [SP]
-            + bytes.fromhex("843fec"))                                             # add.w #C, SP
+            + STRING_CALL)
 
 
 def title_routine(name: str, name_string: int) -> bytes:
     """A converted course's title: its name in red, then COURSE and RANKING, on the title row; ends with rsr."""
     n, c, r = title_columns(name)
-    return (_print(NAME_ATTR, TITLE_ROW + 2 * n, name_string) + _print(WORD_ATTR, TITLE_ROW + 2 * c, COURSE_STRING)
-            + _print(WORD_ATTR, TITLE_ROW + 2 * r, RANKING_STRING) + b"\xca")
+    return (print_call(NAME_ATTR, TITLE_ROW + 2 * n, name_string) + print_call(WORD_ATTR, TITLE_ROW + 2 * c, COURSE_STRING)
+            + print_call(WORD_ATTR, TITLE_ROW + 2 * r, RANKING_STRING) + b"\xca")
 
 
 TITLE_BYTES = len(title_routine("A", 0))

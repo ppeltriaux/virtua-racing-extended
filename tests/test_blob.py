@@ -1,9 +1,11 @@
 """Relocatable course blobs placed in a bank's free space."""
+import struct
+
 import pytest
 
-from vrtools.arcade.bank import all_lines
-from vrtools.arcade.blob import build_course_blob, free_runs, place_blob
-from vrtools.arcade.course import collision_map, course_entry_at, decode_course, road_lines, segments, surface_table
+from vrtools.arcade.bank import BankError, RoadPoint, all_lines
+from vrtools.arcade.blob import build_course_blob, build_variant_blob, free_runs, place_blob
+from vrtools.arcade.course import Segment, collision_map, course_entry_at, decode_course, decode_pointer_block, road_lines, segments, surface_table
 from vrtools.arcade.patch import PatchError
 from vrtools.arcade.romset import RomSet
 from vrtools.convert.road import RoadTables
@@ -57,3 +59,70 @@ def test_pointer_block_addresses_all_eight_lines(romset_zip):
     n = len(tables.lines[0])
     assert all(c == n for _, c in pairs) and all(pairs[k][0] - pairs[0][0] == 16 * (n + 8) * k for k in range(8))
     assert pairs[0][0] - 0x140000 >= ptr_block + 8 + 64                        # line 0 starts after the eighth pair
+
+
+def test_a_variant_blob_shares_the_courses_collision_and_backdrop(romset_zip):
+    """Phase 26 (plan D3): a reverse variant's blob holds only its header, segment array, pointer block and eight lines;
+    its pointer block names the normal course's collision map and surface table, its header word 0 the backdrop directory.
+    Big Forest's own tables as a variant in its bank read back through the new header as the course's."""
+    rs = RomSet.from_zip(romset_zip)
+    c = decode_course(rs, 0)
+    host = course_entry_at(rs, 3)
+    pb = decode_pointer_block(rs, host)
+    tables = RoadTables(all_lines(rs, 0), c.segments)
+    out, base = place_blob(rs, 3, lambda b: build_variant_blob(tables, b, host.header.gfx_dir, pb.collision, pb.surface))
+    e = course_entry_at(out, 3, base)
+    assert base != 0x100000 and e.header.gfx_dir == host.header.gfx_dir
+    assert road_lines(out, e) == c.lines and segments(out, e) == c.segments
+    assert collision_map(out, e) == c.collision and surface_table(out, e) == c.surface
+    vpb = decode_pointer_block(out, e)
+    assert (vpb.collision, vpb.surface) == (pb.collision, pb.surface)                  # the original's addresses, not copies
+    assert len(build_variant_blob(tables, base, host.header.gfx_dir, pb.collision, pb.surface)) < 60_000
+
+
+# Phase 26 stage 2 (plan D2): a variant blob stores each distinct line once behind its eight pointer pairs.
+_BASE, _GFX, _COL, _SUR = 0x140000, 0x100200, 0x150000, 0x158000
+_N = 20
+
+
+def _tables():
+    """Eight different lines of _N points each, and three segments."""
+    lines = [[RoadPoint(float(100 * k + i), float(i), (i * 64) << 16 | k, i) for i in range(_N)] for k in range(8)]
+    return RoadTables(lines, [Segment(i, i, 1) for i in range(3)])
+
+
+def _line_pointers(blob, base):
+    """The eight (pointer, count) pairs of the blob's pointer block (header word 2 is the block's window address)."""
+    import struct
+    ptr_block = struct.unpack_from("<I", blob, 0x8)[0] - base
+    return [struct.unpack_from("<2I", blob, ptr_block + 8 + 8 * k) for k in range(8)]
+
+
+def _line_at(blob, base, ptr_count):
+    ptr, count = ptr_count
+    return blob[ptr - base:ptr - base + 16 * (count + 8)]
+
+
+def test_a_variant_blob_stores_each_distinct_line_once():
+    tables = _tables()
+    full = build_variant_blob(tables, _BASE, _GFX, _COL, _SUR)
+    three = build_variant_blob(tables, _BASE, _GFX, _COL, _SUR, pairs=(0, 7, 7, 5, 5, 5, 5, 7))
+    assert len(full) - len(three) == 5 * 16 * (_N + 8)                      # one line = 16 x (n + 8) bytes (recon §2)
+    ptrs = _line_pointers(three, _BASE)
+    assert len({p for p, _ in ptrs}) == 3
+    assert [ptrs[k][0] for k in (1, 2, 7)] == [ptrs[1][0]] * 3 and [ptrs[k][0] for k in (3, 4, 5, 6)] == [ptrs[3][0]] * 4
+    full_ptrs = _line_pointers(full, _BASE)
+    assert _line_at(three, _BASE, ptrs[0]) == _line_at(full, _BASE, full_ptrs[0])
+    assert _line_at(three, _BASE, ptrs[1]) == _line_at(full, _BASE, full_ptrs[7])                # pair 1 reads line 7's points
+    assert _line_at(three, _BASE, ptrs[3]) == _line_at(full, _BASE, full_ptrs[5])
+    assert struct.unpack_from("<I", three, 0x14)[0] == ptrs[0][0] and ptrs[0][0] < ptrs[1][0] < ptrs[3][0]   # stored in order of first use
+
+
+def test_the_default_pairs_give_the_stage_1_blob():
+    assert build_variant_blob(_tables(), _BASE, _GFX, _COL, _SUR, pairs=(0, 1, 2, 3, 4, 5, 6, 7)) == build_variant_blob(_tables(), _BASE, _GFX, _COL, _SUR)
+
+
+@pytest.mark.parametrize("pairs", [(1, 1, 2, 3, 4, 5, 6, 7), (0, 1, 2), (0, 1, 2, 3, 4, 5, 6, 8)])
+def test_bad_pairs_are_refused(pairs):
+    with pytest.raises(BankError):
+        build_variant_blob(_tables(), _BASE, _GFX, _COL, _SUR, pairs=pairs)

@@ -18,7 +18,16 @@ SPANS = ({(0xFE48ED, 0xB7), (0xFE8E8F, 0xD), (0xFC270B, 4), (0xFC28A3, 4), (0xFC
           (0xFC4208, 30), (0xFC3B78, 3), (0xFC3B4F, 7), (0xFC3B5E, 7), (0xFC3B6C, 12), (0xFC3BF6, 36),   # Phase 22r: the ranking setter, the
           (0xFE69F7, 7), (0xFE6A18, 7), (0xFC270F, 9),      # S-RAM initialiser's count, arrays and slot stores, the magic, the id store, the boot clear
           (0xFC3C33, 10), (0xFC3CFF, 19)}                    # Phase 23b: the attract page's setter call, the ranking title
-         | {(s, 0x16) for s in (0xFE1D37, 0xFE2160, 0xFE2B07, 0xFE2CF7, 0xFE415B)})
+         | {(s, 0x16) for s in (0xFE1D37, 0xFE2160, 0xFE2B07, 0xFE2CF7, 0xFE415B)}
+         | {(s, 16) for s in (0xFE8D0B, 0xFE8F97, 0xFE9147, 0xFE92FD, 0xFEA927, 0xFEAA82, 0xFEAB05, 0xFEBD50, 0xFF2205, 0xFF241C, 0xFF4C9E)}
+         | {(s, 14) for s in (0xFEC003, 0xFEC152, 0xFFCFFC)}                    # Phase 26: the fourteen command-0x1800 sites (direction.py)
+         | {(0xFE41D6, 9)}                                                      # stage 2 (D6): the crew-start bit's site (direction.py)
+         | {(0xFC0EA5, 14)}                                                     # stage 2 (D7): the start figures' placement end (direction.py)
+         | {(s, 6) for s in (0xFF5E13, 0xFF5E1F, 0xFF6A18, 0xFF6A2C, 0xFF6C25, 0xFF6C41)} | {(0xFF6712, 7)}    # Task 13: their animation
+         | {(0xFE3CCE, 8), (0xFC40CE, 16)}                                      # stage 3: mode 0x10 state 0's clear, the ranking gate (dirscreen.py)
+         | {(0xFC2788, 9)}                                                      # stage 3 Task 2: the course lock's handler, `dirlock`
+         | {(0xFF4799, 6)}                                                      # stage 3 Task 6: the HUD label's print, `hudname`
+         | {(s, 7) for s in (0xFF2518, 0xFF26F0, 0xFF2735, 0xFF277A)})       # stage 4 Task 5: the crew spawns' sites, `crewturn<state>`
 
 
 def _ten():
@@ -35,7 +44,8 @@ def test_originals_directory_round_trips_and_patches_only_the_sites(romset_zip):
     assert out.program[:CODE_FREE[0] - 0x200000] == rs.program[:CODE_FREE[0] - 0x200000]
     assert out.program[lay["end"] - 0x200000:] == rs.program[lay["end"] - 0x200000:]
     texts = [l.text for l in listing(out, lay["loader"], 120)]
-    assert any("501940" in t for t in texts) and any("6800000" in t for t in texts) and "rsr" in texts
+    assert f"jsr     {lay['entry']:X}" in texts and any("6800000" in t for t in texts) and "rsr" in texts       # Phase 26: the loader calls `entry`
+    assert any("501940" in l.text for l in listing(out, lay["entry"], 30))
     assert [l.text.split()[0] for l in listing(out, 0xFE48ED, 2)] == ["jmp", "nop"]
     assert [l.text.split()[0] for l in listing(out, 0xFE415B, 2)] == ["jsr", "nop"]
     assert [l.text.split()[0] for l in listing(out, 0xFE8E8F, 2)] == ["jsr", "nop"]
@@ -81,10 +91,22 @@ def test_load_record_layout_is_shared_by_the_encoder_and_the_routines():
     assert struct.unpack_from("<I", rec, LOAD_FIELDS["tile_table"])[0] == 0x2F2056 and struct.unpack_from("<I", rec, LOAD_FIELDS["spawn_table"])[0] == 0xFDB90B
     assert struct.unpack_from("<H", rec, LOAD_FIELDS["pit_quad"])[0] == 1234
     assert struct.unpack_from("<I", rec, LOAD_FIELDS["panel_b"])[0] == 0x1E06C0 and rec[LOAD_FIELDS["art"]] == 7
-    assert rec[LOAD_FIELDS["name"]:LOAD_FIELDS["name"] + 13] == b"PACIFIC COAST"
+    assert rec[LOAD_FIELDS["name"]:LOAD_FIELDS["name"] + 14] == b"PACIFIC COAST\0"          # Task 6: NUL-padded (hudname counts to the NUL)
     lay = directory_layout(CODE_FREE[0])
     draw = [l.text for l in listing_bytes(select_routines(lay)["draw"], lay["draw"])]
     assert any(t.startswith("mov.w") and f"{LOAD_FIELDS['panel_b']:X}[R11]" in t for t in draw)     # layer-B map read at its offset
+
+
+def test_a_space_padded_name_decodes_as_the_nul_padded_one():
+    """Stage 3 final review Minor 8: a set built before stage 3's Task 6 has space-padded name fields; decoding its load record
+    gives the same clean name as the NUL-padded field the encoder writes now."""
+    from vrtools.arcade.directory import LOAD_FIELDS, LOAD_SIZE, NAME_LEN, SELECT_SIZE, _decode_record, encode_directory
+    rec = encode_directory([replace(ORIGINALS[0], name="ALPINE")] * 10, CODE_FREE[0])[10 * SELECT_SIZE:10 * SELECT_SIZE + LOAD_SIZE]
+    n = LOAD_FIELDS["name"]
+    assert rec[n:n + NAME_LEN] == b"ALPINE".ljust(NAME_LEN, b"\0")
+    old = rec[:n] + b"ALPINE".ljust(NAME_LEN, b" ") + rec[n + NAME_LEN:]
+    maps = bytes(LOAD_SIZE)                                                  # an empty maps record after the load record
+    assert _decode_record(old + maps, 0, LOAD_SIZE, 0).name == _decode_record(rec + maps, 0, LOAD_SIZE, 0).name == "ALPINE"
 
 
 def test_music_and_fallback_route_through_the_directory(romset_zip):
@@ -101,9 +123,11 @@ def test_music_and_fallback_route_through_the_directory(romset_zip):
     out = install_directory(rs, _ten())
     lay = directory_layout(CODE_FREE[0])
     assert [l.text.split()[0] for l in listing(out, 0xFC0BB8, 2)] == ["jsr", "nop"] and listing(out, 0xFC0BC7, 1)[0].text.startswith("jsr")
-    for name in ("loader", "bank", "pit", "music"):
+    for name in ("loader", "bank", "pit", "music"):                       # Phase 26: each calls `entry`, which holds the test and the fallback
         texts = [l.text for l in listing(out, lay[name], 40)]
-        assert any("501934" in t for t in texts) and any(f"{lay['fallback']:X}" in t for t in texts), name
+        assert f"jsr     {lay['entry']:X}" in texts, name
+    texts = [l.text for l in listing(out, lay["entry"], 30)]
+    assert any("501934" in t for t in texts) and any(f"{lay['fallback']:X}" in t for t in texts)
     rec = out.program[lay["load"] - 0x200000 + 3 * 64:lay["load"] - 0x200000 + 4 * 64]
     assert struct.unpack_from("<H", rec, LOAD_FIELDS["music"])[0] == 0xB001
     assert decode_directory(out)[3].music == 0xB001
@@ -135,9 +159,11 @@ def test_loader_and_car_routines_serve_the_entry(romset_zip):
     assert any("FCD395" in t for t in cars) and any("FCD195" in t for t in cars) and "rsr" in cars
     assert [l.text.split()[0] for l in listing(out, 0xFE8A91, 2)] == ["jsr", "nop"]
     assert listing(out, 0xFE8AA7, 1)[0].text.startswith("and.w")                            # the instruction after the span is intact
-    assert directory_layout()["end"] - directory_layout()["loader"] < 5000                  # routines stay small (Phase 21: + picture (unrolled for speed), start; 22i: the pit
+    assert directory_layout()["end"] - directory_layout()["loader"] < 6500                  # routines stay small (Phase 21: + picture (unrolled for speed), start; 22i: the pit
                                                                                             # routines; 22r: the ranking arrays and routines, 0x1b0 bytes; 23b: the
-                                                                                            # attract groups, the names and seven 100-byte title routines, ~0x380)
+                                                                                            # attract groups, the names and seven 100-byte title routines, ~0x380;
+                                                                                            # Phase 26 stage 3 (plan D10): the direction screen's routines, ~0x3a0;
+                                                                                            # stage 4 Task 5 (decision L2: 6 000 -> 6 500): the crew's half turn)
 
 
 def test_laps_are_written_only_in_the_normal_game_mode(romset_zip):
@@ -221,7 +247,7 @@ def test_boot_site_takes_the_hud_map_outline_from_the_entry(romset_zip):
     rec = lambda i: out.program[lay["maps"] + 64 * i - 0x200000:lay["maps"] + 64 * i + 16 - 0x200000]
     assert rec(3) == struct.pack("<4I", 0x123456, 0x402AA, 50, 0) and rec(0) == bytes(16) and rec(9) == bytes(16)
     texts = " ".join(l.text for l in listing(out, lay["mapobj"], 40))
-    assert "FEAC1B" in texts and "18[R25]" in texts and "501940" in texts and "rsr" in texts
+    assert "FEAC1B" in texts and "18[R25]" in texts and f"jsr     {lay['entry']:X}" in texts and "rsr" in texts
     assert decode_directory(out, CODE_FREE[0]) == d
 
 
@@ -323,7 +349,7 @@ def test_boot_sites_take_the_pit_box_from_the_entry(romset_zip):
     rec = lambda i: out.program[lay["maps"] + 64 * i + 16 - 0x200000:lay["maps"] + 64 * i + 32 - 0x200000]
     assert rec(4) == struct.pack("<3fHH", -100.5, 3.0, 250.0, 0x1234, 1) and rec(0) == bytes(16) and rec(9) == bytes(16)
     texts = " ".join(l.text for l in listing(out, lay["pitbox"], 60))
-    assert "501940" in texts and "FF4061" in texts and "R10" in texts and "R11" in texts and "R12" in texts and "rsr" in texts
+    assert f"jsr     {lay['entry']:X}" in texts and "FF4061" in texts and "R10" in texts and "R11" in texts and "R12" in texts and "rsr" in texts
     assert [l.text for l in listing(out, lay["pitboxcrew"], 3)] == [f"jsr     {lay['pitbox']:X}", "mov.w   #0, [R24]", "rsr"]
     texts = " ".join(l.text for l in listing(out, lay["pitpark"], 60))
     assert "1E[R25]" in texts and "26[R25]" in texts and "6A[R25]" in texts and "rsr" in texts
@@ -351,7 +377,7 @@ def test_boot_site_aims_the_pit_autopilot_along_the_entrys_lane(romset_zip):
     lines = [l.text for l in listing(out, lay["pitaim"], 120) if l.addr < lay["pitpark"]]
     texts = " ".join(lines)
     for w in ("#7800000, [R24]", "#E800000, [R24]", "#F000000, [R24]", "#800000, [R24]", "#41200000, [R24]", "cmpf.s  #C1200000, R9", "in.w    [R23], R4",
-              "1E[R25], [R24]", "26[R25], [R24]", "501940", "R10, R1", "R12, R9"):
+              "1E[R25], [R24]", "26[R25], [R24]", f"jsr     {lay['entry']:X}", "R10, R1", "R12, R9"):
         assert w in texts, w
     assert lines.count("rsr") == 2 and texts.count("cmpf.s  R9, 26[R25]") == 1          # the entry's path, then the original's
 
@@ -379,5 +405,101 @@ def test_boot_site_grants_pit_stops_to_every_entry_with_a_pit_quad(romset_zip):
     assert listing(out, PIT_STOPS_SITE + PIT_STOPS_SITE_LEN, 1)[0].text == "mov.b   R0, 1BF[R25]"
     lines = [l.text for l in listing(out, lay["pitstops"], 60) if l.addr < lay["end"]]
     texts = " ".join(lines)
-    for w in ("501940", "10[R8], R1", "#FFFE, R1", "501105", "#5, R0", "40D826", "#2, R0", "rsr"):
+    for w in (f"jsr     {lay['entry']:X}", "10[R8], R1", "#FFFE, R1", "501105", "#5, R0", "40D826", "#2, R0", "rsr"):
         assert w in texts, w
+
+
+LOOKUP_ROUTINES = ("loader", "bank", "pit", "music", "cars", "gfx", "mapobj", "pitbox", "pitaim", "pitpark", "pitstops")
+
+
+def test_one_lookup_serves_the_eleven_routines():
+    """Phase 26 (plan D4): the 56-byte entry lookup was inlined in eleven routines; it is one routine, `entry`, which also
+    serves an entry's reverse record when the direction flag is set and the menu path applies."""
+    from vrtools.arcade.course import DIRECTION_RAM
+    from vrtools.arcade.directory import _routines
+    from vrtools.arcade.disasm import listing_bytes
+    lay = directory_layout(CODE_FREE[0])
+    code = _routines(lay)
+    for name in LOOKUP_ROUTINES:
+        texts = [l.text for l in listing_bytes(code[name], lay[name])]
+        assert texts.count(f"jsr     {lay['entry']:X}") == 1 and not any("501940" in t for t in texts), name
+    texts = [l.text for l in listing_bytes(code["entry"], lay["entry"])]
+    for w in ("501940", "501934", f"{lay['fallback']:X}", f"{DIRECTION_RAM:X}", f"{lay['reverse']:X}"):
+        assert any(w in t for t in texts), w
+    assert texts.count("rsr") == 2
+
+
+def test_the_loader_writes_back_the_direction_it_served():
+    """Plan D5: after any course load the flag byte is 1 exactly when a reverse record was loaded."""
+    from vrtools.arcade.course import DIRECTION_RAM
+    from vrtools.arcade.directory import _routines
+    from vrtools.arcade.disasm import listing_bytes
+    lay = directory_layout(CODE_FREE[0])
+    texts = [l.text for l in listing_bytes(_routines(lay)["loader"], lay["loader"])]
+    k = texts.index(f"jsr     {lay['entry']:X}")
+    assert texts[k + 1] == f"mov.b   R0, {DIRECTION_RAM:X}"
+
+
+def test_the_attract_bank_site_clears_the_flag(romset_zip):
+    """Plan D5: the attract cycle's course loads clear the flag before the lookup, so the attract never loads a reverse record:
+    the demo's bank site 0xfe2160 (game mode 2) and mode 6's Big Forest load at 0xfe2cf7 (Task 4 measured it taking the menu
+    path). Stage 3 (recon §7): the two linked loads (0xfe2b07, mode 5; 0xfe1d37, a cabinet joining) call `bankdemo` too; mode
+    0x11's race load (0xfe415b) calls `bank` as before."""
+    from vrtools.arcade.course import BANK_SITES, DIRECTION_RAM
+    from vrtools.arcade.v60asm import asm
+    rs = RomSet.from_zip(romset_zip)
+    out = install_directory(rs, _ten())
+    lay = directory_layout(CODE_FREE[0])
+    for site in BANK_SITES:
+        target = lay["bankdemo"] if site in (0xFE2160, 0xFE2CF7, 0xFE2B07, 0xFE1D37) else lay["bank"]
+        assert out.boot[site - 0xFC0000:site - 0xFC0000 + 0x16] == asm("jsr abs", target) + asm("nop") * (0x16 - 6), hex(site)
+    assert [l.text for l in listing(out, lay["bankdemo"], 2)] == [f"mov.b   #0, {DIRECTION_RAM:X}", f"jmp     {lay['bank']:X}"]
+
+
+def test_a_reverse_record_round_trips(romset_zip):
+    """Plan D4: an entry's reverse record (a load record at `at`, its maps record at `at + maps_offset()`) is written by
+    install_directory and read back by decode_directory; the reverse table holds `at` in the entry's word, 0 elsewhere."""
+    import struct
+    from vrtools.arcade.directory import ReverseRecord
+    rs = RomSet.from_zip(romset_zip)
+    lay = directory_layout(CODE_FREE[0])
+    at = (lay["end"] + 0x43) // 4 * 4
+    e = _ten()[3]
+    variant = replace(e, header_base=0x150000, race=0x28F000, pit_quad=None, map_tx=237.0, map_cross=22)
+    d = [replace(x, reverse=ReverseRecord(at, variant)) if i == 3 else x for i, x in enumerate(_ten())]
+    out = install_directory(rs, d)
+    assert decode_directory(out) == d
+    assert list(struct.unpack_from("<10I", out.program, lay["reverse"] - 0x200000)) == [0, 0, 0, at, 0, 0, 0, 0, 0, 0]
+    # refused: another bank; a pit quad without a box (since stage 4 a variant may carry its own pit quad and box, both or
+    # neither: test_a_reverse_variant_carries_its_own_pit_quad_and_box); a variant of a variant; a record at the directory's
+    # entry table, not 4-aligned, not on erased ROM
+    for bad in (ReverseRecord(at, replace(variant, bank=1)), ReverseRecord(at, replace(variant, pit_quad=30)),
+                ReverseRecord(at, replace(variant, reverse=ReverseRecord(at + 0x40, variant))), ReverseRecord(lay["entry"], variant),
+                ReverseRecord(at + 2, variant), ReverseRecord(0x200000, variant)):
+        with pytest.raises(PatchError):
+            install_directory(rs, [replace(x, reverse=bad) if i == 3 else x for i, x in enumerate(_ten())])
+
+
+def test_a_reverse_variant_carries_its_own_pit_quad_and_box(romset_zip):
+    """Phase 26 stage 4 (Task 3): a variant's record may hold its own pit quad and box (the reverse pit, `reverse.reverse_pit`):
+    `_check` accepts the pair, install_directory writes them where the prototype poked them (recon §3: the load record's +0x10 as
+    a u16, the maps record's +16 as x, y, z, heading and 1) and decode_directory reads them back. `_check` still refuses a
+    variant pit quad of PIT_NONE or more, and a quad without a box or a box without a quad."""
+    import struct
+    from vrtools.arcade.directory import PIT_BOX_OFFSET, PIT_NONE, ReverseRecord, _check, maps_offset
+    rs = RomSet.from_zip(romset_zip)
+    lay = directory_layout(CODE_FREE[0])
+    at = (lay["end"] + 0x43) // 4 * 4
+    e = replace(_ten()[3], pit_box=(-89.5, -8.75, 310.25, 0x7FF9))
+    box = (-89.625, -8.75, 269.75, 0xFFF9)
+    variant = replace(e, header_base=0x150000, race=0x28F000, pit_quad=86, pit_box=box, map_tx=237.0, map_cross=22)
+    _check(replace(e, reverse=ReverseRecord(at, variant)))
+    d = [replace(x, reverse=ReverseRecord(at, variant)) if i == 3 else x for i, x in enumerate(_ten())]
+    out = install_directory(rs, d)
+    assert decode_directory(out) == d
+    assert struct.unpack_from("<H", out.program, at - 0x200000 + 0x10)[0] == 86
+    assert struct.unpack_from("<3fHH", out.program, at - 0x200000 + maps_offset() + PIT_BOX_OFFSET) == (*box, 1)
+    for bad in (replace(variant, pit_quad=PIT_NONE), replace(variant, pit_quad=0xFFFF), replace(variant, pit_box=None),
+                replace(variant, pit_quad=None)):
+        with pytest.raises(PatchError):
+            _check(replace(e, reverse=ReverseRecord(at, bad)))

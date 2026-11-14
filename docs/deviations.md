@@ -61,6 +61,19 @@ Status: **open** (still in the build), **fixed** (was a deviation, no longer), *
   tarmac are dropped (keeping them measured worse: 16 deck-height jumps against 2 in a 90 s Metropolis drive);
   a car running wide at a crossing can still be handed the other deck's height for a few frames. A positive
   height offset for converted courses plus per-deck verges is the M6 candidate. Phase 8.
+- **Diablo Canyon's pit-lane wall trimmed off the lane** (by design, Pascal's decision of 14 Nov 2026, "Ok b, I follow your
+  recommendation"; Phase 26 stage 4 Task 1, findings `docs/spike/2026-11-phase26-stage4-findings.md` §4). **A change to the
+  normal race's collision**, not only the reverse one. One wall quad of the main road's right-side run-off wall, the step between
+  centreline points 23 and 24, reached over the pit lane's west half up to its centre line (a car driving up the lane hit it in
+  the stage 4 recon). Its cause: the gap-fill between drawn faces (`fill_faces`) bridged the rock at point 23 to the canyon side
+  at point 28 with a straight line across the lane, and the step's centre lay on sand, so the centre-on-tarmac check kept it.
+  About a quarter of its footprint stands on the tip of a drawn rock. A fenced rule (`collision.PIT_LANE_WALL_TRIMS`, Diablo's
+  course key and the rectangle x −409.5..−388.0, z 31.0..43.5) replaces it by two quads (30.5 + 31.7 of its 120 square units)
+  that keep every point of its footprint off the lane's tarmac walled: the end on the rock (all of the drawn rock it covered),
+  the part over the sand and the edge facing the road. Only the 57.8 square units over the lane's tarmac lost their wall. Nothing
+  moves nearer the road; the other six courses' collision is unchanged; the TGP reserve went from 7 651 to 7 631 words. Pascal
+  was first told, wrongly, that nothing drawn stands there, and decided again with the facts. Pascal re-drives Diablo Canyon in
+  the normal direction before a merge (not done yet).
 - **Surface kinds: tarmac and grass only** (open): the arcade also uses 8 (kerb zone), 5 (run-off), 3 and more
   on Bay Bridge. Phase 6.
 
@@ -140,6 +153,19 @@ Status: **open** (still in the build), **fixed** (was a deviation, no longer), *
   autopilot takes the car from the trigger quad (40-185 units into the lane, where a quad pair spans the tarmac across
   it) to the course's own box (`collision.pit_box`, mid-lane and at least 130 units in; Diablo's is its spawn) and parks
   it facing down the lane; the crew stands at the game's fixed world-axis offsets around the box.
+- **Pit stops in a reverse race; the crew turned half a turn** (by design, Pascal's decisions of 14 Nov 2026, P1 and P2: the lead's reading of their "Ok" to a table of six
+  recommendations; Phase 26
+  stage 4, findings `docs/spike/2026-11-phase26-stage4-findings.md`). The arcade has no reverse race. In a reverse race the car
+  enters the pit lane at its normal exit, the game's pit sequence drives it backwards up the lane to the normal box (Metropolis:
+  a box 40.7 units deeper, in the tunnel), parks it facing the reverse way, and the player drives out through the normal mouth.
+  The game places its crew at fixed world-axis offsets from the box, for a car facing +z; in a reverse race the car faces the
+  other way, so the crew is reflected through the box and each figure turned half a turn, and its animation's world-axis motion
+  is mirrored (`direction.crewturn`, `figmirror`): it stands round the car as in a normal stop. On Alpine, Pacific Coast and
+  Diablo Canyon, whose boxes do not face +z, the crew stays turned about the car in reverse as it is in their normal race (open
+  in both directions, `docs/follow-ups.md`). A normal race's crew, the attract mode's pit scene and Alpine's PIT START keep the
+  game's placement (the direction flag is 0 there). Where PIT WORK fires in reverse (the variant's pit quad) was chosen by the
+  session lead's rules, not by Pascal: in the headless runs the quad that fired has its centre 12 to 141 units into the lane
+  from the normal exit, measured along the lane.
 - **Four checkpoints per lap on the converted courses** (Phase 22e, Pascal's choice): the start line plus the
   Saturn's own three gates (its START/GOAL and two C.P.), where the arcade's courses have the start line plus two.
   The arcade's start line is not the Saturn's (the absolute grid decides it), so the Saturn's START gate is a
@@ -276,6 +302,9 @@ Status: **open** (still in the build), **fixed** (was a deviation, no longer), *
   149 to 237 and the cross 11 cells right through a 7-byte boot ROM patch (`jsr` to the directory's `cross`
   routine: R1 = 0x700ae0 + [0x502328]); the originals and the five clockwise courses keep 149 / 0. A per-course
   map scale is not done (the 0.0008 is an immediate in several routines).
+- **The HUD map's outline follows the road's height** (by design, Phase 25): the originals' outlines are flat, far
+  under their roads; a converted course's lies 1 unit under its road all the way round, since a marker is hidden
+  where its car is lower than the outline.
 - **The select pictures are generated** (Phase 21): the Saturn has no top-down pictures, and its course data holds
   only a band about 60 units either side of the road; a converted course's picture is a generated low-polygon landscape
   coloured from its own terrain (seeded noise, deterministic), with its Saturn water and exact road, quantised to three
@@ -285,7 +314,8 @@ Status: **open** (still in the build), **fixed** (was a deviation, no longer), *
   Oval shows Surfers Paradise's) is resampled to the arcade's 2048 px per turn (×1.6) and fitted vertically to the band
   (the Saturn's picture top to the band's top, its horizon to the arcade's: ×1.46, ~9 % flatter than its aspect), then
   quantised to 32 sixteen-colour palettes and ≤ 2 600 tiles. The 48 pixels above the band are one flat colour (the
-  arcade's layer 3, filled from the panorama's first entry: the Saturn's top-of-screen sky). A boot ROM routine (`gfx`) makes the
+  arcade's layer 3, filled from the panorama's first entry: the Saturn's top-of-screen sky); Phase 25: the band's first 8 pixels are
+  that colour and the picture fades in under it over 48, so the top of the Saturn's sky is paler than its own. A boot ROM routine (`gfx`) makes the
   game read the course header's own directory (it read the bank's original header). Music is still the host bank's
   (open): Alpine Big Forest's, Amazon Falls, Pacific Coast and both Surfers courses Bay Bridge's, Diablo Canyon and
   Metropolis Acropolis's. Phase 7 / 8 / 18b.
@@ -313,3 +343,49 @@ Status: **open** (still in the build), **fixed** (was a deviation, no longer), *
   free selection. Operator fixed-course settings and fresh boots load the originals. Phase 7.
 - **Race-start music follows the template** for converted courses (open until per-course music is decided). Phase 7.
 - **Flat colours, no textures** (by design): nearest course-palette entry per face. Phase 4.
+- **The road is darker than the Saturn's** (by design, Phase 24): the ground layer's neutral greys are mapped down
+  to the arcade's own road levels (`geometry.ROAD_GREYS`: 64 → 56, 80 → 72, 88 → 80, 104 → 88, 120 → 104; Big
+  Forest's Saturn road lands on the arcade Big Forest's mean), since the arcade lights its palette on top and the
+  Saturn shows its greys unlit. The Saturn's tile-to-tile shade pattern is kept; buildings and props keep their greys.
+  On screen the converted roads are still about 10 lighter than the originals'.
+- **The run-off is level with the road** (by design, Phase 24): the grass, snow and sand beside the road start at
+  the road edge's height (the originals' run-off is level; ours sat 0.3 off until Phase 24 and leaned the car).
+- **The gates' lettering reads from both sides: mirrored lettering copies** (by design, Pascal after the stage 2 drive,
+  "go with C"; Phase 26 stage 2, findings §11.2). On every Saturn gate of the converted courses (START and C.P.) the
+  lettering faces, which the conversion drew two-sided before, are drawn one-sided, and each gets a copy mirrored behind the
+  banner (`gates.gate_lettering`, `gates.lettered_quads`), one-sided the other way: the letters read correctly from either
+  side, in both directions. The Saturn draws them from the front only. Only the 21 cells holding gate lettering
+  change (collision byte-identical); the copies are lit as back-facing faces, so from behind the red follows the banner's
+  back lighting. In the normal direction it shows on Alpine and Pacific Coast, whose gates' lettered front faces the
+  reverse driver: there a normal race used to show the letters mirrored (seen from behind) and now shows the readable
+  copies. On the other five courses the normal driver sees the letters' own front, as before. The copies add records to
+  the frame's record budget (0x5011b0, 5 500; findings §11.7) in the normal direction too: 14 per C.P. gate and 28 per
+  START gate in view. Measured on normal Diablo Canyon against stage 1's playtest set: +14 on the frames that already
+  passed the budget there (the same 10 frames, the same objects drawn); over the run 0, 14, 28, 46 or 60 on a drawn
+  frame, the gantry's copies included.
+- **The converted courses' own start gantry frames** (by design, Pascal after the stage 2 drive, option "B"; Phase 26
+  stage 2, findings §11.6). Where a converted course keeps the arcade's waving start gantry at its line (Alpine, Diablo
+  Canyon, Pacific Coast), its entity names a copy of the gantry's 32 animated frames (`arcade/gantry.py`, list at
+  0x28f970 on the stage 2 set) instead of the arcade's list 0xfdc033: each frame is the arcade's records unchanged, then the
+  "START" letters mirrored one-sided behind that frame's banner, so it reads from behind in reverse. The entity's
+  object-list word changes in the normal direction too; the normal view is the arcade's frame (Alpine measured: 0 pixels
+  differ). The 32 objects (241 408 bytes) and the list sit on erased ROM; the arcade's own frames, its list and the
+  originals' spawn lists keep their bytes. Each frame adds 46 records to the frame's record budget (findings §11.7)
+  while the gantry is drawn, in the normal direction too (measured on normal Diablo Canyon against stage 1's playtest
+  set: the count higher by 46 or 60 on some frames, inferred to be the gantry's copies; the objects emitted the same on
+  every frame).
+- **The course's name in the race HUD** (by design, Pascal's request of 13 Nov, decisions H1-H4; Phase 26 stage 3, findings
+  `docs/spike/2026-11-phase26-stage3-findings.md` §5). The arcade's race HUD prints the host template's level word (BEGINNER /
+  MEDIUM / EXPERT, by data index) at the bottom right; on a converted course that word was the host's, not the course's (MEDIUM on
+  Pacific Coast, Bay Bridge's). On the seven converted courses the label reads the course's name instead (`hudname`, boot site
+  0xff4799), right-aligned to the word's last column (58), in the colour of the level the select screen shows for the entry (blue
+  BEGINNER, orange MEDIUM, red EXPERT), the same in reverse. The three originals keep the game's word. It changes a normal race
+  on the converted courses: nothing else of the race differs from main's (findings §6). A linked slave cabinet's HUD (0xff53ae)
+  still shows the template's word.
+- **The COURSE DIRECTION screen** (by design, Pascal's request and chosen layout, design §2 item 3; Phase 26 stage 3). On the seven
+  converted courses the course select's lock leads to a second screen inside the select mode, where the wheel chooses NORMAL or
+  REVERSE and the gas (or a 10-s countdown) confirms; the race then loads with the game's own lock-to-load timing. Its title,
+  labels and panels are the game's lettering and maps, its two ring arrows and the SELECT DIRECTION caption are drawn by the
+  converter. On those courses the course select's own lock look (the chosen picture in colour, the others grey) is replaced by the
+  screen's (D7). The arcade has no such screen; the originals, linked play and the operator's fixed course keep the game's flow.
+  A reverse race records no best time and asks for no name (the flow of a race without a record).

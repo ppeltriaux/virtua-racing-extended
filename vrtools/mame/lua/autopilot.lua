@@ -11,6 +11,9 @@ assert(#pts >= 3, "autopilot: centreline needs points")
 local sign = tonumber(os.getenv("VR_AUTOPILOT_SIGN") or "-1")     -- calibrated on the original Big Forest: -1 follows the line
 local gain = tonumber(os.getenv("VR_AUTOPILOT_GAIN") or "160")
 local lookahead = tonumber(os.getenv("VR_AUTOPILOT_LOOKAHEAD") or "6")       -- points ahead
+-- Phase 26 stage 4: VR_AUTOPILOT_AHEAD, how far ahead (points) the nearest-point search looks from the last one (default 40);
+-- a reverse pit path passes near another part of itself (Diablo Canyon's lane beside its road loop), where 15 keeps it on its own part
+local ahead = tonumber(os.getenv("VR_AUTOPILOT_AHEAD") or "40")
 local px, pz, lx, lz = nil, nil, nil, nil                                   -- current and previous player position
 local seen_frame = nil
 -- the player's position comes from collision_log.lua (_G.vr_player: the five-call cluster), so VR_COLLISION_LOG
@@ -29,7 +32,7 @@ local function nearest()
   -- search near the last index first (the car moves forward), fall back to a full scan
   local best, bestd = last_k, math.huge
   local n = #pts
-  for d = -10, 40 do
+  for d = -10, ahead do
     local k = ((last_k - 1 + d) % n) + 1
     local dx, dz = pts[k][1] - px, pts[k][2] - pz
     local dd = dx * dx + dz * dz

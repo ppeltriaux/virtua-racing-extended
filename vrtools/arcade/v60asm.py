@@ -89,7 +89,7 @@ def _f3(op: int, am: tuple[int, bytes]) -> bytes:
 OPS = {"mov.w": (0x2D, 4), "mov.h": (0x1B, 2), "mov.b": (0x09, 1), "movz.bw": (0x0D, 1), "movz.hw": (0x1D, 2),
        "add.w": (0x84, 4), "sub.w": (0xAC, 4), "mul.w": (0x85, 4), "and.w": (0xA4, 4), "or.w": (0x8C, 4),
        "shl.w": (0xAD, 1), "sha.w": (0xBD, 1), "cmp.w": (0xBC, 4), "cmp.h": (0xBA, 2), "cmp.b": (0xB8, 1)}
-COND = {"be": 4, "bne": 5, "br": 0xA, "blt": 0xC, "bge": 0xD, "ble": 0xE, "bgt": 0xF}
+COND = {"be": 4, "bne": 5, "bnh": 6, "bh": 7, "br": 0xA, "blt": 0xC, "bge": 0xD, "ble": 0xE, "bgt": 0xF}   # bnh / bh: unsigned
 
 
 def branch(cond: str, own: int, target: int) -> bytes:
@@ -104,8 +104,8 @@ def branch(cond: str, own: int, target: int) -> bytes:
 
 def asm(form: str, *args) -> bytes:
     """Encode one instruction. `form` = "<mnemonic> <src>,<dst>" with operand kinds abs, reg, imm, [reg],
-    disp[reg], abs(reg); plus "jsr abs", "jmp abs", "push reg", "pop reg", "rsr", "nop" and the branches
-    ("be"… with (own, target))."""
+    disp[reg], abs(reg); plus "jsr abs", "jmp abs", "push reg", "pop reg", "pushm imm", "popm imm" (a register mask: bit n
+    is Rn), "rsr", "nop" and the branches ("be"… with (own, target))."""
     if form in COND:
         return branch(form, *args)
     if form == "rsr":
@@ -120,6 +120,10 @@ def asm(form: str, *args) -> bytes:
         return _f3(0xEE, am_reg(args[0]))
     if form == "pop reg":
         return _f3(0xE6, am_reg(args[0]))
+    if form == "pushm imm":
+        return _f3(0xEC, am_imm(args[0], 4))
+    if form == "popm imm":
+        return _f3(0xE4, am_imm(args[0], 4))
     mnem, operands = form.split(" ", 1)
     if mnem not in OPS:
         raise AsmError(f"unknown form {form!r}")

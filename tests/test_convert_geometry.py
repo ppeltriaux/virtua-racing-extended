@@ -187,8 +187,10 @@ def test_far_small_terrain_is_thinned_and_the_rest_kept():
 
 
 def test_convert_tiles_draws_every_layer(saturn_cue, romset_zip):
-    """Phase 18: the converter draws all five Saturn tile groups (groups 0-3 are layers, not variants)."""
+    """Phase 18: the converter draws all five Saturn tile groups (groups 0-3 are layers, not variants). Phase 26 stage 2:
+    the props come with the gates' mirrored lettering (`gates.lettered_quads`)."""
     from vrtools.arcade.romset import RomSet
+    from vrtools.convert.gates import lettered_quads
     from vrtools.convert.geometry import convert_tiles, placed
     from vrtools.convert.place import choose_placement, grid_pose
     rs = RomSet.from_zip(romset_zip)
@@ -196,4 +198,84 @@ def test_convert_tiles_draws_every_layer(saturn_cue, romset_zip):
     pl = choose_placement(sat, grid_pose(rs, 1), grid_point=0)
     with placed(pl.angle, pl.tx, pl.tz):
         report = convert_tiles(sat, rs, 1)[2]
-        assert report["quads"] == sum(len(course_quads(sat, (g,))) for g in range(5))
+        assert report["quads"] == sum(len(course_quads(sat, (g,))) for g in range(4)) + len(lettered_quads(sat))
+        assert len(lettered_quads(sat)) > len(course_quads(sat, (4,)))
+
+
+def test_a_triangle_faces_the_same_way_wherever_its_repeated_corner_sits():
+    """Phase 24: the Saturn stores a triangle as a quad with one corner repeated; its lighting normal must not depend
+    on which corner that is (a repeat among the first three corners used to fall back to straight up, the opposite
+    of every other ground face, and the arcade lit those road triangles as if they faced away: black wedges)."""
+    from vrtools.convert.geometry import _normal
+    a, b, c, d = (0.0, 0.0, 0.0), (10.0, 0.0, 0.0), (10.0, 1.0, 10.0), (0.0, 1.0, 10.0)
+    quad = _normal((a, b, c, d))
+    for tri in ((a, a, b, c), (a, b, b, c), (a, b, c, c), (a, b, c, a)):
+        assert _normal(tri) == pytest.approx(quad, abs=1e-6)
+    assert _normal((a, b, c, d))[1] * _normal((d, c, b, a))[1] < 0          # the winding still decides the side
+
+
+@pytest.mark.parametrize("path", ["ALPINE00/TRCKALPN", "AMAZON00/TRCKAMAZ", "DIABLO00/TRCKDIAB", "METROPOL/TRCKMETR",
+                                  "PACCOAST/TRCKPACC", "SPEEDWAY/TRCKSPEE", "SURFER00/TRCKSURF"])
+def test_the_road_faces_one_way_on_every_course(saturn_cue, path):
+    """Phase 24: the near-flat grey ground faces (the road) all take a lighting normal on the same side (measured
+    before the fix: 15-45 % the other way, every one a triangle; after: at most 3 faces of a course)."""
+    from vrtools.convert.geometry import _normal
+    sat = _saturn_course(saturn_cue, path)
+    up = down = 0
+    for q in course_quads(sat, groups=(0,)):
+        if not (q.rgb[0] == q.rgb[1] == q.rgb[2] and 40 <= q.rgb[0] <= 128):
+            continue
+        ny = _normal(q.p)[1]
+        if abs(ny) >= 0.9:
+            up, down = up + (ny > 0), down + (ny < 0)
+    assert down > 300 and up <= 0.01 * down
+
+
+def test_the_roads_greys_take_the_arcades_levels():
+    """Phase 24 (Pascal: align the converted courses' road colour with the arcade's): the Saturn paints its road lighter
+    than the arcade and with larger steps between tiles (Big Forest: greys 64-104, mean 87, against the arcade's 56-88,
+    mean 77), and the arcade lights its palette on top: converted roads stood at 107-140 on screen against the
+    originals' 74-107. The ground layer's neutral greys go down ROAD_GREYS; colours, other greys and other layers stay."""
+    from vrtools.convert.geometry import ROAD_GREYS, road_greys
+    p = ((0.0, 0.0, 0.0), (1.0, 0.0, 0.0), (1.0, 0.0, 1.0), (0.0, 0.0, 1.0))
+    quads = [WorldQuad(p, (104, 104, 104)), WorldQuad(p, (64, 64, 64)), WorldQuad(p, (88, 104, 120)),
+             WorldQuad(p, (208, 208, 208)), WorldQuad(p, (248, 248, 248))]
+    assert [q.rgb for q in road_greys(quads)] == [(88, 88, 88), (56, 56, 56), (88, 104, 120), (208, 208, 208), (248, 248, 248)]
+    assert all(q.p == p for q in road_greys(quads))
+    assert all(v <= k and k - v <= 24 for k, v in ROAD_GREYS.items())           # darker, never by much
+    vals = [ROAD_GREYS[k] for k in sorted(ROAD_GREYS)]
+    assert vals == sorted(vals)                                                 # the order of the shades is kept
+
+
+def test_big_forests_saturn_road_lands_on_the_arcades_mean(saturn_cue):
+    """Phase 24: the shared course is the measure — the Saturn Big Forest's road greys, mapped, average the arcade Big
+    Forest's road (77 in the palette, measured at the same spots; unmapped 87)."""
+    from vrtools.convert.geometry import road_greys
+    sat = _saturn_course(saturn_cue, "BIGFORES/TRCKBIGF")
+    road = [q for q in course_quads(sat, groups=(0,)) if q.rgb[0] == q.rgb[1] == q.rgb[2] and 40 <= q.rgb[0] <= 128]
+    mean = lambda qs: sum(q.rgb[0] for q in qs) / len(qs)
+    assert 84 <= mean(road) <= 92 and 74 <= mean(road_greys(road)) <= 80, (mean(road), mean(road_greys(road)))
+
+
+def test_convert_tiles_maps_the_ground_layers_greys_only(saturn_cue, romset_zip):
+    """Phase 24: the converter draws the ground layer (group 0) with the mapped greys; the buildings' and props' greys
+    (groups 3, 4) are the Saturn's."""
+    from vrtools.convert import geometry
+    seen = {}
+    real = geometry.scenery_quads
+    def spy(by_group, *a, **k):
+        seen.update({g: [q.rgb for q in qs] for g, qs in by_group.items()}); return real(by_group, *a, **k)
+    geometry.scenery_quads = spy
+    try:
+        from vrtools.arcade.romset import RomSet
+        from vrtools.convert.geometry import convert_tiles, placed
+        from vrtools.convert.place import choose_placement, grid_pose
+        rs = RomSet.from_zip(romset_zip)
+        sat = _saturn_course(saturn_cue, "PACCOAST/TRCKPACC")
+        pl = choose_placement(sat, grid_pose(rs, 1), grid_point=0)
+        with placed(pl.angle, pl.tx, pl.tz):
+            convert_tiles(sat, rs, 1)
+    finally:
+        geometry.scenery_quads = real
+    assert (104, 104, 104) not in seen[0] and (88, 88, 88) in seen[0]
+    assert seen[3] == [q.rgb for q in course_quads(sat, groups=(3,))]

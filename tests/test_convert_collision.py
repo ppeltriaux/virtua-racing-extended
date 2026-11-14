@@ -560,15 +560,16 @@ def test_fillers_stay_with_their_slice(saturn_cue):
         assert abs(da) < 60.0, (gap, da)
 
 
-def test_verges_sit_a_hair_below_the_tarmac():
-    """Phase 11: the TGP keeps the containing quad whose ABSOLUTE height is nearest the car's and breaks exact ties for
-    the later list entry; verges at exactly the tarmac's height could win over tarmac where they overlap it, and a verge
-    offset towards zero wins outright near height 0 (the first attempt, a plain sink, parked whole fields on the
-    courses at y ≈ 0). A verge therefore sits VERGE_SINK away from zero of the tarmac edge's height, inner and outer
-    corners alike."""
+def test_verges_sit_level_with_the_tarmac():
+    """Phase 24 (Pascal rec141: "the car seems to bank left/right when going from the road to grass"): the run-off's
+    inner corners sit at the tarmac edge's height, as the originals' run-off does. Phase 11 had set the verges
+    VERGE_SINK 0.3 away from zero (the TGP keeps the containing quad whose ABSOLUTE height is nearest the car's and
+    breaks ties for the later list entry; verges overlapping the tarmac parked whole fields): a car with one side on
+    the grass leaned 11.5 degrees. The verges no longer overlap the tarmac (measured edges, Phase 11's own fix), and
+    all seven races pass with the offset at 0.05 and at 0."""
     import math
     from vrtools.convert.collision import VERGE_SINK
-    assert 0.1 <= VERGE_SINK <= 0.5
+    assert VERGE_SINK == 0.0
     sat, lap = _square_lap()
     col, _ = saturn_collision(sat, height=lambda x, z: 0.1 * x + 0.05 * z, lap=lap)
     n = col.n_tarmac
@@ -581,7 +582,7 @@ def test_verges_sit_a_hair_below_the_tarmac():
         away = lambda y: y + VERGE_SINK if y >= 0 else y - VERGE_SINK
         inner = min(v.corners, key=lambda c: abs(c[1] - away(h(c[0], c[2]))))                              # the inner corners ...
         assert inner[1] == pytest.approx(away(h(inner[0], inner[2])), abs=1e-6), (inner, h(inner[0], inner[2]))   # ... sit the offset away from zero
-        assert abs(inner[1]) > abs(h(inner[0], inner[2])) - 1e-9                                            # farther from zero than the tarmac
+        assert abs(inner[1]) > abs(h(inner[0], inner[2])) - 1e-9                                            # never nearer zero than the tarmac
 
 
 _COVERED: dict = {}
@@ -724,6 +725,36 @@ def test_grass_meets_a_narrowing_road_without_a_seam():
     assert not holes, holes[:10]
     inner = min(p[0] for g in right for p in g.corners)
     assert inner >= 12.0 - VERGE_SCAN_STEP - GRASS_OVERLAP - (12.0 - 10.0) - 1e-6, inner
+
+
+def test_a_grass_run_ends_where_the_roads_slope_changes(monkeypatch):
+    """Phase 25 (Pascal, rec147 Alpine: "going in the grass on the right of the track ... an angle or difference between
+    the road and grass", one spot): a grass run spans up to six centreline points as one quad, its inner corners at the
+    road's height at its two ends. Where the road's slope changes inside the run the quad's straight inner edge left
+    the road's: at Alpine's point 238 (the road steepens from 0.45 to 1.15 a point) the grass lay 0.85 under the
+    tarmac's edge and the car leaned 25 degrees with its right wheels on it. A run now ends where the road's height at
+    its edge leaves the straight line between the run's ends by more than GRASS_CHORD_TOL (Alpine: 9-12 more quads;
+    edges with a step over 0.5: 20 -> 4)."""
+    import vrtools.convert.collision as C
+    from vrtools.convert.collision import VERGE_GRASS, _point_in_xz, road_verges, tgp_height
+    h = lambda px, pz: -0.115 * max(0.0, pz - 80.0)                       # level, then falling from z 80
+    pts = [(0.0, float(z)) for z in range(0, 200, 10)]
+    quads = [_quad([(-12.0, h(0, z), z), (12.0, h(0, z), z), (12.0, h(0, z + 10), z + 10.0), (-12.0, h(0, z + 10), z + 10.0)]) for _, z in pts]
+
+    def worst():
+        right = [g for g in road_verges(quads, pts, h, width=VERGE_GRASS) if min(c[0] for c in g.corners) > 0.0]
+        gaps = []
+        for g in right:
+            x = min(c[0] for c in g.corners) + 0.05                      # just inside the quad's inner edge
+            for z in [10.0 + 2.5 * i for i in range(64)]:                # points 1..17 (an open road's wrapping run is no road)
+                if _point_in_xz(g.corners, x, z):
+                    gaps.append(abs(tgp_height(g.corners, x, z) - h(x, z)))
+        return max(gaps), len(right)
+    step, count = worst()
+    assert 0.1 <= C.GRASS_CHORD_TOL <= 0.2 and step <= C.GRASS_CHORD_TOL + 1e-6, step
+    monkeypatch.setattr(C, "GRASS_CHORD_TOL", float("inf"))               # without the rule: a step at the kink
+    old_step, old_count = worst()
+    assert old_step > 0.5 and count > old_count, (old_step, old_count, count)
 
 
 def test_grass_follows_a_road_that_widens_between_two_points():
@@ -1951,6 +1982,18 @@ def test_a_road_quad_over_a_banks_knee_is_split():
     assert split_bank_quads([flat], lambda x, z: 0.0) == [flat]
 
 
+def test_a_kerb_at_the_roads_edge_does_not_split_the_road():
+    """Phase 24 (Pascal rec137, Metropolis: two bumps after the start line): the height function read exactly on a road
+    quad's edge answers the neighbouring kerb (0.79 over the road at the left edge 110 units after the line), the quad
+    counted as under the road and was cut into two parts that do not lie in a plane: a 0.7 hump on the driving line.
+    A step that stands at the edge is not a knee under the quad: the quad stays whole."""
+    from vrtools.convert.collision import split_bank_quads
+    kerb = lambda x, z: 0.8 if x <= 0.0 and 6.0 < z < 18.0 else -0.05 * x       # a kerb beside a cambered road, along part of it
+    c = [(0.0, 0.0, 0.0), (20.0, -1.0, 0.0), (20.0, -1.0, 24.0), (0.0, 0.0, 24.0)]
+    road = Quad16(tuple(c), tuple(sum(p[i] for p in c) / 4 for i in range(3)), 7)
+    assert split_bank_quads([road], kerb) == [road]
+
+
 def test_lanes_narrow_where_a_curb_stands_at_the_road():
     """Phase 22c (Pascal p22play28, Amazon's first right corner: "that is the curb it should have stopped the car"; Diablo
     321-327: rock at 8.5): the curb stands 10.5 out at the road's edge (10), but no wall came inside WALL_MIN_LATERAL
@@ -2387,6 +2430,204 @@ def test_amazons_pit_exit_wall_stands_at_the_drawn_rock(saturn_cue, romset_zip):
         if lat > faces[k][1] + 0.5:
             late.append((k, lat, faces[k][1]))
     assert not late, late
+
+
+_DIABLO_TRIM: dict = {}
+DIABLO_KEY = "a0a0bed1d9fca843"                                                   # Diablo Canyon's TRCK key (place.PIT_LANES)
+
+
+def _diablo_trim_builds(romset_zip, saturn_cue):
+    """Phase 26 stage 4, Task 1: Diablo Canyon's collision as `tencourse.convert_course` makes it (through the builder it uses,
+    `tencourse.course_placement` and `course_collision`), built with the named spot's trim (`collision.PIT_LANE_WALL_TRIMS`)
+    off (the constant emptied for the call) and on, once per session: {"off" / "on": (col, cells, pts, lane slices)}, pts
+    the centreline at COVERAGE_SPACING. convert_course returns no collision."""
+    import vrtools.arcade.tencourse as tc
+    import vrtools.convert.collision as C
+    from vrtools.convert.geometry import placed
+    from vrtools.convert.lap import centreline
+    if not _DIABLO_TRIM:
+        rs = RomSet.from_zip(romset_zip)
+        plan = next(p for p in tc.COURSES if p.name == "DIABLO CANYON")
+        assert not plan.banking
+        sat = tc.load_saturn_course(saturn_cue, plan.path)
+        pl = tc.course_placement(rs, sat, plan.template, min_coverage=plan.min_coverage, flag_start=plan.flag_start)
+        with placed(pl.angle, pl.tx, pl.tz):
+            for label in ("off", "on"):
+                saved = dict(C.PIT_LANE_WALL_TRIMS)
+                if label == "off":
+                    C.PIT_LANE_WALL_TRIMS.clear()
+                try:
+                    b = tc.course_collision(sat, pl, plan.template, min_coverage=plan.min_coverage, banking=plan.banking,
+                                            camber=plan.camber, lane_points=plan.lane_points)
+                finally:
+                    C.PIT_LANE_WALL_TRIMS.clear(); C.PIT_LANE_WALL_TRIMS.update(saved)
+                _DIABLO_TRIM[label] = (b.col, b.cells, centreline(b.lap, spacing=C.COVERAGE_SPACING), C.pit_lane_polygons(b.sat))
+    return _DIABLO_TRIM
+
+
+def _inside_by(corners, x, z, margin):
+    """(x, z) inside the convex xz polygon `corners` by at least `margin` from every edge (a negative margin: within -margin
+    outside it); either winding."""
+    n = len(corners); d = []
+    for k in range(n):
+        ax, az = corners[k][0], corners[k][2]; bx, bz = corners[(k + 1) % n][0], corners[(k + 1) % n][2]
+        L = math.hypot(bx - ax, bz - az)
+        if L > 1e-12:
+            d.append(((bx - ax) * (z - az) - (bz - az) * (x - ax)) / L)
+    return all(v >= margin for v in d) or all(v <= -margin for v in d)
+
+
+def _spot_walls(col, rect):
+    """(index, quad) of the wall quads whose footprint lies inside the rectangle (x0, x1, z0, z1)."""
+    from vrtools.arcade.tgp import SURFACE_WALL
+    x0, x1, z0, z1 = rect
+    return [(i, q) for i, q in enumerate(col.quads) if col.surface[i] == SURFACE_WALL
+            and all(x0 <= c[0] <= x1 and z0 <= c[2] <= z1 for c in q.corners)]
+
+
+def _grid(x0, x1, z0, z1, step=0.25):
+    import numpy as np
+    return [(float(x), float(z)) for x in np.arange(math.ceil(x0 / step) * step, x1 + 1e-9, step)
+            for z in np.arange(math.ceil(z0 / step) * step, z1 + 1e-9, step)]
+
+
+def test_diablos_pit_lane_is_clear_of_walls_at_the_named_spot(saturn_cue, romset_zip):
+    """Phase 26 stage 4, Task 1 (recon §3 item 3: driving up Diablo Canyon's pit lane at its centre, a reverse car hit a wall at
+    (-389.7, 41.4), lane point about 23, and was thrown onto the sand; Pascal, 14 Nov: trim the wall off the lane): no sample
+    point (0.25-unit grid) of the lane's tarmac slices inside the named spot's rectangle lies inside a wall quad's footprint
+    (more than 1e-6 inside: a point on the lane's edge is the wall's edge). Built as the build makes it; with the trim off the
+    wall step between centreline points 23 and 24 lies over the lane's west half."""
+    import vrtools.convert.collision as C
+    from vrtools.arcade.tgp import SURFACE_WALL
+    col, _, _, polys = _diablo_trim_builds(romset_zip, saturn_cue)["on"]
+    rect = C.PIT_LANE_WALL_TRIMS[DIABLO_KEY].rect
+    x0, x1, z0, z1 = rect
+    walls = [q for i, q in enumerate(col.quads) if col.surface[i] == SURFACE_WALL
+             and max(c[0] for c in q.corners) >= x0 and min(c[0] for c in q.corners) <= x1
+             and max(c[2] for c in q.corners) >= z0 and min(c[2] for c in q.corners) <= z1]
+    lane = [p for p in polys if max(c[0] for c in p) >= x0 and min(c[0] for c in p) <= x1
+            and max(c[2] for c in p) >= z0 and min(c[2] for c in p) <= z1]
+    assert walls and lane
+    samples = [(x, z) for x, z in _grid(*rect) if any(_inside_by(p, x, z, -1e-9) for p in lane)]
+    walled = [(x, z) for x, z in samples if any(_inside_by(q.corners, x, z, 1e-6) for q in walls)]
+    assert not walled, (len(walled), walled[:5])
+    tarmac = [q for q in col.quads[:col.n_tarmac] if max(c[0] for c in q.corners) >= x0 and min(c[0] for c in q.corners) <= x1
+              and max(c[2] for c in q.corners) >= z0 and min(c[2] for c in q.corners) <= z1]
+    bare = [(x, z) for x, z in samples if not any(_inside_by(q.corners, x, z, -1e-6) for q in tarmac)]   # (the review: no hole
+    assert not bare, (len(bare), bare[:5])                                     # left by clip_at_walls / drop_slivers_under_walls)
+
+
+def test_the_trim_keeps_the_wall_off_the_lane(saturn_cue, romset_zip):
+    """Phase 26 stage 4, Task 1 (Pascal's rule: no wall at a drawn rock is removed, moved or disabled; their decision of 14 Nov:
+    only the part over the lane's tarmac goes; Review Focus 5): the wall quad at the spot stands partly on the drawn rock
+    between the road and the lane. With the trim on, every sample point (0.25-unit grid) of the old quad's footprint that is
+    not on the lane's tarmac slices is still inside a wall quad; the new wall quads at the spot lie inside the old footprint
+    (nothing new, nothing nearer the road or the lane); and the old quad's road-facing edge (its corners 30 and 36 units out,
+    right of centreline points 23 and 24) is an edge of one of them."""
+    import vrtools.convert.collision as C
+    builds = _diablo_trim_builds(romset_zip, saturn_cue)
+    rect = C.PIT_LANE_WALL_TRIMS[DIABLO_KEY].rect
+    off, _, pts, polys = builds["off"]
+    on = builds["on"][0]
+    old = _spot_walls(off, rect)
+    assert len(old) == 1, old                                                   # the one quad of the history
+    old = old[0][1]
+    assert sorted((round(c[0], 1), round(c[2], 1)) for c in old.corners) == \
+        sorted([(-400.5, 42.8), (-388.9, 40.0), (-397.1, 31.7), (-408.7, 34.5)])
+    new = [q for _, q in _spot_walls(on, rect)]
+    assert new
+    for q in new:                                                               # convex quads: corners inside, all inside
+        assert all(_inside_by(old.corners, c[0], c[2], -1e-6) for c in q.corners), q.corners
+    xs = [c[0] for c in old.corners]; zs = [c[2] for c in old.corners]
+    lost = [(x, z) for x, z in _grid(min(xs), max(xs), min(zs), max(zs)) if _inside_by(old.corners, x, z, 1e-6)
+            and not any(_inside_by(p, x, z, -1e-6) for p in polys)
+            and not any(_inside_by(q.corners, x, z, -1e-6) for q in new)]
+    assert not lost, (len(lost), lost[:5])
+    for q in new:                                                               # heights: an old corner its own y, a new one
+        for c in q.corners:                                                     # the old quad's TGP plane at its x, z
+            same = [o for o in old.corners if o[0] == c[0] and o[2] == c[2]]
+            assert c[1] == (same[0][1] if same else C.tgp_height(old.corners, c[0], c[2])), (c, same)
+    dirs = C._smooth_dirs(pts)
+    def lateral(c, k):                                                          # (along, right) of corner c from point k
+        (x, z), (dx, dz) = pts[k], dirs[k]
+        return ((c[0] - x) * dx + (c[2] - z) * dz, (c[0] - x) * dz - (c[2] - z) * dx)
+    road = []
+    for k, out in ((23, 30.0), (24, 36.0)):
+        c = min(old.corners, key=lambda c: abs(lateral(c, k)[0]) + abs(lateral(c, k)[1] - out))
+        along, right = lateral(c, k)
+        assert abs(along) < 1.0 and abs(right - out) < 0.6, (k, along, right)
+        road.append((c[0], c[2]))
+    edges = {frozenset(((round(q.corners[j][0], 6), round(q.corners[j][2], 6)), (round(q.corners[(j + 1) % 4][0], 6),
+                                                                                   round(q.corners[(j + 1) % 4][2], 6))))
+             for q in new for j in range(4)}
+    assert frozenset((round(x, 6), round(z, 6)) for x, z in road) in edges
+
+
+def test_a_named_spot_that_trims_nothing_is_refused():
+    """Phase 26 stage 4, Task 1 (the review): a named spot (`PIT_LANE_WALL_TRIMS`) whose rectangle holds no wall quad, or only
+    wall quads off the lane, would let the lane wall come back without a word if the course's geometry moved:
+    `trim_walls_off_the_lane` refuses it (ConvertError). The control: a wall half over a lane slice is trimmed to its other half."""
+    import vrtools.convert.collision as C
+    lane = [[(10.0, 0.0, 0.0), (20.0, 0.0, 0.0), (20.0, 0.0, 10.0), (10.0, 0.0, 10.0)]]
+    wall = _quad([(5.0, 0.0, 10.0), (15.0, 0.0, 10.0), (15.0, 0.0, 0.0), (5.0, 0.0, 0.0)])
+    out, n = C.trim_walls_off_the_lane([wall], lane, (0.0, 30.0, -1.0, 11.0))
+    assert n == 1 and len(out) == 1 and sorted((c[0], c[2]) for c in out[0].corners) == [(5.0, 0.0), (5.0, 10.0), (10.0, 0.0), (10.0, 10.0)]
+    with pytest.raises(ConvertError):                                           # the wall pokes out of the rectangle
+        C.trim_walls_off_the_lane([wall], lane, (6.0, 30.0, -1.0, 11.0))
+    off_lane = _quad([(-15.0, 0.0, 10.0), (-5.0, 0.0, 10.0), (-5.0, 0.0, 0.0), (-15.0, 0.0, 0.0)])
+    with pytest.raises(ConvertError):                                           # a wall in the rectangle, none of it on the lane
+        C.trim_walls_off_the_lane([off_lane], lane, (-20.0, 30.0, -1.0, 11.0))
+
+
+
+def test_a_named_spot_trims_the_number_of_quads_it_names():
+    """Final review (Minor 6): a named spot carries the number of wall quads it is expected to trim (`WallTrim.quads`; 1 on
+    Diablo Canyon), and `trim_walls_off_the_lane` given that number refuses another (ConvertError), as it refuses a zero trim,
+    so a second quad drifting into the rectangle stops the build. The zero-trim message names the late wall drop (a wall on
+    tarmac goes before the trim) as a possible cause."""
+    import vrtools.convert.collision as C
+    assert C.PIT_LANE_WALL_TRIMS[DIABLO_KEY] == C.WallTrim((-409.5, -388.0, 31.0, 43.5), 1)
+    lane = [[(10.0, 0.0, 0.0), (20.0, 0.0, 0.0), (20.0, 0.0, 10.0), (10.0, 0.0, 10.0)]]
+    a = _quad([(5.0, 0.0, 10.0), (15.0, 0.0, 10.0), (15.0, 0.0, 0.0), (5.0, 0.0, 0.0)])         # half over the slice, west
+    b = _quad([(15.0, 0.0, 10.0), (25.0, 0.0, 10.0), (25.0, 0.0, 0.0), (15.0, 0.0, 0.0)])       # half over it, east
+    rect = (0.0, 30.0, -1.0, 11.0)
+    assert C.trim_walls_off_the_lane([a, b], lane, rect, quads=2)[1] == 2
+    assert C.trim_walls_off_the_lane([a], lane, rect, quads=1)[1] == 1
+    with pytest.raises(ConvertError, match="trims 2 wall quads where it names 1"):
+        C.trim_walls_off_the_lane([a, b], lane, rect, quads=1)
+    with pytest.raises(ConvertError, match="trims 1 wall quads where it names 2"):
+        C.trim_walls_off_the_lane([a], lane, rect, quads=2)
+    off_lane = _quad([(-15.0, 0.0, 10.0), (-5.0, 0.0, 10.0), (-5.0, 0.0, 0.0), (-15.0, 0.0, 0.0)])
+    with pytest.raises(ConvertError, match="late wall drop"):
+        C.trim_walls_off_the_lane([off_lane], lane, (-20.0, 30.0, -1.0, 11.0), quads=1)
+
+def test_the_named_spot_changes_nothing_else(saturn_cue, romset_zip):
+    """Phase 26 stage 4, Task 1 (one named spot only): Diablo Canyon built with the trim off and on. The tarmac and verge quads,
+    their order and indices are identical (the pit pairs, normal and reverse, are tarmac indices); the quad lists differ only in
+    wall quads whose footprint lies inside the spot's rectangle, the other quads keeping their order; a quad in both keeps its
+    surface byte (the new ones are walls); and the per-cell lists, read as quads, differ only in cells that meet the rectangle."""
+    import vrtools.convert.collision as C
+    from vrtools.arcade.tgp import SURFACE_WALL
+    builds = _diablo_trim_builds(romset_zip, saturn_cue)
+    rect = C.PIT_LANE_WALL_TRIMS[DIABLO_KEY].rect
+    (off, off_cells, _, _), (on, on_cells, _, _) = builds["off"], builds["on"]
+    assert off.n_tarmac == on.n_tarmac and off.coverage["verges"] == on.coverage["verges"]
+    fixed = off.n_tarmac + off.coverage["verges"]
+    assert on.quads[:fixed] == off.quads[:fixed] and on.surface[:fixed] == off.surface[:fixed]
+    spot_off = {i for i, _ in _spot_walls(off, rect)}; spot_on = {i for i, _ in _spot_walls(on, rect)}
+    rest_off = [(q, off.surface[i]) for i, q in enumerate(off.quads) if i not in spot_off]
+    rest_on = [(q, on.surface[i]) for i, q in enumerate(on.quads) if i not in spot_on]
+    assert rest_on == rest_off
+    assert all(on.surface[i] == SURFACE_WALL for i in spot_on)
+    x0, x1, z0, z1 = rect
+    g = C.CELL_GUARD
+    def cell_meets(cell):
+        cx0, cz0 = (cell % C.MAP_SIDE) * C.CELL - C.MAP_HALF, (cell // C.MAP_SIDE) * C.CELL - C.MAP_HALF
+        return cx0 - g <= x1 and cx0 + C.CELL + g >= x0 and cz0 - g <= z1 and cz0 + C.CELL + g >= z0
+    def content(col, cells, cell):
+        return [col.quads[i] for i in col.lists[cells[cell]]] if cell in cells else []
+    changed = [cell for cell in set(off_cells) | set(on_cells) if content(off, off_cells, cell) != content(on, on_cells, cell)]
+    assert all(cell_meets(cell) for cell in changed), [cell for cell in changed if not cell_meets(cell)]
 
 
 def test_metropolis_pit_box_stands_in_the_tunnel(saturn_cue, romset_zip):

@@ -103,7 +103,7 @@ def select_routines(lay: dict[str, int]) -> dict[str, bytes]:
     band = b.bytes()
     # --- draw: three slots of the window around [0x501940]
     b = Block(lay["draw"])
-    for r in ("r1", "r8", "r9", "r10", "r11", "r12"):
+    for r in ("r1", "r8", "r9", "r10", "r11", "r12", "r13"):
         b.emit("push reg", r)
     b.emit("movz.bw abs,reg", MENU_INDEX, "r12")
     b.emit("mov.w reg,reg", "r12", "r9")
@@ -129,7 +129,9 @@ def select_routines(lay: dict[str, int]) -> dict[str, bytes]:
     b.emit("mov.w abs(reg),reg", lay["pictures"], "r8", "r11")  # Phase 21: the entry's picture record
     b.emit("cmp.w imm,reg", 0, "r11")
     b.branch("be", "plain")
-    b.emit("jsr abs", lay["picture"])                           # r10 slot, r11 record
+    b.emit("mov.w abs(reg),reg", lay["slot_b"], "r10", "r12")   # the slot's layer-B destination
+    b.emit("mov.w abs(reg),reg", lay["slot_tile"], "r10", "r13")  # and its tile base
+    b.emit("jsr abs", lay["picture"])                           # r10 slot, r11 record, r12 destination, r13 tile base
     b.branch("br", "next")
     b.label("plain")
     b.emit("mov.w reg,reg", "r8", "r11")
@@ -143,7 +145,7 @@ def select_routines(lay: dict[str, int]) -> dict[str, bytes]:
     b.emit("add.w imm,reg", 1, "r10")
     b.emit("cmp.w imm,reg", 3, "r10")
     b.branch("blt", "slot")
-    for r in ("r12", "r11", "r10", "r9", "r8", "r1"):
+    for r in ("r13", "r12", "r11", "r10", "r9", "r8", "r1"):
         b.emit("pop reg", r)
     b.emit("rsr")
     draw = b.bytes()
@@ -166,16 +168,18 @@ def _copy(b: Block, src: str, dst: str, count: str, size: str, tag: str) -> None
 
 
 def _picture(lay: dict[str, int]) -> bytes:
-    """r10 = slot, r11 = picture record. The slot's layer-B tiles first all point at BLANK_TILE (review: a copy the beam
-    catches half done would otherwise show for a frame), then the record's three character runs go to the slot's blocks
-    and its normal palettes to the slot's palettes, then its map as tile words 0x8000 | (SLOT_CHAR + local). Memory-to-
-    memory moves, one character (8 words) and one map row (16 tiles) per loop pass (the first version's load/store loop
-    took ~28 ms a wheel step)."""
+    """r10 = slot, r11 = picture record, r12 = the map's tile RAM destination (its top-left cell), r13 = the tile base (the
+    slot's 0x8000 | SLOT_CHAR). The 16 x 21 cells at r12 first all point at BLANK_TILE (review: a copy the beam catches half
+    done would otherwise show for a frame), then the record's three character runs go to the slot's blocks and its normal
+    palettes to the slot's palettes, then its map as tile words r13 + local. Memory-to-memory moves, one character (8 words)
+    and one map row (16 tiles) per loop pass (the first version's load/store loop took ~28 ms a wheel step). The course
+    select's `draw` passes the slot's SLOT_B and tile base; Phase 26 stage 3's direction screen (dirscreen.py) other cells
+    on layer 2. R0-R7 saved; R12, R13 not written."""
     b = Block(lay["picture"])
     regs = ("r0", "r1", "r2", "r3", "r4", "r5", "r6", "r7")
     for r in regs:
         b.emit("push reg", r)
-    b.emit("mov.w abs(reg),reg", lay["slot_b"], "r10", "r6")         # 1. blank the slot
+    b.emit("mov.w reg,reg", "r12", "r6")                             # 1. blank the destination
     b.emit("mov.w imm,reg", 21, "r4")
     b.label("blank")
     for c in range(16):
@@ -209,8 +213,8 @@ def _picture(lay: dict[str, int]) -> bytes:
     for k in range(48):
         b.emit("mov.h disp[reg],disp[reg]", 2 * k, "r3", 2 * k, "r6")
     b.emit("mov.w disp[reg],reg", REC["map"], "r11", "r3")            # 4. the map
-    b.emit("mov.w abs(reg),reg", lay["slot_b"], "r10", "r6")
-    b.emit("mov.w abs(reg),reg", lay["slot_tile"], "r10", "r7")
+    b.emit("mov.w reg,reg", "r12", "r6")
+    b.emit("mov.w reg,reg", "r13", "r7")
     b.emit("mov.w imm,reg", 21, "r4")
     b.label("row")
     for c in range(16):
@@ -229,8 +233,15 @@ def _picture(lay: dict[str, int]) -> bytes:
 
 def _start(lay: dict[str, int]) -> bytes:
     """Jumped to from 0xfc27d6 (the START palette swap): each slot with a picture gets its chosen palettes if it shows
-    [0x501940], else its grey ones; a slot holding an original also its layer-A set; then the game's cursor frame."""
+    [0x501940], else its grey ones; a slot holding an original also its layer-A set; then the game's cursor frame. Phase 26
+    stage 3: first, with the COURSE DIRECTION screen's phase cell non-zero (the screen locked), `jmp dirdone` instead; the rest
+    is the routine as it was."""
+    from vrtools.arcade.dirscreen import DIR_PHASE              # (dirscreen imports this module)
     b = Block(lay["start"])
+    b.emit("cmp.b imm,abs", 0, DIR_PHASE)
+    b.branch("be", "course")
+    b.emit("jmp abs", lay["dirdone"])
+    b.label("course")
     regs = ("r0", "r1", "r3", "r4", "r5", "r6", "r8", "r9", "r10", "r11", "r12")
     for r in regs:
         b.emit("push reg", r)

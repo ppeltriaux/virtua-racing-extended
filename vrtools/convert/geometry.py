@@ -27,6 +27,8 @@ class ConvertError(Exception):
 class WorldQuad:
     p: tuple[Point, Point, Point, Point]
     rgb: tuple[int, int, int]
+    one_sided: bool = False      # Phase 26 stage 2: drawn only from the side the Saturn's winding shows it to (a gate's lettering
+                                 # and its mirrored copy: gates.lettered_quads); every other face is drawn from both sides
 
 
 _PLACEMENT = [1.0, 0.0, 0.0, 0.0]        # cos, sin, tx, tz of the course placement in arcade space (identity by default)
@@ -121,6 +123,24 @@ def face_quads(m: Mesh, p: Placement) -> list[WorldQuad]:
     return out
 
 
+ROAD_GROUP = 0                # the ground layer that carries the road
+ROAD_GREYS = {40: 40, 48: 48, 56: 48, 64: 56, 72: 64, 80: 72, 88: 80, 96: 80, 104: 88, 112: 96, 120: 104, 128: 104}
+
+
+def road_greys(quads: list[WorldQuad]) -> list[WorldQuad]:
+    """Phase 24 (Pascal: align the converted road's colour with the arcade's): the ground layer's neutral greys at the
+    arcade's levels. The Saturn shows its road greys unlit (Big Forest 64-104, mean 87); the arcade's own road sits lower
+    in the palette (Big Forest 56-88, mean 77, at the same spots; the two games' tile-to-tile patterns are unrelated,
+    correlation 0) and is lit on top, so converted roads stood at 107-140 on screen against the originals' 74-107.
+    ROAD_GREYS takes Big Forest's Saturn greys onto the arcade's range and mean (77.5), the shades' order kept; a colour
+    that is not a neutral grey of the table stays."""
+    out = []
+    for q in quads:
+        r, g, b = q.rgb
+        out.append(WorldQuad(q.p, (ROAD_GREYS[r],) * 3) if r == g == b and r in ROAD_GREYS else q)
+    return out
+
+
 def course_quads(sat: SaturnCourse, groups: tuple[int, ...] = (0, 1, 2, 3, 4)) -> list[WorldQuad]:
     """Groups 0-3 share one tile lattice with different meshes (layers, ~0.8-2k faces each); 4 = props."""
     out: list[WorldQuad] = []
@@ -203,7 +223,7 @@ OUTSIDE_MAP_MAX = 50           # Phase 22l: a lap start at the Saturn's flag may
 def convert_tiles(sat: SaturnCourse, rs: RomSet, course_index: int, groups: tuple[int, ...] = TILE_GROUPS,
                   max_records: int = 5500, thin: float = 0.0,
                   keep_near: list[tuple[float, float]] | None = None, terrain_thin: float = 0.0,
-                  outside_limit: int = 0) -> tuple[dict[int, tuple[bytes, object, int]], dict[int, int], dict]:
+                  outside_limit: int = 0, lettering: bool = True) -> tuple[dict[int, tuple[bytes, object, int]], dict[int, int], dict]:
     """The Phase 4 pipeline for a course's scenery: Saturn tiles (groups) -> world quads -> 128-unit cells ->
     coloured, encoded polygon-ROM objects, one per cell, with the colour-table entries they need.
 
@@ -213,10 +233,22 @@ def convert_tiles(sat: SaturnCourse, rs: RomSet, course_index: int, groups: tupl
     A cell over `max_records` keeps its first split (report["capped_cells"]). With `thin` > 0, quads smaller than
     `thin` (XZ area) and farther than THIN_KEEP_DISTANCE from every `keep_near` point are left out
     (report["thinned"]): the render-rate lever for the busiest courses. The terrain goes through `scenery_quads`
-    first (`terrain_thin`; report["terrain_thinned"])."""
+    first (`terrain_thin`; report["terrain_thinned"]). The props (group 4) come from `gates.lettered_quads`: a drawn gate's
+    lettering one-sided with a mirrored one-sided copy facing the other way (Phase 26 stage 2; `lettering` False: every
+    prop face two-sided, as before; report["lettering_copies"]: the copies added); the collision never sees them (it reads
+    the Saturn course itself)."""
     from vrtools.arcade.colours import colour_table, free_runs, palette_from_rom
     from vrtools.arcade.polyrom import encode_object, split_quads
-    layered, layer_report = scenery_quads({g: course_quads(sat, groups=(g,)) for g in groups}, keep_near, terrain_thin)
+    from vrtools.convert.gates import GATE_GROUP, lettered_quads
+    by_group = {g: course_quads(sat, groups=(g,)) for g in groups}
+    copies = 0
+    if lettering and GATE_GROUP in by_group:
+        props = len(by_group[GATE_GROUP])
+        by_group[GATE_GROUP] = lettered_quads(sat)          # Phase 26 stage 2: the gates' lettering reads from both sides (scenery only)
+        copies = len(by_group[GATE_GROUP]) - props
+    if ROAD_GROUP in by_group:
+        by_group[ROAD_GROUP] = road_greys(by_group[ROAD_GROUP])          # Phase 24: the road at the arcade's grey levels
+    layered, layer_report = scenery_quads(by_group, keep_near, terrain_thin)
     quads, thinned = thin_quads(layered, thin, keep_near)
     cells, outside = bin_quads(quads, TILE_GRID)
     if outside and len(outside) > outside_limit:
@@ -241,7 +273,8 @@ def convert_tiles(sat: SaturnCourse, rs: RomSet, course_index: int, groups: tupl
         objects[cell] = (blob, layout, tex)
         tex += len(w)
     report = {"outside": len(outside), "cells": len(objects), "quads": len(quads), "colour_entries": len(words),
-              "polygon_bytes": sum(len(o[0]) for o in objects.values()), "capped_cells": capped, "thinned": thinned, **layer_report}
+              "polygon_bytes": sum(len(o[0]) for o in objects.values()), "capped_cells": capped, "thinned": thinned,
+              "lettering_copies": copies, **layer_report}
     return objects, words, report
 
 
@@ -280,17 +313,26 @@ def bin_quads(quads: list[WorldQuad], grid: CellGrid) -> tuple[dict[int, list[Wo
 
 
 def _normal(p: tuple[Point, ...]) -> Point:
-    a = np.array(p[1]) - np.array(p[0]); b = np.array(p[2]) - np.array(p[0])
-    n = np.cross(a, b); L = float(np.linalg.norm(n))
+    """The face's unit lighting normal on the side its winding gives, summed over every edge (Newell's method), so a
+    triangle stored with a repeated corner faces the same way wherever the repeat sits. Phase 24: taking the first
+    three corners alone fell back to straight up for a repeat among them, the opposite of every other ground face,
+    and the arcade lit those triangles as if they faced away (black wedges on the road)."""
+    v = np.array(p, dtype=float)
+    v = v - v[0]                             # edges relative to a corner: no precision lost far from the origin
+    n = np.cross(v, np.roll(v, -1, axis=0)).sum(axis=0)
+    L = float(np.linalg.norm(n))
     if L < 1e-9:
-        return (0.0, 1.0, 0.0)
+        return (0.0, -1.0, 0.0)              # no area: the ground's own side (measured: road normals have y < 0)
     return tuple(float(v) for v in n / L)
 
 
 def assign_colours(quads: list[WorldQuad], pal: Palette, tex_start: int) -> tuple[list[Quad], dict[int, int]]:
     """Sort quads by nearest palette index; one colour-table entry per colour change from tex_start.
 
-    Returns polyrom Quads (with tex_adr set) and the table words {tex_adr: word} to write."""
+    Returns polyrom Quads (with tex_adr set) and the table words {tex_adr: word} to write. A one-sided WorldQuad (Phase 26
+    stage 2) becomes a one-sided Quad with its corners reversed under the lighting normal it had: the arcade draws a culled
+    record from the side its corners' right-hand normal faces (the originals' culled ground faces up that way: 9 177 of
+    9 793 horizontal records on Big Forest), the opposite of the Saturn's winding (the converted road's points down)."""
     keyed = sorted(((nearest(pal, qd.rgb), i, qd) for i, qd in enumerate(quads)), key=lambda k: (k[0], k[1]))
     out: list[Quad] = []
     words: dict[int, int] = {}
@@ -301,5 +343,9 @@ def assign_colours(quads: list[WorldQuad], pal: Palette, tex_start: int) -> tupl
             tex += 1
             words[tex] = idx & 0x3FF
             last = idx
-        out.append(Quad(qd.p, _normal(qd.p), 0x201, tex))
+        if qd.one_sided:
+            a, b, c, d = qd.p
+            out.append(Quad((a, d, c, b), _normal(qd.p), 0x201, tex, one_sided=True))
+        else:
+            out.append(Quad(qd.p, _normal(qd.p), 0x201, tex))
     return out, words

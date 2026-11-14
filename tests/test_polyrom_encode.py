@@ -97,3 +97,50 @@ def test_chained_objects_decode_to_the_same_polygons():
     assert len(out) == len(src)
     assert {_canon(o.p): (o.tex_adr, o.normal) for o in out} == {_canon(s.p): (s.tex_adr, s.normal) for s in src}
     assert layout.record_count < 2 * len(src)
+
+
+def _mixed():
+    """A made-up object: strips, a second and a third tex run, a triangle (a repeated corner), a raised quad."""
+    def tri(x0, z0, tex):
+        return Quad(((x0, 0.0, z0), (x0 + 5, 0.0, z0), (x0 + 5, 0.0, z0 + 5), (x0 + 5, 0.0, z0 + 5)), (0.0, -1.0, 0.0), 0x201, tex)
+    raised = Quad(tuple((x, 1.0, z) for x, _, z in q(310, 0, 8).p), N, 0x201, 8)
+    return ([q(10 * i, 0, 7) for i in range(6)] + [q(0, 10 * j, 7) for j in range(1, 4)] + [tri(200, 0, 8), q(300, 0, 8), raised]
+            + [q(500 + 10 * i, 50, 9) for i in range(5)])
+
+
+def test_an_object_without_one_sided_quads_encodes_as_before():
+    """Phase 26 stage 2: the per-quad one-sided mark changes nothing for an object that has none (digests of this object's
+    bytes taken before the mark existed)."""
+    import hashlib
+    for nc, digest in ((False, "c1e3ba5b227f89f2c79aae7c12ee6668c229fee15092654bc14a444efd8270b2"),
+                       (True, "59f55ddad1e02f99baff6a87ada03dd5aec8fdb769f843064c3da1357988d30d")):
+        blob, layout = encode_object(_mixed(), tex_start=7, no_cull=nc)
+        assert hashlib.sha256(blob).hexdigest() == digest and layout == ObjectLayout(23, 7, 9)
+
+
+def test_one_sided_quads_clear_the_skip_back_face_bit_on_their_own_records_only():
+    """Bit 14 ("skip back-face test") is per record: a one-sided quad's drawing record has it clear, every other drawing
+    record of a no_cull object keeps it. A one-sided quad joins no strip (its own two records), so its winding is the
+    one it was given."""
+    from dataclasses import replace
+    src = _mixed()
+    one = {2, 7, 10, 12}                                     # inside the first strip, the triangle, the raised quad
+    marked = [replace(s, one_sided=True) if i in one else s for i, s in enumerate(src)]
+    blob, layout = encode_object(marked, tex_start=7, no_cull=True)
+    drawn = _decoded(blob, 7)
+    assert sorted(_canon(o.p) for o in drawn) == sorted(_canon(s.p) for s in src)
+    one_drawn = [o for o in drawn if not o.flags & 0x4000]
+    assert sorted(_canon(o.p) for o in one_drawn) == sorted(_canon(src[i].p) for i in one)
+    for o in one_drawn:                                       # the given cyclic order (not reversed)
+        s = next(src[i] for i in one if _canon(src[i].p) == _canon(o.p))
+        assert any(tuple(s.p[k:] + s.p[:k]) == o.p for k in range(4))
+    assert [r.no_cull for r in decode_object(blob, 0, 0).records if r.link].count(False) == len(one)
+
+
+def test_a_one_sided_triangle_is_tested_on_three_distinct_corners():
+    """MAME's back-face test takes the first three drawn corners (old_p1, old_p0, p0): with the repeated corner among
+    them the determinant is 0 and the face is drawn from both sides."""
+    t = Quad(((0.0, 0.0, 0.0), (0.0, 0.0, 0.0), (5.0, 0.0, 0.0), (5.0, 0.0, 5.0)), N, 0x201, 1, one_sided=True)
+    blob, _ = encode_object([t], tex_start=1, no_cull=True)
+    (o,) = _decoded(blob, 1)
+    assert len({o.p[0], o.p[1], o.p[2]}) == 3 and any(t.p[k:] + t.p[:k] == o.p for k in range(4))   # rotated, not reversed

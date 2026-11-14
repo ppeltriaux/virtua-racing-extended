@@ -1,4 +1,4 @@
-# Virtua Racing Extended v0.1.5
+# Virtua Racing Extended v0.2
 
 Virtua Racing Extended is the 1992 Sega Model 1 arcade Virtua Racing with ten courses: its own three
 (Big Forest, Bay Bridge, Acropolis) and the seven the 1995 Saturn port added (Alpine, Amazon Falls,
@@ -11,9 +11,10 @@ https://continuearcade.com/virtua-racing-extended/
 This repository is a patch: one command builds the game on your machine from your own copies of the
 arcade game and of the Saturn port. It holds none of either (see "What is in the patch").
 
-> **v0.1.5 is an early release, not a finished one.** All ten courses load and race, with opponents,
-> pit lanes, walls, checkpoints, the in-race map and a best-time table per course, but the tuning
-> and the finish are still being worked on: see "Known issues in v0.1.5" and "Planned".
+> **v0.2 is an early release, not a finished one.** All ten courses load and race, with opponents,
+> pit lanes, walls, checkpoints, the in-race map and a best-time table per course, and the seven
+> converted courses can be raced in reverse, but the tuning and the finish are still being worked on:
+> see "Known issues in v0.2" and "Planned".
 
 ## What you need
 
@@ -59,6 +60,11 @@ mame vr -rompath ~/vr-extended
 (steering left/right): BIG FOREST, BAY BRIDGE, ACROPOLIS, then ALPINE, AMAZON FALLS, DIABLO CANYON,
 METROPOLIS, PACIFIC COAST, SURFERS OVAL, SURFERS ROAD. Grand Prix is untouched.
 
+**Reverse (new in v0.2):** after you pick one of the seven converted courses, a COURSE DIRECTION screen shows
+the course twice, NORMAL on the left and REVERSE on the right. It starts on NORMAL; turn the wheel right for
+REVERSE (bring it to the centre or left first if it is already to the right), and press the gas to start. Doing
+nothing races the normal way. The three original courses have no reverse and go straight to the race.
+
 **Best times:** each course keeps its own ranking table in the game's battery-backed RAM. On the first
 boot of the patched set the game finds its RAM laid out for three tables and initialises it for ten,
 so best times saved by the original set are reset once. Keep a copy of MAME's `nvram/vr` folder if
@@ -67,6 +73,28 @@ you want them.
 **Tuning (optional):** `--tune "AMAZON FALLS:pace=0.9,laps=4"` scales a course's opponents' pace
 (`pace`), its checkpoint time extensions (`time_factor`) and sets its race length (`laps`, 1 to 7);
 repeat `--tune` per course. The defaults are 5 laps and the values the build was tested with.
+
+## What's new in v0.2
+
+- **Every converted course in reverse:** the seven Saturn courses can be raced the other way round, chosen
+  on a new COURSE DIRECTION screen after the course select (see "In the game"). The opponents, the
+  checkpoints and time extensions, the in-race map, the start grid and the pit stop all run in reverse;
+  the pit lane is entered where a normal race leaves it. A reverse race records no best time. The attract
+  mode and linked play stay in the normal direction.
+- **The course's name in the race:** on a converted course the bottom-right label of the race screen reads
+  the course's name (ALPINE, AMAZON FALLS, ...) where it showed its host's BEGINNER / MEDIUM / EXPERT.
+- **The road's look:** dark wedges on the road are gone (about a sixth to nearly half of the road faces of a
+  course were lit as if facing away), and the road's greys are matched to the arcade courses'.
+- **Driving feel:** the car no longer leans when one side runs onto the grass or snow beside the road; a hump
+  just after Metropolis's start line and a lean on the grass at one of Alpine's bends are gone.
+- **The opponents stay on the road more:** the point each opponent steers at sat too far ahead on the
+  converted courses; counted over a 150-second race, their off-road moments fell on every course
+  (Pacific Coast 100 to 89, Diablo Canyon 90 to 74, Metropolis 76 to 57, Surfers Road 56 to 40, Surfers Oval
+  30 to 19, Amazon Falls 20 to 14, Alpine 148 to 78).
+- **The in-race map:** the cars' markers no longer vanish on the lower parts of a course.
+- **The sky:** the hard line where a cloudy backdrop met the flat sky colour above it is faded out.
+- **Diablo Canyon's pit lane:** a wall that stood in the lane's west side is trimmed off it (this changes the
+  normal race there too).
 
 ## What's new in v0.1.5
 
@@ -102,7 +130,14 @@ repeat `--tune` per course. The defaults are 5 laps and the values the build was
 
 The game the patch builds changes on those four courses only. v0.1.1 changed the tests only.
 
-## Known issues in v0.1.5
+## Known issues in v0.2
+
+- **Reverse:** the reverse pit stops and Diablo Canyon's trimmed pit lane were measured with the test
+  autopilot on all seven courses, not yet driven through by hand on each. On Alpine, Diablo Canyon and
+  Metropolis some cars stand turned on the reverse start grid. On Amazon Falls, Pacific Coast, Surfers Oval
+  and Surfers Road the opponents share three racing lines in reverse (eight in the normal direction). On
+  Alpine a reverse car that runs along the very edge of the road on the pit side, just past the pit exit,
+  is taken for a pit stop. The three original courses have no reverse.
 
 - **Music:** races on the seven converted courses play the select screen's track, not the Saturn
   course's music.
@@ -115,8 +150,9 @@ The game the patch builds changes on those four courses only. v0.1.1 changed the
   not yet balanced by play.
 - **Diablo Canyon:** its colours are not yet the Saturn's, the cars start the race slightly slanted,
   and the camera can bounce on some sections.
-- **Original program bytes:** the patch finds and checks its sites in the arcade program by 15 short
-  instruction patterns (286 bytes in all, the instructions being replaced or next to them). A later
+- **Original program bytes:** the patch finds and checks its sites in the arcade program by short
+  instruction patterns (the instructions being replaced or next to them: 15 patterns, 286 bytes in all, up to
+  v0.1.5; v0.2's reverse direction adds more, not recounted for this release). A later
   release will check them by checksum instead, so the patch holds no bytes of the program.
 - How the converted courses differ from the Saturn's, measured: `docs/deviations.md`.
 
