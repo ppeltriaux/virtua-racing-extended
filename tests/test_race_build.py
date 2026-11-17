@@ -86,7 +86,10 @@ def test_banking_ab_on_the_surfers_courses(tmp_path, romset_zip, saturn_cue, nam
     results = {}
     for banking in (False, True):
         rs = RomSet.from_zip(romset_zip)
-        out, conv = build_all(rs, saturn_cue, [replace(plan, banking=banking)])
+        # Phase 34: the plan's props are planted against the chosen setting's collision; the other arm of the A/B is
+        # built without them (its collision differs, and `plant` refuses a site inside it)
+        arm = replace(plan, banking=banking) if banking == plan.banking else replace(plan, banking=banking, props=())
+        out, conv = build_all(rs, saturn_cue, [arm])
         out = ten_course_set(out, conv)
         samples = _drive_entry(tmp_path / f"b{int(banking)}", out, romset_zip, 3, conv[0], seconds=90)
         results[banking] = lap_progress(samples, lambda x, z: arc_of(conv[0].lap, x, z), conv[0].lap.length)
@@ -462,9 +465,12 @@ def _slot_render(tile: bytes, char: bytes, pal: bytes, s: int):
     return img
 
 
-def _select_run(tmp_path, romset_zip, saturn_cue, env):
+def _select_run(tmp_path, romset_zip, saturn_cue, env, plain=False):
+    """`plain` (Phase 33): on the set without the originals' reverse variants (`_seven_plain`), where an original's course lock
+    still shows the course select's own lock look."""
     from tests.test_tencourse import _records
-    out, conv = _seven(romset_zip, saturn_cue)
+    from tests.test_tgp_build import _seven_plain
+    out, conv = (_seven_plain if plain else _seven)(romset_zip, saturn_cue)
     build = _build(tmp_path, romset_zip, out)
     wd = tmp_path / "select"
     wd.mkdir(parents=True, exist_ok=True)
@@ -524,10 +530,13 @@ def test_the_select_sweep_shows_every_picture(tmp_path, romset_zip, saturn_cue):
 def test_start_on_an_original_greys_its_neighbours(tmp_path, romset_zip, saturn_cue):
     """Phase 21 review: with Acropolis chosen (entry 2: window 1, 2, 3) slot 1 gets Acropolis's chosen picture set and its
     layer-A palettes their chosen set; slot 0 (Bay Bridge) and its layer-A palettes their grey sets; slot 2 (the first
-    new course) its grey set: an original's sets copied into a slot other than its own."""
+    new course) its grey set: an original's sets copied into a slot other than its own. Phase 33: on the set without the
+    originals' reverse variants; with them an original's lock opens the COURSE DIRECTION screen at once, as a converted course's
+    does (stage 3's D7), and the lock look is the direction screen's (tests/test_dirscreen_build.py)."""
     import struct
     from vrtools.arcade.select import SLOT_PAL, WHEEL_FOR_ENTRY
-    out, (table, recs, read), dumps = _select_run(tmp_path, romset_zip, saturn_cue, {"VR_WHEEL": str(WHEEL_FOR_ENTRY[2]), "VR_SELECT_DUMP": "1406,1415"})
+    out, (table, recs, read), dumps = _select_run(tmp_path, romset_zip, saturn_cue, {"VR_WHEEL": str(WHEEL_FOR_ENTRY[2]), "VR_SELECT_DUMP": "1406,1415"},
+                                                  plain=True)
     got = {f: d for f, d in dumps.items() if f in (1406, 1415)}
     assert got, sorted(dumps)
     for frame, (menu, tile, char, pal) in got.items():

@@ -141,7 +141,7 @@ class RoadPoint:
 class Segment:
     index: int
     road_point: int
-    flag: int             # 1 or 66
+    flag: int             # 1 or 66 (the pit lane); bit 7 (0x80) the tunnel sound (Phase 37; Bay Bridge 0x81)
 
 
 class PointerBlock(NamedTuple):
@@ -337,10 +337,11 @@ def encode_collision_map(cells: list[int]) -> bytes:
     return struct.pack(f"<{COLLISION_CELLS}H", *cells)
 
 
-def surface_table(rs: RomSet, e: CourseEntry) -> bytes:
+def surface_table(rs: RomSet, e: CourseEntry, size: int = SURFACE_SIZE) -> bytes:
+    """The surface byte table's first `size` bytes (one byte a collision quad: `size` the quad pool's length reads them all)."""
     pb = decode_pointer_block(rs, e)
     off = _win(e.base, pb.surface, "surface table pointer")
-    return rs.data[off:off + SURFACE_SIZE]
+    return rs.data[off:off + size]
 
 
 def encode_surface_table(table: bytes) -> bytes:

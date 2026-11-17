@@ -122,12 +122,13 @@ def free_runs(rs: RomSet, bank: int, min_size: int = MIN_FREE_RUN) -> list[tuple
     return out
 
 
-def place_blob(rs: RomSet, bank: int, build: Callable[[int], bytes]) -> tuple[RomSet, int]:
+def place_blob(rs: RomSet, bank: int, build: Callable[[int], bytes], min_run: int = MIN_FREE_RUN) -> tuple[RomSet, int]:
     """First-fit placement of a course blob in `bank`'s free space: `build(window_base)` returns the image for a
     candidate base (its pointers depend on it). Returns the new RomSet and the window base; PatchError when no
-    run fits or the target is not all 0xff."""
+    run fits or the target is not all 0xff. `min_run` (Phase 33): the shortest 0xff run taken for free space (bank 1 has
+    13 488 bytes left, below the default)."""
     size = len(build(WINDOW))
-    for off, n in free_runs(rs, bank):
+    for off, n in free_runs(rs, bank, min_run):
         base = _align(off)
         if base + size <= off + n:
             blob = build(WINDOW + base)
@@ -139,4 +140,4 @@ def place_blob(rs: RomSet, bank: int, build: Callable[[int], bytes]) -> tuple[Ro
             out = RomSet(rs.program, rs.boot, rs.data, rs.polygons, rs.copro_data, rs.tgp_program)
             write_data(out, abs_off, blob)
             return out, WINDOW + base
-    raise PatchError(f"no free run of {size} bytes in bank {bank} (runs: {[(hex(o), n // 1024) for o, n in free_runs(rs, bank)]})")
+    raise PatchError(f"no free run of {size} bytes in bank {bank} (runs: {[(hex(o), n) for o, n in free_runs(rs, bank, min_run)]})")

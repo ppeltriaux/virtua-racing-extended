@@ -273,11 +273,20 @@ def _first(lines, test):
     return next((l for l in lines if test(l)), None)
 
 
+def _screen_handlers():
+    """The select entity's handler while the COURSE DIRECTION screen is open: `dirsel`, or for an original (Phase 33's fix
+    waves) `origpic`'s `osel`, which draws its two-layer picture and otherwise runs `dirsel`."""
+    from vrtools.arcade.origpic import origpic_layout
+    from vrtools.arcade.tencourse import origpic_address
+    lay = directory_layout()
+    return {lay["dirsel"], origpic_layout(origpic_address(), lay)["osel"]}
+
+
 def _phases(lines):
     """(the screen's first line, its lock's line (the handler leaving `dirsel`), the first mode-0x11 line)."""
-    dirsel = directory_layout()["dirsel"]
-    first = _first(lines, lambda l: l.handler == dirsel)
-    lock = first and _first(lines, lambda l: l.frame > first.frame and l.handler != dirsel)
+    dirsel = _screen_handlers()
+    first = _first(lines, lambda l: l.handler in dirsel)
+    lock = first and _first(lines, lambda l: l.frame > first.frame and l.handler not in dirsel)
     return first, lock, _first(lines, lambda l: l.mode == 0x11)
 
 
@@ -358,14 +367,17 @@ def test_the_course_press_does_not_confirm(tmp_path_factory, romset_zip, saturn_
 
 
 @pytest.mark.parametrize("entry", [0, 1, 2])
-def test_an_original_never_shows_the_screen(tmp_path_factory, romset_zip, saturn_cue, entry):
-    """An original (no reverse variant): the select entity's handler is never `dirsel`, the course lock (the handler
-    COURSE_LOCK) reaches mode 0x11 in the game's LOCK_TO_LOAD frames, and the flag is 0 on the select screen and in the race."""
-    lines, _ = _screen(tmp_path_factory, romset_zip, saturn_cue, f"orig{entry}", entry)
-    assert directory_layout()["dirsel"] not in {l.handler for l in lines}
-    lock, load = _first(lines, lambda l: l.handler == COURSE_LOCK), _first(lines, lambda l: l.mode == 0x11)
-    assert lock and load and load.frame - lock.frame == LOCK_TO_LOAD, (lock, load)
-    assert all(l.flag == 0 for l in lines if l.mode == SELECT) and _flags(lines)[1] == {0}
+@pytest.mark.parametrize("reverse", [False, True])
+def test_an_original_shows_the_screen(tmp_path_factory, romset_zip, saturn_cue, entry, reverse):
+    """Phase 33 (it replaces "an original never shows the screen": the three originals have a reverse variant now). The course
+    lock of an original opens the COURSE DIRECTION screen as a converted course's does (the handler `dirsel`, or an original's `osel`: `_screen_handlers`), the direction
+    lock hands the entity back to the game's lock handler and mode 0x11 comes LOCK_TO_LOAD frames after it, and the flag is the
+    answer: 0 on the screen's last frame and through the race with NORMAL, 1 with REVERSE."""
+    lines, _ = _screen(tmp_path_factory, romset_zip, saturn_cue, f"orig{entry}{'r' if reverse else 'n'}", entry, reverse=reverse)
+    first, lock, load = _phases(lines)
+    assert first and lock and load and lock.handler == COURSE_LOCK, (first, lock, load)
+    assert load.frame - lock.frame == LOCK_TO_LOAD, (lock, load)
+    assert _flags(lines) == (int(reverse), {int(reverse)})
 
 
 def test_the_transmission_survives_the_screen(tmp_path_factory, romset_zip, saturn_cue):
@@ -434,8 +446,8 @@ def _drawn(tmp_path_factory, romset_zip, saturn_cue, entry, label=None, env=None
     label = label or f"draw{entry}"
     reverse = env is None if reverse is None else reverse
     lines, _ = _screen(tmp_path_factory, romset_zip, saturn_cue, label, entry, reverse=reverse, env={**_draw_env(), **(env or {})})
-    dirsel = directory_layout()["dirsel"]
-    first = _first(lines, lambda l: l.handler == dirsel)
+    dirsel = _screen_handlers()
+    first = _first(lines, lambda l: l.handler in dirsel)
     run = first and _first(lines, lambda l: l.frame > first.frame and l.shown != 0xFF)
     assert run and run.frame == DIRSEL_FIRST, (first, run)
     return lines, _WD[label]
@@ -656,9 +668,10 @@ def test_the_frame_sits_round_the_chosen_picture(tmp_path_factory, romset_zip, s
         assert x0 < px0 and y0 < py0 and x1 > px1 and y1 > py1, (choice, (x0, y0, x1, y1))
 
 
-@pytest.mark.parametrize("entry", [ALPINE, SURFERS_ROAD])
+@pytest.mark.parametrize("entry", [ALPINE, SURFERS_ROAD, 0, 1, 2])
 def test_drawing_the_screen_skips_no_logic_frame(tmp_path_factory, romset_zip, saturn_cue, entry):
-    """Step 4: from the course lock (the handler COURSE_LOCK) to the direction lock, through the screen's drawing phases (DIR_SHOWN
+    """(Phase 33 fix wave: the three originals too, whose pictures `origpic.odraw` draws in two layers with more copies a phase.)
+    Step 4: from the course lock (the handler COURSE_LOCK) to the direction lock, through the screen's drawing phases (DIR_SHOWN
     0xff down to DRAWN), the game's logic frame counter [0x501144] rises by one every two video frames, never more slowly: no
     logic frame is lost while the screen draws."""
     from vrtools.arcade.dirscreen import DRAW_PHASES, DRAWN
@@ -790,9 +803,9 @@ def test_the_frame_is_steady_after_the_lock(tmp_path_factory, romset_zip, saturn
     assert all((img[mask] == on).all() for img in after), [int((img[mask] != on).any(1).sum()) for img in after]
 
 
-@pytest.mark.parametrize("entry,reverse", LOCK_RUNS)
+@pytest.mark.parametrize("entry,reverse", LOCK_RUNS + [(0, True), (1, False), (2, True)])
 def test_the_lock_look_skips_no_logic_frame(tmp_path_factory, romset_zip, saturn_cue, entry, reverse):
-    """From the direction lock to the race load (mode 0x11), while `dirdone` re-colours the two slots every logic frame, the
+    """(Phase 33 fix wave: the three originals too, `origpic.odone`'s palette copies before `dirdone`.) From the direction lock to the race load (mode 0x11), while `dirdone` re-colours the two slots every logic frame, the
     logic frame counter rises by one every two video frames, never more slowly."""
     lines, wd, lock, load = _locked(tmp_path_factory, romset_zip, saturn_cue, entry, reverse)
     _every_logic_frame([l for l in lines if lock.frame <= l.frame <= load.frame], (entry, reverse), lock.frame, load.frame)

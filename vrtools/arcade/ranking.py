@@ -40,6 +40,27 @@ clear at 0xfc76eb, both through 0xfc3b49) and from `revtag`, which the boot's S-
 with the magic but not the tag (one saved by a set before this phase) gets the reverse block alone, every saved time kept; the
 magic does not change. In the attract, each reverse id follows its course's id in its host's group (L3) and its page has the
 title `revtitle` prints: the course's name and REVERSE in red, RANKING in white (L4, `reverse_title_columns`).
+
+Phase 27b: the attract's first ranking page after a game shows the table just raced. The race end's setter call (RACE_END_SITE,
+0xfc40e1: `movz.bw 501934[PC], R0; bsr FC4208`, 10 bytes; the setter loads the ranking id itself) becomes `bsr FC4208;
+jsr raceend; nop`: after the setter (its entry: the course's id, + 7 in a reverse race; R0 kept by `common`) `raceend` writes the
+id's position in its group (`attract_positions`, the image's `positions`) into the counter of the data index's group
+(ATTRACT_COUNTERS + [0x501934]: the raced course's host, the group the first page after the game reads). That page's `attract`
+then shows the member at that position and stores position + 1 as before. Every finished race calls the setter there (before the
+qualify test: a record or not); a race that does not finish (time over) skips the insert and the setter and leaves the counter.
+The name entry's call (0xfc4226) and the attract page's are not touched; nothing else of the battery RAM is written.
+
+Phase 35 (recon and gate docs/spike/2026-11-phase35-reverse-times-recon.md; Pascal, 16 Nov: "yes to all", four per table on all
+ten): a reverse race on one of the three ORIGINALS keeps its four best times too. Three more 4-entry tables (ORIG_REVERSE_TABLES,
+by the original's ranking id 0..2, in two runs of the battery RAM that nothing read or wrote in the gate's 25 runs), their slots
+in the three words of NEW_SLOTS that ids 0..2 never used, and a tag of their own (ORIG_TAG). Their ranking ids are the original's
+id + ORIG_REVERSE_SHIFT (17..19); the seven's ids, tables, slots and tag REV4 are where v0.2.1 put them and no byte of them is
+written by this phase's upgrade (a v0.2.1 set finds its block as it left it). The setter adds ORIG_REVERSE_SHIFT to an id of 0..2
+while the direction flag is set; `originit` (the three tables as `revinit` makes the seven's, from `original_reverse_defaults`, the
+slots, ORIG_TAG) runs from `revtag` when ORIG_TAG is missing (a battery RAM saved by v0.2.1 or before) and from `slot_init` (a
+battery RAM without the magic, and the test mode's backup clear, which resets them with the others). In the attract each original's
+reverse page follows its own page (`attract_groups`) under the title `revtitle` prints with the game's own level word (MEDIUM,
+EXPERT, BEGINNER: ORIG_NAME_STRINGS) in the name's place. Phase 33's `rankgate3` (origrev.py) is gone.
 """
 from __future__ import annotations
 
@@ -95,6 +116,8 @@ SHOWN_ID = 0x40FC69            # the ranking id whose table the setters last cho
 ATTRACT_COUNTERS = 0x40FC6A    # per data index (3 bytes): the next member of its attract group (0xff on a fresh battery RAM: clamped)
 ATTRACT_SITE = 0xFC3C33; ATTRACT_SITE_LEN = 10     # movz.bw 501934, R0; bsr FC4208: the attract page's table, by the demo's data index
 ATTRACT_SITE_BYTES = bytes.fromhex("0d20f33419500048ce05")
+RACE_END_SITE = 0xFC40E1; RACE_END_SITE_LEN = 10   # Phase 27b: movz.bw 501934[PC], R0; bsr FC4208: the race end's setter call
+RACE_END_SITE_BYTES = bytes.fromhex("0d20f253d853ff482001")       # (the insert follows at 0xfc40eb; the setter loads the id itself)
 TITLE_SITE = 0xFC3CFF; TITLE_SITE_LEN = 19         # movz.bw 501934[PC], R0; add.w R0, R0 (x2); jsr [FC3DB6[R0]]: the title by data index
 TITLE_SITE_BYTES = bytes.fromhex("0d20f235dc53ff844060844060e8c0b63dfc00")
 TITLE_TABLE = 0xFC3DB6         # the game's three title routines, by data index (MEDIUM, EXPERT, BEGINNER)
@@ -117,7 +140,18 @@ REVERSE_TAG = 0x40FDAC         # the reverse block's own tag (Task 3: the S-RAM 
 LAST_OFFSET_CELL = 0x40FDB0    # the last entry's offset (word) the insert's two INSERT_SITES add to the table base
 ROWS_CELL = 0x40FDB4           # the page's row count (byte): `pagerows`' count, `pagecmp`'s choice of end
 REVERSE_ID_SHIFT = 7           # a reverse table's ranking id: its entry + 7 (10..16)
-IDS = COURSES + len(REVERSE_TABLES)                # the setter's arrays: ranking ids 0..16
+# Phase 35: the three originals' reverse tables, by ranking id 0..2 (Bay Bridge, Acropolis, Big Forest): 4 entries each, in the runs
+# 0x40e6e2..0x40e7ff (after the S-RAM magic) and 0x40f00c..0x40f0ff (after the game's record), 0xff since the factory and neither
+# read nor written through every test-menu page, the backup clear, the races, the name entry and the attract (the recon's §11)
+ORIG_REVERSE_TABLES = (0x40E6E4, 0x40E744, 0x40F010)
+ORIG_REVERSE_SLOTS = NEW_SLOTS                     # their slot words: NEW_SLOTS' first three (ids 0..2 keep ORIG_SLOTS; never used)
+ORIG_TAG = 0x40FDB8                                # the originals' block's own tag (0xff on a battery RAM saved before Phase 35)
+ORIG_TAG_BYTES = b"ORG4"
+ORIG_REVERSE_SHIFT = COURSES + len(REVERSE_TABLES)  # an original's reverse table's ranking id: its id + 17 (17..19)
+ORIG_NAME_STRINGS = (0xFC400B, 0xFC4012, 0xFC4019)  # the game's own "MEDIUM", "EXPERT", "BEGINNER" (NUL-ended, beside COURSE and
+ORIG_NAMES = ("MEDIUM", "EXPERT", "BEGINNER")       # RANKING), by ranking id 0..2: the level words its own titles print
+REVERSE_IDS = len(REVERSE_TABLES) + len(ORIG_REVERSE_TABLES)   # ids 10..19
+IDS = COURSES + REVERSE_IDS                        # the setter's arrays: ranking ids 0..19
 LAST_OFFSET = TABLE_BYTES - 24                     # 0x228: a 24-entry table's last entry
 SHORT_LAST_OFFSET = 24 * (SHORT_ENTRIES - 1)       # 0x48
 ROWS = 6                                           # the page's rows a screen (the original's `mov.w #6, R3`)
@@ -155,14 +189,34 @@ def reverse_ids(d) -> list[int]:
     return [i + REVERSE_ID_SHIFT for i, e in enumerate(d) if i >= 3 and e.reverse is not None]
 
 
+def original_reverse_ids(d) -> list[int]:
+    """Phase 35: the ranking ids (17..19) of the originals that have a reverse variant: the original's ranking id (its data
+    index) + ORIG_REVERSE_SHIFT, in id order."""
+    return sorted(e.template + ORIG_REVERSE_SHIFT for e in d[:3] if e.race == 0 and e.reverse is not None)
+
+
 def attract_groups(d) -> list[list[int]]:
     """Per data index (0 Bay Bridge, 1 Acropolis, 2 Big Forest): the ranking ids its attract page shows in turn, the
     original first, then the converted courses in its slot (entries with their own race blob), in menu order, each followed
-    by its reverse id when it has a reverse variant (Phase 27, L3)."""
+    by its reverse id when it has a reverse variant (Phase 27, L3); Phase 35: the original too (its id + ORIG_REVERSE_SHIFT
+    straight after it)."""
     ids = ranking_ids(d)
     hosted = [i for i, e in enumerate(d) if i >= 3 and e.race]
-    return [[k] + [x for i in hosted if d[i].template == k for x in [ids[i]] + ([i + REVERSE_ID_SHIFT] if d[i].reverse else [])]
+    own = original_reverse_ids(d)
+    return [[k] + [k + ORIG_REVERSE_SHIFT] * (k + ORIG_REVERSE_SHIFT in own)
+            + [x for i in hosted if d[i].template == k for x in [ids[i]] + ([i + REVERSE_ID_SHIFT] if d[i].reverse else [])]
             for k in range(3)]
+
+
+def attract_positions(d) -> list[int]:
+    """Per ranking id 0..19 (Phase 27b; Phase 35: the originals' reverse ids): its position in the attract group that holds it (`attract_groups`), the value `raceend`
+    puts in that group's counter at a race's end so that the attract's next page of the group shows the id's table; 0 (the
+    group's first member) for an id in no group (a reverse id of an entry without a variant: never chosen at a race's end)."""
+    pos = [0] * IDS
+    for g in attract_groups(d):
+        for k, r in enumerate(g):
+            pos[r] = k
+    return pos
 
 
 def title_columns(name: str) -> tuple[int, int, int]:
@@ -227,6 +281,15 @@ def reverse_defaults(rs: RomSet, d) -> list[list[int]]:
     return out
 
 
+def original_reverse_defaults(rs: RomSet, d) -> list[list[int]]:
+    """Phase 35: per original's ranking id 0..2 (ORIG_REVERSE_TABLES' order), its reverse table's four default times: the seven's
+    rule (`reverse_defaults`), the first four of what the stock initialiser gives the original's NORMAL table (Bay Bridge and Big
+    Forest 4'00 .. 4'15, Acropolis 5'00 .. 5'15 on the arcade's set)."""
+    arr = _arrays(rs, d)
+    return [[_first_default(rs, arr["records"][r], arr["counts"][r]) + DEFAULT_STEP * k for k in range(SHORT_ENTRIES)]
+            for r in range(3)]
+
+
 # the call of STRING_PRINT once its three arguments are pushed (attribute, tile address, string: the string at 0[SP]), and the
 # caller's pop of them; it saves what it uses (R1, R2, R10, R21-R23)
 STRING_CALL = (b"\x49\x80\xf3" + struct.pack("<I", STRING_PRINT) + b"\x7f"      # call STRING_PRINT, [SP]
@@ -252,9 +315,10 @@ TITLE_BYTES = len(title_routine("A", 0))
 
 
 def ranking_layout(base: int) -> dict[str, int]:
-    """Addresses inside the ranking image at `base`: the five arrays (bases and slots by ranking id 0..16, the other three
-    ten words), the pairs, the magic, the groups, the titles (by ranking id 0..16), the names, REVERSE, the reverse tables'
-    first default times and `revtitle`'s arguments, the routines, end."""
+    """Addresses inside the ranking image at `base`: the five arrays (bases and slots by ranking id 0..19 (Phase 35: 0..16
+    before), the other three ten words), the pairs, the magic, the groups, the titles (by ranking id 0..19), the names, REVERSE,
+    the reverse tables' first default times and `revtitle`'s arguments (ids 10..19), the positions (Phase 27b: a byte by ranking
+    id 0..19), the routines, end."""
     lay = {"bases": base}
     lay["slots"] = lay["bases"] + 4 * IDS
     lay["counts"] = lay["slots"] + 4 * IDS
@@ -263,15 +327,16 @@ def ranking_layout(base: int) -> dict[str, int]:
     lay["pairs"] = lay["records_oper"] + 4 * COURSES
     lay["magic"] = lay["pairs"] + 8 * COURSES
     lay["groups"] = lay["magic"] + 20                                                         # 3 x (count, ids...) in GROUP_BYTES
-    lay["titles"] = lay["groups"] + 3 * GROUP_BYTES                                           # title routine addresses by id 0..16
+    lay["titles"] = lay["groups"] + 3 * GROUP_BYTES                                           # title routine addresses by id 0..19
     lay["names"] = lay["titles"] + 4 * IDS                                                    # seven NAME_BYTES strings
     lay["revword"] = lay["names"] + NAME_BYTES * (COURSES - 3)                                # Phase 27: "REVERSE" and its NUL
-    lay["firsts"] = lay["revword"] + len(REVERSE_WORD) + 1                                    # seven first default times
-    lay["revargs"] = lay["firsts"] + 4 * len(REVERSE_TABLES)                                  # REVERSE_ARGS arrays of seven words
-    lay["setter"] = lay["revargs"] + 4 * REVERSE_ARGS * len(REVERSE_TABLES)
+    lay["firsts"] = lay["revword"] + len(REVERSE_WORD) + 1                                    # ten first default times (ids 10..19)
+    lay["revargs"] = lay["firsts"] + 4 * REVERSE_IDS                                          # REVERSE_ARGS arrays of ten words
+    lay["positions"] = lay["revargs"] + 4 * REVERSE_ARGS * REVERSE_IDS                        # Phase 27b: `attract_positions`
+    lay["setter"] = lay["positions"] + IDS
     lay["title_bytes"] = TITLE_BYTES
     zero = {"slot_init": 0, "id_store": 0, "prologue": 0, "attract": 0, "title": 0, "common": 0, "pagecmp": 0, "pagerows": 0,
-            "revinit": 0, "revtag": 0, "revtitle": 0}
+            "revinit": 0, "revtag": 0, "revtitle": 0, "raceend": 0, "originit": 0}
     code = _routines({**lay, **zero}, [NEW_TABLES[0]] * COURSES, [NEW_SLOTS] * COURSES)
     lay["common"] = _setter(lay).addr("common")                                              # the setter after its id choice
     lay["slot_init"] = lay["setter"] + len(code["setter"])                                   # (absolute code: sized with
@@ -284,7 +349,9 @@ def ranking_layout(base: int) -> dict[str, int]:
     lay["revinit"] = lay["pagerows"] + len(code["pagerows"])                                # Phase 27 Task 3: the reverse block's
     lay["revtag"] = lay["revinit"] + len(code["revinit"])                                   # initialiser, its boot check, its title
     lay["revtitle"] = lay["revtag"] + len(code["revtag"])
-    lay["title3"] = lay["revtitle"] + len(code["revtitle"])                                 # the converted courses' titles
+    lay["raceend"] = lay["revtitle"] + len(code["revtitle"])                                # Phase 27b: the race end's jump
+    lay["originit"] = lay["raceend"] + len(code["raceend"])                                 # Phase 35: the originals' reverse tables
+    lay["title3"] = lay["originit"] + len(code["originit"])                                 # the converted courses' titles
     lay["end"] = lay["title3"] + TITLE_BYTES * (COURSES - 3)
     return lay
 
@@ -297,13 +364,13 @@ def _setter(lay: dict[str, int]) -> Block:
     """The setter (R0 and R1 clobbered, as before). From its entry (0xfc4208's jump: the race's end and the name entry) the
     course's ranking id, + REVERSE_ID_SHIFT for an entry 3..9 while the direction flag is set; from `common` (the attract page's
     jump, with the id in R0; the flag is not read there) the shown id, the id's table and slot, and both cells on every path:
-    LAST_OFFSET and ROWS for ids 0..9, SHORT_LAST_OFFSET and SHORT_ENTRIES for the reverse ids 10..16."""
+    LAST_OFFSET and ROWS for ids 0..9, SHORT_LAST_OFFSET and SHORT_ENTRIES for the reverse ids 10..19."""
     b = Block(lay["setter"])
     b.emit("movz.bw abs,reg", RANKING_INDEX, "r0")
     b.emit("cmp.b imm,abs", 0, DIRECTION_RAM)                                 # a normal race (or a name entry after one)
     b.branch("be", "common")
-    b.emit("cmp.w imm,reg", 3, "r0")                                          # an original's id (never reverse)
-    b.branch("blt", "common")
+    b.emit("cmp.w imm,reg", 3, "r0")                                          # an original's id: its reverse table (Phase 35)
+    b.branch("blt", "original")
     b.emit("cmp.w imm,reg", COURSES, "r0")
     b.branch("bge", "common")
     b.emit("add.w imm,reg", REVERSE_ID_SHIFT, "r0")                           # the entry's reverse table
@@ -322,13 +389,16 @@ def _setter(lay: dict[str, int]) -> Block:
     b.emit("mov.w imm,abs", SHORT_LAST_OFFSET, LAST_OFFSET_CELL)             # a reverse table: 4 entries, one screen of 4 rows
     b.emit("mov.b imm,abs", SHORT_ENTRIES, ROWS_CELL)
     b.emit("rsr")
+    b.label("original")                                                       # Phase 35, out of line: ids 0..2 with the flag set
+    b.emit("add.w imm,reg", ORIG_REVERSE_SHIFT, "r0")
+    b.branch("br", "common")
     return b
 
 
 def _routines(lay: dict[str, int], bases: list[int], slots: list[int]) -> dict[str, bytes]:
     """The setter, the slot initialiser, the ranking-id store, the initialiser's prologue, the attract page, the title, the
     page's two hooks and (Phase 27 Task 3) the reverse block's initialiser, its boot check and its title, absolute code.
-    `bases` / `slots`: the ten normal tables' (`revinit` takes the reverse tables' from the image's arrays at ids 10..16)."""
+    `bases` / `slots`: the ten normal tables' (`revinit` and `originit` take the reverse tables' from the image's arrays at ids 10..16 and 17..19)."""
     setter = _setter(lay).bytes()
     b = Block(lay["slot_init"])
     b.emit("push reg", "r0"); b.emit("push reg", "r1")
@@ -346,6 +416,7 @@ def _routines(lay: dict[str, int], bases: list[int], slots: list[int]) -> dict[s
     for base, slot in zip(bases, slots):
         b.emit("mov.w imm,abs", base, slot)
     b.emit("jsr abs", lay["revinit"])                                          # Phase 27: the reverse block with the others
+    b.emit("jsr abs", lay["originit"])                                         # Phase 35: and the originals' reverse tables
     b.emit("rsr")
     slot_init = b.bytes()
     b = Block(lay["id_store"])
@@ -383,7 +454,7 @@ def _routines(lay: dict[str, int], bases: list[int], slots: list[int]) -> dict[s
     attract = b.bytes()
     b = Block(lay["title"])                                                   # the title of the table the setters chose
     b.emit("movz.bw abs,reg", SHOWN_ID, "r0")
-    b.emit("cmp.w imm,reg", IDS, "r0")                                        # (ids 10..16: `revtitle`)
+    b.emit("cmp.w imm,reg", IDS, "r0")                                        # (ids 10..19: `revtitle`)
     b.branch("blt", "id_ok")
     b.emit("movz.bw abs,reg", DATA_INDEX, "r0")                               # never set yet: by data index, as the game
     b.label("id_ok")
@@ -405,48 +476,59 @@ def _routines(lay: dict[str, int], bases: list[int], slots: list[int]) -> dict[s
     b.emit("movz.bw abs,reg", ROWS_CELL, "r3")
     b.emit("rsr")
     pagerows = b.bytes()
-    first_reverse = 4 * COURSES                                               # ids 10..16's offset in a word array by id
-    b = Block(lay["revinit"])                                                 # the seven reverse tables, their slots, the tag
-    b.emit("pushm imm", 0x1F)                                                 # R0-R4
-    b.emit("mov.w imm,reg", 0, "r0")                                          # k: the reverse table (id 10 + k)
-    b.label("table")
-    b.emit("mov.w abs(reg),reg", lay["bases"] + first_reverse, "r0", "r1")
-    b.emit("mov.w abs(reg),reg", lay["slots"] + first_reverse, "r0", "r2")
-    b.emit("mov.w reg,[reg]", "r1", "r2")                                     # the slot: the table's base
-    b.emit("mov.w abs(reg),reg", lay["firsts"], "r0", "r2")                   # the first default time
-    b.emit("mov.w imm,reg", DEFAULT_NAMES + 4, "r3")                          # the game's default names (YU., RNS, TKG, ...)
-    b.emit("mov.w imm,reg", 1, "r4")                                          # the rank
-    b.label("entry")
-    b.emit("mov.w reg,[reg]", "r4", "r1")
-    b.emit("mov.w reg,disp[reg]", "r2", 4, "r1")
-    b.emit("mov.w imm,disp[reg]", 0, 8, "r1")
-    b.emit("mov.w imm,disp[reg]", -1, 0xC, "r1")
-    b.emit("mov.w reg,disp[reg]", "r2", 0x10, "r1")
-    b.emit("mov.w [reg],disp[reg]", "r3", 0x14, "r1")
-    b.emit("add.w imm,reg", DEFAULT_NAME_STEP, "r3")
-    b.emit("add.w imm,reg", DEFAULT_STEP, "r2")
-    b.emit("add.w imm,reg", 24, "r1")
-    b.emit("add.w imm,reg", 1, "r4")
-    b.emit("cmp.w imm,reg", SHORT_ENTRIES + 1, "r4")
-    b.branch("bne", "entry")
-    b.emit("add.w imm,reg", 1, "r0")
-    b.emit("cmp.w imm,reg", len(REVERSE_TABLES), "r0")
-    b.branch("bne", "table")
-    b.emit("mov.w imm,abs", struct.unpack("<I", REVERSE_TAG_BYTES)[0], REVERSE_TAG)
-    b.emit("popm imm", 0x1F)
-    b.emit("rsr")
-    revinit = b.bytes()
+    first_reverse = 4 * COURSES                                               # ids 10..19's offset in a word array by id
+
+    def tables(at: int, first: int, last: int, tag: bytes, tag_at: int) -> bytes:
+        """The reverse tables first..last-1 (id 10 + k), their slots and `tag`: `revinit` (the seven) and `originit` (Phase 35:
+        the three originals', k = 7..9)."""
+        b = Block(at)
+        b.emit("pushm imm", 0x1F)                                             # R0-R4
+        b.emit("mov.w imm,reg", first, "r0")                                  # k: the reverse table (id 10 + k)
+        b.label("table")
+        b.emit("mov.w abs(reg),reg", lay["bases"] + first_reverse, "r0", "r1")
+        b.emit("mov.w abs(reg),reg", lay["slots"] + first_reverse, "r0", "r2")
+        b.emit("mov.w reg,[reg]", "r1", "r2")                                 # the slot: the table's base
+        b.emit("mov.w abs(reg),reg", lay["firsts"], "r0", "r2")               # the first default time
+        b.emit("mov.w imm,reg", DEFAULT_NAMES + 4, "r3")                      # the game's default names (YU., RNS, TKG, ...)
+        b.emit("mov.w imm,reg", 1, "r4")                                      # the rank
+        b.label("entry")
+        b.emit("mov.w reg,[reg]", "r4", "r1")
+        b.emit("mov.w reg,disp[reg]", "r2", 4, "r1")
+        b.emit("mov.w imm,disp[reg]", 0, 8, "r1")
+        b.emit("mov.w imm,disp[reg]", -1, 0xC, "r1")
+        b.emit("mov.w reg,disp[reg]", "r2", 0x10, "r1")
+        b.emit("mov.w [reg],disp[reg]", "r3", 0x14, "r1")
+        b.emit("add.w imm,reg", DEFAULT_NAME_STEP, "r3")
+        b.emit("add.w imm,reg", DEFAULT_STEP, "r2")
+        b.emit("add.w imm,reg", 24, "r1")
+        b.emit("add.w imm,reg", 1, "r4")
+        b.emit("cmp.w imm,reg", SHORT_ENTRIES + 1, "r4")
+        b.branch("bne", "entry")
+        b.emit("add.w imm,reg", 1, "r0")
+        b.emit("cmp.w imm,reg", last, "r0")
+        b.branch("bne", "table")
+        b.emit("mov.w imm,abs", struct.unpack("<I", tag)[0], tag_at)
+        b.emit("popm imm", 0x1F)
+        b.emit("rsr")
+        return b.bytes()
+
+    revinit = tables(lay["revinit"], 0, len(REVERSE_TABLES), REVERSE_TAG_BYTES, REVERSE_TAG)
+    originit = tables(lay["originit"], len(REVERSE_TABLES), REVERSE_IDS, ORIG_TAG_BYTES, ORIG_TAG)
     b = Block(lay["revtag"])                                                  # TAG_SITE: the reverse block made once, then the
     b.emit("cmp.w imm,abs", struct.unpack("<I", REVERSE_TAG_BYTES)[0], REVERSE_TAG)   # instruction replaced (absolute)
     b.branch("be", "made")
     b.emit("jsr abs", lay["revinit"])
     b.label("made")
+    b.emit("cmp.w imm,abs", struct.unpack("<I", ORIG_TAG_BYTES)[0], ORIG_TAG)        # Phase 35: the originals' tables, once
+    b.branch("be", "both")
+    b.emit("jsr abs", lay["originit"])
+    b.label("both")
     b.emit("mov.w abs,reg", MAGIC_LENGTH, "r0")
     b.emit("rsr")
     revtag = b.bytes()
     b = Block(lay["revtitle"])                                                # a reverse id's title: three prints by the shown
     b.emit("movz.bw abs,reg", SHOWN_ID, "r0")                                 # id (STRING_PRINT keeps R0)
-    arg = lambda k: lay["revargs"] + 4 * len(REVERSE_TABLES) * k - first_reverse
+    arg = lambda k: lay["revargs"] + 4 * REVERSE_IDS * k - first_reverse
     push_arg = lambda k: bytes.fromhex("2de0c0f3") + struct.pack("<I", arg(k)) + b"\xbf"          # mov.w X(R0), [-SP]
     push_attr = lambda attr: bytes.fromhex("1da0f4") + struct.pack("<H", attr) + b"\xbf"           # movz.hw #attr, [-SP]
     b.raw(push_attr(NAME_ATTR) + push_arg(1) + push_arg(0) + STRING_CALL)                         # the name
@@ -454,8 +536,14 @@ def _routines(lay: dict[str, int], bases: list[int], slots: list[int]) -> dict[s
           + STRING_CALL)
     b.raw(push_attr(WORD_ATTR) + push_arg(4) + push_arg(3) + STRING_CALL)                         # RANKING (or "")
     b.emit("rsr")
+    revtitle = b.bytes()
+    b = Block(lay["raceend"])                                                 # Phase 27b, after the race end's setter call: the
+    b.emit("movz.bw abs,reg", DATA_INDEX, "r1")                               # raced course's group (R1: the caller reloads it)
+    b.emit("mov.b abs(reg),abs(reg)", lay["positions"], "r0", ATTRACT_COUNTERS, "r1")   # := the chosen id's position in it
+    b.emit("rsr")
     return {"setter": setter, "slot_init": slot_init, "id_store": id_store, "prologue": prologue, "attract": attract,
-            "title": title, "pagecmp": pagecmp, "pagerows": pagerows, "revinit": revinit, "revtag": revtag, "revtitle": b.bytes()}
+            "title": title, "pagecmp": pagecmp, "pagerows": pagerows, "revinit": revinit, "revtag": revtag, "revtitle": revtitle,
+            "raceend": b.bytes(), "originit": originit}
 
 
 def _arrays(rs: RomSet, d) -> dict[str, list[int]]:
@@ -486,7 +574,8 @@ def ranking_image(rs: RomSet, d, base: int) -> bytes:
     """The image at `base` in the program ROM: the arrays, the pairs, the magic, the groups, the titles and the routines."""
     lay = ranking_layout(base)
     arr = _arrays(rs, d)
-    reverse = {"bases": REVERSE_TABLES, "slots": [REVERSE_SLOTS + 4 * k for k in range(len(REVERSE_TABLES))]}   # ids 10..16
+    reverse = {"bases": REVERSE_TABLES + ORIG_REVERSE_TABLES,                                                   # ids 10..16, 17..19
+               "slots": [REVERSE_SLOTS + 4 * k for k in range(len(REVERSE_TABLES))] + [ORIG_REVERSE_SLOTS + 4 * r for r in range(3)]}
     img = b"".join(struct.pack(f"<{IDS}I", *arr[k], *reverse[k]) for k in ("bases", "slots"))
     img += b"".join(struct.pack(f"<{COURSES}I", *arr[k]) for k in ("counts", "records", "records_oper"))
     img += b"".join(struct.pack("<II", DEFAULT_NAMES, b) for b in arr["bases"])
@@ -496,21 +585,24 @@ def ranking_image(rs: RomSet, d, base: int) -> bytes:
     names = [lay["names"] + NAME_BYTES * (r - 3) for r in range(3, COURSES)]
     titles = [struct.unpack_from("<I", rs.boot, TITLE_TABLE - V60_BOOT + 4 * r)[0] for r in range(3)]
     titles += [lay["title3"] + TITLE_BYTES * (r - 3) for r in range(3, COURSES)]
-    titles += [lay["revtitle"]] * len(REVERSE_TABLES)                                     # Phase 27: ids 10..16
+    titles += [lay["revtitle"]] * REVERSE_IDS                                             # Phase 27: ids 10..16; Phase 35: 17..19
     img += struct.pack(f"<{IDS}I", *titles)
     for r in range(3, COURSES):
         title_columns(d[r].name)
         img += d[r].name.encode().ljust(NAME_BYTES, b"\0")
     img += REVERSE_WORD.encode() + b"\0"
-    img += struct.pack(f"<{len(REVERSE_TABLES)}I", *(times[0] for times in reverse_defaults(rs, d)))
-    cols = [reverse_title_columns(d[r].name) for r in range(3, COURSES)]
+    img += struct.pack(f"<{REVERSE_IDS}I", *(times[0] for times in reverse_defaults(rs, d) + original_reverse_defaults(rs, d)))
+    for r, word in enumerate(ORIG_NAMES):                                                 # Phase 35: the game's own level words
+        _expect(rs, ORIG_NAME_STRINGS[r], word.encode() + b"\0", f"the game's title word {word}")
+    cols = [reverse_title_columns(d[r].name) for r in range(3, COURSES)] + [reverse_title_columns(w) for w in ORIG_NAMES]
     empty = lay["revword"] + len(REVERSE_WORD)                                            # "": the NUL after REVERSE
-    args = ([names, [TITLE_ROW + 2 * n for n, _, _ in cols], [TITLE_ROW + 2 * c for _, c, _ in cols],
+    args = ([names + list(ORIG_NAME_STRINGS), [TITLE_ROW + 2 * n for n, _, _ in cols], [TITLE_ROW + 2 * c for _, c, _ in cols],
              [empty if r is None else RANKING_STRING for _, _, r in cols], [TITLE_ROW + 2 * (r or 0) for _, _, r in cols]])
-    img += b"".join(struct.pack(f"<{len(REVERSE_TABLES)}I", *a) for a in args)
+    img += b"".join(struct.pack(f"<{REVERSE_IDS}I", *a) for a in args)
+    img += bytes(attract_positions(d))                                                    # Phase 27b: `raceend`'s positions
     code = _routines(lay, arr["bases"], arr["slots"])
     for name in ("setter", "slot_init", "id_store", "prologue", "attract", "title", "pagecmp", "pagerows", "revinit", "revtag",
-                 "revtitle"):
+                 "revtitle", "raceend", "originit"):
         assert base + len(img) == lay[name], name
         img += code[name]
     for r in range(3, COURSES):
@@ -539,7 +631,8 @@ def patch_ranking_sites(rs: RomSet, lay: dict[str, int]) -> None:
     and reads the image's arrays and stores the slots through `slot_init`, the S-RAM check compares the new magic, the
     select record's ranking id is stored beside the data index, the attract page and its title go through the image; Phase 27:
     the insert's two `add.w #228` read LAST_OFFSET_CELL (in place), the page's end test calls `pagecmp` and its row count
-    `pagerows`, the S-RAM check's first instruction calls `revtag`. PatchError when a site does not hold the original."""
+    `pagerows`, the S-RAM check's first instruction calls `revtag`; Phase 27b: the race end's setter call is followed by
+    `jsr raceend`. PatchError when a site does not hold the original."""
     _expect(rs, SETTER, SETTER_BYTES, "the ranking setter")
     b = Block(SETTER); b.emit("jmp abs", lay["setter"]); patch_span(rs, SETTER, b.bytes(), SETTER_LEN)
     _expect(rs, INIT_COUNT, INIT_COUNT_BYTES, "the initialiser's table count")
@@ -569,6 +662,9 @@ def patch_ranking_sites(rs: RomSet, lay: dict[str, int]) -> None:
     b = Block(PAGE_ROWS_SITE); b.emit("jsr abs", lay["pagerows"]); patch_span(rs, PAGE_ROWS_SITE, b.bytes(), len(PAGE_ROWS_BYTES))
     _expect(rs, TAG_SITE, TAG_SITE_BYTES, "the S-RAM check's magic length load")               # Phase 27 Task 3: the reverse
     b = Block(TAG_SITE); b.emit("jsr abs", lay["revtag"]); patch_span(rs, TAG_SITE, b.bytes(), len(TAG_SITE_BYTES))   # block's tag
+    _expect(rs, RACE_END_SITE, RACE_END_SITE_BYTES, "the race end's setter call")             # Phase 27b: the setter (a 16-bit
+    b = Block(RACE_END_SITE); b.raw(b"\x48" + struct.pack("<h", SETTER - RACE_END_SITE))      # bsr, from the site's first byte),
+    b.emit("jsr abs", lay["raceend"]); patch_span(rs, RACE_END_SITE, b.bytes(), RACE_END_SITE_LEN)   # then `raceend`
 
 
 def install_ranking(rs: RomSet, d, base: int) -> RomSet:

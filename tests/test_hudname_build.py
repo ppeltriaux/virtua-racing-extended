@@ -71,7 +71,7 @@ def _run(tmp_path_factory, romset_zip, saturn_cue, entry, reverse=False, goal=Fa
 
 def test_the_load_records_carry_the_names_the_hud_prints(romset_zip, saturn_cue):
     """No MAME: in the built set every load record's name field is the name and NULs (at most 13 letters), `race` is 0 on the
-    three originals only, the converted entries' labels are LABELS; each of the seven reverse variants' records (the one `entry`
+    three originals only, the converted entries' labels are LABELS; each of the ten reverse variants' records (the one `entry`
     serves at a reverse race load) has the menu entry's name, NUL-padded, and label, and a race blob."""
     out, _ = _seven(romset_zip, saturn_cue)
     d = decode_directory(out)
@@ -85,8 +85,8 @@ def test_the_load_records_carry_the_names_the_hud_prints(romset_zip, saturn_cue)
         assert len(e.name) < NAME_LEN and field(lay["load"] + LOAD_SIZE * i) == e.name.encode() + bytes(NAME_LEN - len(e.name)), e.name
         assert (e.race == 0) == (i < 3), e.name
     assert {i: d[i].label for i in LABELS} == LABELS
-    assert [e.reverse is not None for e in d] == [False] * 3 + [True] * 7
-    for e in d[3:]:
+    assert [e.reverse is not None for e in d] == [True] * 10              # Phase 33: the three originals have a variant too (their
+    for e in d:                                                          # reverse race shows the game's word: origrev.hudorig)
         v = e.reverse.entry
         assert (v.name, v.label) == (e.name, e.label) and v.race != 0, e.name
         assert field(e.reverse.at) == e.name.encode() + bytes(NAME_LEN - len(e.name)), e.name

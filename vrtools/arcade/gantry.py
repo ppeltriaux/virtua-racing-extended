@@ -109,11 +109,12 @@ class Parts:
     front: int                    # -1: the letters stand on the banner's -z side (the side they read from), +1: on its +z side
 
 
-def gantry_parts(frames: list[list[Quad]]) -> Parts:
+def gantry_parts(frames: list[list[Quad]], depth: tuple[float, float] = LETTER_DEPTH) -> Parts:
     """The banner (the upright quads at least BANNER_MIN_HEIGHT tall that move over the frames: the posts stand still) and the
     lettering (the other moving upright quads inside the banner's x and y span, standing LETTER_DEPTH in front of it at every
     corner, all on one side), the same quads in every frame. GantryError when the frames differ in shape or a frame has no
-    banner, no lettering or lettering on both sides."""
+    banner, no lettering or lettering on both sides. `depth` (Phase 33 stage 2): the range a letter's corners stand in front of
+    the banner (the checkpoint gantries' come as near as 0.19: CHECKPOINT_DEPTH)."""
     n = len(frames[0])
     if any(len(f) != n for f in frames):
         raise GantryError("the frames differ in their number of quads")
@@ -133,7 +134,7 @@ def gantry_parts(frames: list[list[Quad]]) -> Parts:
             if any(not (zb.x0 - _EPS <= x <= zb.x1 + _EPS and zb.y0 - _EPS <= y <= zb.y1 + _EPS) for x, y, _ in pts):
                 continue
             d = [zb(x, y) - z for x, y, z in pts]                  # > 0: on the banner's -z side
-            lo, hi = LETTER_DEPTH
+            lo, hi = depth
             if all(lo <= v <= hi for v in d):
                 sides.add(-1)
             elif all(lo <= -v <= hi for v in d):
@@ -260,3 +261,60 @@ def install_start_gantry(rs: RomSet, address: int, objects: int = START_GANTRY_O
     write_program_blob(rs, address, lst)
     write_colour_entries(rs, {tex + 1 + i: w for i, w in enumerate(words)})
     return Installed(address, tuple(placed), total, tex, len(words), size, len(parts.letters))
+
+
+# --- Phase 33 stage 2: the arcade's checkpoint gantries, their "C.P." readable from behind (the originals in reverse) ---
+# Pascal, 16 Nov, after driving the stage 1 set: "some checkpoint flags are white without the C.P.". The four checkpoint gantries
+# (spawn handlers 0xffb08a / 95 / a0 / ab; object lists 0xfdc0b3 and 0xfdc1b3 on Big Forest and Bay Bridge, 0xfdc133 and 0xfdc233
+# on Acropolis) are drawn by the start gantry's routine (0xffb0dc): frame (counter & 31) of the list, a record of (poly, tex,
+# size) triples ended by a zero word. Each frame is 132 two-sided records, 23 of them the letters, 0.19-1.41 units in front of
+# the banner; from behind the banner's strips cover them. A whole copy of the frames, as the start gantry's, is 229 888 bytes a
+# list (four lists: 919 552 against 360 936 usable). Here each frame keeps the ARCADE'S OWN OBJECT and gets a second, small
+# object after it in its record: the 23 letters mirrored behind the banner (`mirrored_letters`), 46 records, one-sided, on the
+# colour entry the arcade's own letters read (no new colour entry). 60 928 bytes of polygon ROM a list.
+CHECKPOINT_OBJECTS = (0xFDC0B3, 0xFDC133, 0xFDC1B3, 0xFDC233)
+CHECKPOINT_DEPTH = (0.15, 2.0)
+CHECKPOINT_RECORD_BYTES = 28                                   # two triples and the zero word
+CHECKPOINT_LIST_BYTES = FRAMES * (4 + CHECKPOINT_RECORD_BYTES)  # 1 024: the 32 pointers, then the 32 records
+
+
+@dataclass(frozen=True)
+class Lettered:
+    address: int                  # program ROM: the new list (32 pointers, then 32 records of two triples)
+    objects: int                  # the arcade's list it stands in for
+    letters: tuple[int, ...]      # polygon-ROM word address of each frame's lettering object
+    object_bytes: int
+    tex: int                      # the lettering objects' tex: the entry before the arcade's own letters' entry
+    size: int                     # records in a lettering object (2 a letter)
+
+
+def install_checkpoint_lettering(rs: RomSet, address: int, objects: int) -> Lettered:
+    """The checkpoint gantry list `objects` with its lettering readable from behind: 32 lettering objects in free polygon ROM
+    (first fit) and, at program-ROM `address` (16-aligned, CHECKPOINT_LIST_BYTES, erased), a list whose frame k is the arcade's
+    frame k followed by its lettering object. `rs` is written in place. Nothing of the arcade's is written: its list, its frames
+    and its colour entries stay, and the lettering reads the entry the arcade's letters read. GantryError when the frames'
+    letters are not one colour word or the lettering is not found."""
+    recs = frame_records(rs, objects)
+    frames = [frame_quads(rs, r) for r in recs]
+    parts = gantry_parts(frames, CHECKPOINT_DEPTH)
+    table = colour_table(rs)
+    check_lettering(frames, parts, table.entry)
+    if address % 16:
+        raise GantryError(f"the checkpoint list at {address:#x} is not 16-aligned")
+    alloc = Allocator(poly_free_runs(rs))
+    placed, total, records = [], 0, b""
+    first = address + 4 * FRAMES
+    for (poly, tex, size), qs in zip(recs, frames):
+        ltex = min(qs[i].tex_adr for i in parts.letters) - 1    # every record of the arcade's frame reads its own entry; the
+                                                                # letters' all hold one word (`check_lettering`): the first of them,
+                                                                # which the first lettering record advances to
+        copies = mirrored_letters(qs, parts, ltex)
+        blob = bytes(24) + copy_records(copies) + END_MARKER    # the seed is not read: every copy starts its own chain
+        at = write_polygons(rs, blob, alloc.alloc(len(blob), align=4, unit="bytes"))
+        placed.append(at)
+        total += len(blob)
+        records += struct.pack("<7I", poly, tex, size, at, ltex, 2 * len(copies), 0)
+    lst = struct.pack(f"<{FRAMES}I", *(first + CHECKPOINT_RECORD_BYTES * k for k in range(FRAMES))) + records
+    assert len(lst) == CHECKPOINT_LIST_BYTES
+    write_program_blob(rs, address, lst)
+    return Lettered(address, objects, tuple(placed), total, ltex, 2 * len(parts.letters))

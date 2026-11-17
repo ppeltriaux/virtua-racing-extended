@@ -111,6 +111,46 @@ def reverse_tables(tables: RoadTables, tarmac_quads: list[Quad16]) -> RoadTables
     return RoadTables(lines, segments)
 
 
+def reverse_original(lines: list[list[RoadPoint]], segments: list[Segment]) -> RoadTables:
+    """Phase 33: an ORIGINAL course's tables for racing it the other way, from its own arcade tables (`course.road_lines`,
+    `course.segments`); nothing of the Saturn's and no geometry. The originals differ from a conversion in what `reverse_tables`
+    relies on (recon docs/spike/2026-11-phase33-originals-reverse-recon.md §3, decoded from the three courses):
+    - each of the eight lines is a hand-made racing line with its own heading, pitch, roll and link at every point, so each is
+      reversed by itself: reversed point j is the line's forward point (n - j) mod n, its heading's high half turned half a turn
+      and unwrapped again from the start line, its pitch and roll (the low halves) negated;
+    - a quad is credited the road point it is CENTRED on (not the last point its front has reached), so the same quad is
+      centred on that point's reversed number: segment k keeps its quad and its flag (1, the pit lane's 66, Bay Bridge's 2, 4,
+      16 and 129: none is directional) and its credit p becomes (n - p) mod n. Eight quads abreast keep one shared credit;
+    - every line point's link names a segment credited that very point, so the reversed point keeps its link's segment, whose
+      new credit is the point's new number: the opponents' cursor rule (formats §15) holds point for point.
+    A line shorter than the centreline (Bay Bridge's line 6: 416 of 418 points) is completed with the centreline's points at the
+    missing numbers, the blob storing eight lines of one length.
+    ConvertError when there are not eight lines, a line is longer than the centreline, a segment's road point or a link's segment
+    is out of range, or a reversed unwrapped heading leaves 16 bits."""
+    if len(lines) != 8 or not lines[0]:
+        raise ConvertError(f"{len(lines)} road lines: the eight lines of an arcade course are needed")
+    n, m = len(lines[0]), len(segments)
+    for k, line in enumerate(lines):
+        if len(line) > n:
+            raise ConvertError(f"line {k} has {len(line)} points, longer than the centreline's {n}")
+    for s in segments:
+        if not (0 <= s.road_point < n):
+            raise ConvertError(f"segment {s.index}: road point {s.road_point} of {n}")
+    order = [(n - j) % n for j in range(n)]
+    out = []
+    for k, line in enumerate(lines):
+        full = list(line) + list(lines[0][len(line):])
+        for j, p in enumerate(full):
+            if (p.link >> 16) >= m:
+                raise ConvertError(f"line {k} point {j} names segment {p.link >> 16} of {m}")
+        heads = unwrap_headings([(_hi(full[f].heading) + HALF_TURN_HEADING) % 16384 for f in order])
+        if not (-32768 <= min(heads) and max(heads) <= 32767):
+            raise ConvertError(f"line {k}: the reversed heading runs {min(heads)}..{max(heads)}, outside 16 bits")
+        out.append([RoadPoint(full[f].x, full[f].z, ((heads[j] & 0xFFFF) << 16) | (-_s16(full[f].heading) & 0xFFFF),
+                              (full[f].link & 0xFFFF0000) | (-_s16(full[f].link) & 0xFFFF)) for j, f in enumerate(order)])
+    return RoadTables(out, [Segment(s.index, (n - s.road_point) % n, s.flag) for s in segments])
+
+
 def reverse_checkpoints(checkpoints: tuple[int, ...], n: int) -> tuple[int, ...]:
     """The reverse lap's checkpoints: the normal lap's renumbered for the reversed lap, (n − g) mod n sorted, the line 0
     staying 0, less any renumbered point p with 0 < p < `race.GATE_START_GAP` (Phase 22i's rule applied in reverse as it is

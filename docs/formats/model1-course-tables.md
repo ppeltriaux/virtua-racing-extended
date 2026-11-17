@@ -47,7 +47,14 @@ last tarmac quad it touched (surface kind 1, §5); the segment maps it to a road
 Several consecutive segments map to the same road point (about 3 per point). Flag 1 is
 plain road; **flag 66 marks the pit-lane quads** (Big Forest quads 30–59 beside the start
 straight at lateral −33 and 1085–1088, the entry taper) — not a grid zone. Bay Bridge also
-uses 2, 4, 16, 129 (unknown). Centreline points link back with `link >> 16` = segment index.
+uses 2, 4, 16 (unknown) and 129. Centreline points link back with `link >> 16` = segment index.
+**Bit 7 (0x80) is the tunnel sound** (Phase 37 recon, `docs/spike/2026-11-phase37-tunnel-sound-recon.md`): Bay Bridge's quads
+69–88 carry 0x81. The player's routine `0xffa671` (each logic frame, from the race handler) compares bit 7 of its copy of the
+flag (`+0x152`) with last frame's (`+0x195`) and queues sound command `C201` when it has come on, `C200` when it has gone off;
+the sound board keeps one bit (cleared too by the reset `8100`, which the game sends at a race's end) and, while it is set,
+turns the player's usual engine layer down and holds the second at full level. Nothing else reads bit 7; the other tests of the
+flag are bit 0 (`0xfe9234`, `0xfeb07f`, `0xfeb1b4`, `0xffd350`, `0xffd467`), bit 6 (`0xfea3d7`) and bits 2–5 (`0xfebcbf`). The
+attract's demo sends neither command. Converted courses: `CoursePlan.tunnels` (`convert/road.tunnel_quads`, `FLAG_TUNNEL`).
 
 ## 4. Road lines (pointer block + 8: **eight** `(ptr:u32 win, count:u32)` pairs; RAM `0x501960`)
 
@@ -767,6 +774,18 @@ Measurements in `docs/spike/2026-11-phase26-stage3-findings.md`; recon `docs/spi
   the NUL (the last letter in column 58), `[0x501434]` saved, set to `hudattr[label]` (+3), the printer called, the cell restored.
   The load record's name field (+0x1c, 14 bytes) is NUL-padded and holds at most 13 letters (`directory._load_record`, `_check`).
   The linked slave's copy of the site (0xff53ae..0xff53fa, row 15, column 52) is not patched.
+- **The word REVERSE under the name** (Phase 32; Pascal, shown stills, "Yes all your recommendation" to red on every course and
+  the placement as built; they have not driven it: `hudname`, its text `hudrev` = "REVERSE" and a NUL after `hudattr`;
+  `docs/spike/2026-11-phase32-hud-reverse-findings.md`). `entry` returns R0 = 1 exactly when it served a reverse variant's record;
+  `hudname` keeps that answer on the stack over the name's print (above the saved `[0x501434]`), and when it is 1 calls the
+  printer a second time: `[0x501434]` = 0x82 (the game's EXPERT red, on every course), R1 = R1 + 0xf2 (from one past the name's
+  last cell to row 46, column 52), R0 = `hudrev`. So rows 46-47, columns 52-58, the last letter under the name's. The font's dark
+  edge is in its glyph tiles (colour 2, black, one pixel all round), so the word has the name's outline. What else the game
+  draws on rows 44-47 in a race: the SPEED figures (columns 2-11, to row 46) and, with the manual transmission (`[0x501936]` != 0),
+  the gear's two maps at row 44, columns 14 and 17, three rows each (0xff47c3..0xff4802); from column 19 on nothing was written
+  in any measured run. Layer 0 is cleared by mode 0x15 after the goal. `end − loader` 6 947 against a bound raised from 6 900 to
+  7 000. The layout key `hudrev` is the text's address, for any other routine that prints the word (the originals' reverse, a
+  later phase: it should leave the registers as `hudname`'s reverse path does, `hudname.py`'s docstring).
 - **Size.** The image is 8 621 bytes (0x278d70..0x27af1d), `end − loader` 5 797 against `tests/test_directory.py`'s bound of 6 000
   (raised from 5 000, plan D10). The tables stored after it moved 0x3d0 from main's places. (Stage 4: 6 251 against 6 500, §20.)
 
@@ -871,6 +890,7 @@ measurements `docs/spike/2026-11-phase27-findings.md`. The game's own insert, na
   | 0xfc3d8c | 10 | `mov.w R1, 501924[PC]; mov.w #6, R3` (the first row's tile address; six rows) | `jsr pagerows` + 4 nops: the store, then `movz.bw 40FDB4, R3` |
   | 0xfe69f0 | 7 | `mov.w FE6A47[PC], R0` (the S-RAM check's first instruction: the magic's length) | `jsr revtag` + nop: `revinit` when the tag is missing, then the instruction (absolute) |
   | 0xfc40ce | 16 | — | the original's again (stage 3's `rankgate` removed) |
+  | 0xfc40e1 | 10 | `movz.bw 501934[PC], R0; bsr FC4208` (the race end's setter call; the insert follows) | Phase 27b: `bsr FC4208; jsr raceend; nop` |
 
 - **`revinit`** (128 bytes; R0-R4 saved): for k = 0..6 the base and slot address from the setter's arrays at id 10 + k, the base
   into the slot, four entries (rank 1..4, the time from the image's `firsts[k]` stepping 0xa0 = 5 s, +8 = 0, +0xc = −1, the time
@@ -887,7 +907,134 @@ measurements `docs/spike/2026-11-phase27-findings.md`. The game's own insert, na
   reverse page is one screen of four rows (396 frames; rows 5 and 6 blank). `title` sends ids 10..16 to `revtitle` (112 bytes),
   which prints the course's name and REVERSE in red (0x8300) and RANKING in white (0x8200) by three string-printer calls indexed
   by the shown id ("DIABLO CANYON REVERSE RANKING"; a 15-letter name, which no course has, would get "<NAME> REVERSE" alone).
+- **The first page after a game** (Phase 27b, `raceend`, 22 bytes, and `positions`, 17): after the race end's setter call, the
+  position in its group of the id the setter chose (R0) is stored in the counter of the data index's group
+  (`0x40fc6a + [0x501934]`), so the attract's first ranking page after the game, which reads that group, shows the table just
+  raced; `attract` stores position + 1 as before. Only a finished race reaches the setter there (0xfc40d6 tests the finish bit);
+  the name entry's call is not touched.
 - **Room.** The directory image's `end − loader` is 6 856 bytes (main 6 251; the test bound 6 900): the setter 114 (was 45),
   `pagecmp` 23, `pagerows` 15, `revinit` 128, `revtag` 28, `revtitle` 112, `slot_init` +6, `title` +4, the arrays (+56 for ids
   10..16, the titles +28, "REVERSE" 8, `firsts` 28, `revtitle`'s arguments 140); `rankgate`'s 40 gone. Room left: the free run below
   the start-gantry block is 2 000 bytes at 0x28f1a0 (main 2 592 at 0x28ef50); the image is 44 bytes under the test bound of 6 900.
+  Phase 27b: `raceend` 22 and `positions` 17: the image 6 895 bytes, the free run 1 952 bytes at 0x28f1d0.
+
+## 22. The three originals in reverse (Phase 33 stages 1 and 2, a prototype; `convert/reverse.py`, `tencourse.py`, `origrev.py`)
+
+Recon `docs/spike/2026-11-phase33-originals-reverse-recon.md`; measurements `docs/spike/2026-11-phase33-originals-reverse-findings.md`.
+
+- **The originals' tables, as far as a reversal needs them** (decoded from the three courses, recon §3):
+  - each of the eight road lines has its own heading, pitch, roll and link at every point (§4's "0 / 0x20000 in the other lines"
+    is not so: lines 1-7 share the centreline's heading word on 0-23 points a line);
+  - a quad is credited the road point it is CENTRED on (the centre of a flag-1 quad lies −0.26..+0.19 of a point spacing from
+    its point; a converted course credits a quad the last point its front has reached);
+  - every point of every line names, in `link >> 16`, a segment credited that very point;
+  - the segment flags are not directional: bit 0 "on the racing road" (clear on the pit lane's 66 and on Bay Bridge's 2, 4, 16
+    side areas), bits 2-5 (`0xfebcbc`, mask 0x3c) "not a put-back spot", bit 7 the tunnel's sound (`0xffa67b`, Bay Bridge's 129);
+  - Bay Bridge's line 6 has 416 points (§4).
+- **`reverse.reverse_original(lines, segments)`**: reversed point j of each line is that line's forward point (n − j) mod n, its
+  heading's high half turned half a turn and unwrapped from the start line, its pitch and roll negated, its link's segment kept;
+  segment k keeps its quad and flag, its credit p becomes (n − p) mod n. A short line is completed with the centreline's points.
+- **The variant** (`tencourse.reverse_of_original`, installed by `ten_course_set` like a converted course's): its tables in the
+  original's own bank (Big Forest 42 080 bytes at bank 3 +0x69ad0, six lines stored: `BIG_FOREST_REVERSE_PAIRS`; Acropolis
+  84 496 at bank 2 +0xa4be0, eight lines; Bay Bridge 12 336 at bank 1 +0xfcb50, ONE line for all sixteen cars, a stopgap: the
+  bank has 13 488 bytes); a race blob with the game's checkpoints renumbered ((0, 108, 218), (0, 197, 306), (0, 169, 382)), the
+  game's own twelve time records as they are (each of the game's records holds ONE extension, paid at every checkpoint whatever
+  the sector's length: 331 on Big Forest and Bay Bridge, 457 on Acropolis at level 0 in single play; §14's `ext[k]` are equal),
+  the game's car table on `ORIGINAL_REVERSE_GRID`'s start points; a pit
+  quad and box on Big Forest and Acropolis (stage 2, below; Bay Bridge `PIT_NONE`); the HUD map as the game draws it (149.0 / 0: with the seven's shift for a
+  reversed lap the originals' own outline objects left the screen); its own spawn list (the game's entities in the game's order less the arrow boards, handler
+  0xffaa67, the start gantry's object list the converted courses' both-sided frames 0x28f970; one list behind slot 0, in the
+  erased run 0x2fce00..0x300000, after stage 2's four lettered checkpoint lists: Big Forest 0x2fde10, Bay Bridge 0x2fe4c0, Acropolis 0x2ff1e0); everything else the entry's.
+  The records
+  follow the seven's in the annex (load 0x2b92a0.., maps 0x2b99ac.., race blobs 0x2bcbe0.. since Phase 32's longer directory image; the seven's race blobs lie 192 bytes
+  higher than before, their records where they were).
+- **The originals' block** (`origrev.py`, 146 of 160 bytes at 0x28f7d0, right below Phase 31's colour block 0x28f870..0x28f970 and
+  the start gantry's block; not in the directory image; `tencourse.reserved_blocks` lists every such reservation; **since Phase
+  35, 96 bytes: `hudorig` alone at the block's start, `rankgate3` removed and boot 0xfc40ce the game's own again, §23**):
+  - (until Phase 35) `rankgate3`, from boot 0xfc40ce (16 bytes, `movz.bw #0, 5018FC; test1 #1, 501174` → `jsr rankgate3` + nops): the record flag
+    cleared, then Z set while the direction flag is set and the ranking id `[0x40fc68]` is below 3, else the site's `test1`: a
+    reverse race on an original takes the race-without-a-record path (no insert, no name entry). The setter (§21) moves only
+    ids 3..9 to a reverse table and the battery RAM has 78 bytes left;
+  - `hudorig`, from boot 0xff4799 (`jsr hudname` → `jsr hudorig`): with the flag set and the menu entry `[0x501940]` below 3 it
+    calls the game's printer (the level word) and then prints Phase 32's REVERSE under it (stage 2: `[0x501434]` saved and set
+    to 0x82, R1 + 0xF2, less 2 on entries 1 and 2 whose " MEDIUM " and " EXPERT " end in a space, R0 = `hudrev`, the printer, the
+    cell written back, `rsr`): rows 46-47, columns 52-58 on Big Forest, 51-57 on Bay Bridge and Acropolis; else it jumps to `hudname`.
+- **The checkpoint gantries from behind** (stage 2; `gantry.install_checkpoint_lettering`, `tencourse.checkpoint_lists`): the
+  game's four checkpoint object lists (0xfdc0b3, 0xfdc133, 0xfdc1b3, 0xfdc233; handlers 0xffb08a / 95 / a0 / ab, one draw
+  routine 0xffb0dc) are 32 frame pointers, each to (object, texture word, size) triples ended by a zero word (0xff84a2 walks
+  them); a frame is 132 two-sided records, 23 of them letter quads, and every record reads its own colour entry (the letters'
+  all hold one word). The lettered lists (1 024 bytes each: 32 pointers, then 32 records of two triples and the zero) lie at
+  0x2fce10, 0x2fd210, 0x2fd610, 0x2fda10 in that order of the game's lists; a frame's second triple is an object in erased
+  polygon ROM: 24 seed bytes, the 23 letters mirrored about the banner's centre and behind it, one-sided, two records a
+  letter, on the entry before the letters' first. 128 objects, 243 712 bytes; written after Phase 31's far copies.
+- **The pit stop in reverse** (stage 2; `tencourse.original_reverse_pit`): the lane is the run of quads flagged 66 from the
+  normal pit quad (Big Forest 30-59, Acropolis 28-55); the reverse pit quad is the run's last but one (58, 54: the pair a
+  reverse car meets first; it must lie 64 units or more from the box, and the game took the car 156 and 84 units before it); the box is the game's own (boot tables 0xff40d9 for template 2,
+  0xff40b1 for template 1: three floats) with the heading 0x8000. Phase 26 stage 4's routines serve the record unchanged.
+- **An original's select picture is two maps** (fix wave; `origpic.py`): "B" (bank 0 windows 0x1e0414 / 0x1e06c0 / 0x1e096c;
+  the terrain, with see-through pixels; the course select blits it to tile RAM 0x700088 + 0x26 a slot: layer 0, the FRONT
+  plane) over "A" (0x1e0000 / 0x1e015c / 0x1e02b8, mode 0, base 0x3000 / 0x3100 / 0x3200: the water, the track, the name;
+  0x704088 + 0x26 a slot: layer 2, the back plane). A's characters are two blocks at its base (146 / 183 / 161 characters), its
+  two palettes at 0x900c00 / 0x900c40 / 0x900c80 (the START tables' `a_dst`). The tile hardware has two planes (layers 1 and
+  3 are their windows). On the COURSE DIRECTION screen an original has A on layer 2 (the right picture on the next art's
+  blocks, copied), B on layer 0 through `picture`, and in the arrows' cells characters composed at build time (the arrow over
+  B) on blocks 0x3480 / 0x3500 and the third art's A blocks; routines `olock` (in `dirlock`'s place at the boot
+  ROM's lock site 0xfc2788, with `dirlock`'s instruction count on a converted course's paths), `orows` and `osel` in a
+  512-byte block at 0x28f5d0 (`tencourse.origpic_address`); nothing inside the directory image is changed.
+- **The off-course put-back** (0xfebc94..0xfebd7d): `+0x152` is the flag word of the car's segment; with all four wheels on
+  tarmac and `flag & 0x3c` zero the quad `+0x30` is remembered in `+0x1b6` and 0x50115c cleared; else 0x50115c counts, and
+  past 0x80 the car goes to the remembered quad (0x1600: its position; 0x1800: its direction to `+0xeb`; 0x1580: the glide).
+  The flag word's other readers test bit 0 (0xfe9234, 0xfeb07f, 0xfeb1b4, 0xffd350, 0xffd467), bit 6 (0xfea3d7) and bit 7
+  (0xffa67b). A reverse variant of an original sets bit 2 on the quads whose reverse pose faces a wall or an object within 25
+  units (`tencourse.reverse_no_putback`). The surface table is one byte a collision quad, as long as the quad pool.
+- **The boot ROM's erased runs**: 0xfdc845..0xfe0000 (14 267 bytes) and 0xfff120.. (3 792), erased in the original. The first
+  holds the originals' lock data and two originals' picture data from 0xfdc850 (`tencourse.BOOT_FREE`); the boot ROM is always
+  mapped. No code of the game reads the run but the test menu's MEMORY TEST, which reads the whole ROM (PC 0xfe0e81).
+- **Grand Prix**: the test menu's GAME MODE (NORMAL / GRANDPRIX, strings at 0xfc807c, table 0xfc806a) is the backup byte
+  `0x40dca3`, copied to `[0x501105]` at 0xfe1b12 (a linked slave takes it from 0xb00009, 0xfe1bdd). The 20-lap race (0xfe1170)
+  is set only on the linked path (`[0x40dc8c]` ≠ 0, 0xfe10ed), where the course lock never opens the COURSE DIRECTION screen
+  (`dirlock`). `[0x501105]` is what several notes above call "linked play": the loader's third time-record set, the five pit
+  stops (0xfe8be6), the pit autopilot's variant (0xfe968d), the pit pose's per-cabinet table (0xff4090).
+
+## 23. The originals' reverse best-time tables (Phase 35, `ranking.py`)
+
+Recon and gate `docs/spike/2026-11-phase35-reverse-times-recon.md` (§2 option B4, §11 the gate: 25 headless runs through every
+test-menu page, the races, the name entry, the cold boot and the attract, no read or write in the runs used here); findings
+`docs/spike/2026-11-phase35-reverse-times-findings.md`. §21's reverse block is unchanged; three more 4-entry tables join it.
+
+- **Battery RAM** (nothing of v0.2.1's layout moves; every byte below was 0xff on every battery RAM the gate saw):
+
+  | address | bytes | what |
+  |---|---|---|
+  | `0x40e6e4`, `0x40e744` | 2 × 96 | the reverse tables of ranking ids 0 and 1 (Bay Bridge, Acropolis), in the unused run `0x40e6e2..0x40e7ff` after the S-RAM magic (`0x40e6e2..e3` and `0x40e7a4..0x40e7ff` stay unused) |
+  | `0x40f010` | 96 | the reverse table of ranking id 2 (Big Forest), in the unused run `0x40f00c..0x40f0ff` after the game's record (`0x40f00c..0f` and `0x40f070..0x40f0ff` stay unused) |
+  | `0x40fc40..0x40fc4b` | 3 × 4 | their slot words: the first three words of the ten-word slot array `0x40fc40`, never used before (ids 0..2 keep `0x40e6c0..`) |
+  | `0x40fdb8` | 4 | the tag "ORG4" (0xff on a battery RAM saved by v0.2.1 or before) |
+
+- **Ranking ids 17..19**: an original's id + 17 (`ORIG_REVERSE_SHIFT`). The setter's arrays (`bases`, `slots`, `titles`) run over
+  ids 0..19; `firsts` and `revtitle`'s five argument arrays over 10..19; `positions` over 0..19. The setter, with the direction
+  flag set, adds 7 to ids 3..9 (as before) and, out of line after its last `rsr`, 17 to ids 0..2, then goes to `common`; ids
+  17..19 take the short table's cells (0x48 / 4) like 10..16. A normal race (the flag 0) and the attract's entry are unchanged.
+- **`originit`** (128 bytes): `revinit`'s loop (§21) for k = 7..9 of the same arrays, then the tag ORG4. Called from `slot_init`
+  after `revinit` (the stock initialiser on a battery RAM without the magic, and the test mode's backup clear, which on its
+  own writes none of these bytes) and from `revtag` after the seven's check, when ORG4 is missing. So: a fresh battery RAM gets
+  everything; v0.2 gets the seven tables and the three; **v0.2.1 gets the three alone, no saved byte written**; a second boot
+  writes nothing. Going back to v0.2.1 afterwards (read in v0.2.1's code, not run on its set; main 47460b0's set, which has
+  the same ranking code, booted on a battery RAM this set saved and raced wrote no table byte and nothing of the new block):
+  it finds REV4 and its seven tables as it left them and never reads these.
+- **Defaults** (`original_reverse_defaults`, at build time): the first four of the original's normal table as the stock
+  initialiser writes it: Bay Bridge and Big Forest 4'00 .. 4'15, Acropolis 5'00 .. 5'15; names YU., RNS, TKG, NAG.
+- **Attract and title**: each original's reverse id follows the original in its group (Bay Bridge `0, 17, 4, 11, 7, 14, 8, 15,
+  9, 16`, Acropolis `1, 18, 5, 12, 6, 13`, Big Forest `2, 19, 3, 10`). `revtitle` prints the game's own level word (boot ROM
+  "MEDIUM" 0xfc400b, "EXPERT" 0xfc4012, "BEGINNER" 0xfc4019) in the name's place: "MEDIUM REVERSE RANKING" (Bay Bridge),
+  "EXPERT REVERSE RANKING" (Acropolis), "BEGINNER REVERSE RANKING" (Big Forest). Phase 27b's `raceend` is unchanged: the
+  three more positions send the attract's first page after a reverse race on an original to its reverse table.
+- **Room**: the directory image 7 221 bytes (main 6 947; test bound 7 300): the arrays +111 (bases, slots, titles +12 each;
+  `firsts` +12; `revtitle`'s arguments +60; `positions` +3), the setter +9, `slot_init` +6, `revtag` +20, `originit` +128.
+  The originals' block (§22) holds 96 of its 160 bytes. Against main, besides the program ROM: the boot ROM: 0xfc40ce..0xfc40dd back to the arcade's 16 bytes (`rankgate3` removed), and 43 short spans, every one an address
+  or PC-relative displacement of the project's own routines or data in the program ROM, moved with the longer image (28 by
+  +0x112, 7 by +0x7e, one each by +0x78, +0x92 and +0x6f, the HUD site's `jsr hudorig` by -0x32 as `hudorig` moved to its
+  block's start, 4 PC-relative displacements); the data ROM pair mpr-14880/14881: 20 bytes at data-ROM offsets
+  0xde80c..0xde845 (CPU 0x10de80c..), course-header pointer words into the program ROM, each +0x110 (the tables they point at
+  moved with the image); the program ROM pair: the image and everything after it. The polygon, copro data and TGP program ROMs
+  are identical to main's.

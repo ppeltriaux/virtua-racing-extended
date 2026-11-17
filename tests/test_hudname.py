@@ -115,37 +115,71 @@ def test_hudname_prints_the_games_word_on_an_original(romset_zip):
 
 
 def test_hudname_prints_the_name_right_aligned_in_the_levels_colour(romset_zip):
-    """On a converted course: R2 := the record (R2 and R3 are the printer's to write), R0, R1, R8 restored, R0 := the record +
-    0x1C (the name), R1 := the site's R1 + 16 − 2 per letter up to the NUL (the last letter in the game's 8th cell, column 58: a
-    13-letter name from column 46), [0x501434] (the word) pushed, := LEVEL_ATTR[label] (the record's +3: blue, orange, red) zero-
-    extended as the game's own `movz.bw` writes it, the printer called, the pushed word written back (by R2, which nothing after
-    the site reads before the entity loop writes it at 0xfe1c25), `rsr`. The printer leaves R1 one past the 8th cell, R3 0 and R8
-    [0x50143c] as after the game's word; R0 is written at 0xff47b6 before any read."""
+    """On a converted course: R2 := the record (R2 and R3 are the printer's to write), R3 := `entry`'s R0 (1 when it served the
+    reverse variant: Phase 32), R0, R1, R8 restored, the word [0x501434] and R3 pushed (through R0, which the next instruction
+    writes), R0 := the record + 0x1C (the name), R1 := the site's R1 + 16 − 2 per letter up to the NUL (the last letter in the
+    game's 8th cell, column 58: a 13-letter name from column 46), [0x501434] := LEVEL_ATTR[label] (the record's +3: blue, orange,
+    red) zero-extended as the game's own `movz.bw` writes it, the printer called; `entry`'s answer popped into R3 and tested (0 in a
+    normal race, where R3 is 0 after the printer as well: the branch to the end, tests/test_hudname.py's next test for the rest);
+    the pushed word written back (by R2, which nothing after the site reads before the entity loop writes it at 0xfe1c25), `rsr`.
+    In a normal race the printer leaves R1 one past the 8th cell, R3 0 and R8 [0x50143c] as after the game's word; R0 is written at
+    0xff47b6 before any read."""
     from vrtools.arcade.hudname import LEVEL_ATTR
     rs, out, lay = _installed(romset_zip)
     assert LEVEL_ATTR == (0x02, 0x83, 0x82) and LOAD_FIELDS["label"] == 3 and LOAD_FIELDS["name"] == 0x1C
     lines, texts, at = _hudname(out, lay)
-    count, done = at["cmp.b   #0, [R3]"], at[f"mov.w   {ATTR:X}, R3"]
-    assert texts[6:] == ["mov.w   R8, R2", "popm    #103", "mov.w   R2, R0", "add.w   #1C, R0", "add.w   #10, R1", "mov.w   R0, R3",
-                         "cmp.b   #0, [R3]", f"be      {done:X}", "sub.w   #2, R1", "add.w   #1, R3", f"br      {count:X}",
-                         f"mov.w   {ATTR:X}, R3", "push    R3", "movz.bw 3[R2], R3", f"movz.bw {lay['hudattr']:X}(R3), {ATTR:X}",
-                         f"jsr     {PRINTER:X}", "pop     R2", f"mov.w   R2, {ATTR:X}", "rsr"]
+    count, done = at["cmp.b   #0, [R3]"], at["movz.bw 3[R2], R3"]
+    end = lines[-3].addr
+    assert texts[6:24] == ["mov.w   R8, R2", "mov.w   R0, R3", "popm    #103", f"mov.w   {ATTR:X}, R0", "push    R0", "push    R3",
+                           "mov.w   R2, R0", "add.w   #1C, R0", "add.w   #10, R1", "mov.w   R0, R3",
+                           "cmp.b   #0, [R3]", f"be      {done:X}", "sub.w   #2, R1", "add.w   #1, R3", f"br      {count:X}",
+                           "movz.bw 3[R2], R3", f"movz.bw {lay['hudattr']:X}(R3), {ATTR:X}", f"jsr     {PRINTER:X}"]
+    assert texts[24:27] == ["pop     R3", "cmp.w   #0, R3", f"be      {end:X}"]
+    assert texts[-3:] == ["pop     R2", f"mov.w   R2, {ATTR:X}", "rsr"]
     assert lines[-1].addr + 1 == lay["hudattr"]
     assert out.program[lay["hudattr"] - 0x200000:lay["hudattr"] - 0x200000 + 3] == bytes(LEVEL_ATTR)
-    assert lay["hudattr"] + 3 == lay["end"]
     assert [l.text for l in listing(rs, 0xFF479F, 3)] == ["mov.h   #51, 12[R25]", "mov.w   #5020C0, E[R25]", "movea.w 7000BA[PC], R1"]
     assert listing(rs, 0xFF47B6, 1)[0].text == "mov.w   #2F278E, R0"
     assert [l.text for l in listing(rs, 0xFE1C15, 5)][-1] == "mov.w   FD26E0[PC], R2"
 
 
+def test_hudname_prints_reverse_under_the_name_in_a_reverse_race(romset_zip, monkeypatch):
+    """Phase 32. Pascal, 15 Nov: "One additional idea, when playing a track in reverse it could have the word "reverse" under the
+    track name(maybe in a neon red style?)", then "Ok maybe just a shadows reverse then", then, to the lead's recommendations (red
+    on every course, the placement as built), "Yes all your recommendation". When `entry` served the reverse variant (its R0 1,
+    kept on the stack over the name's print), the printer is called a second time with R0 := "hudrev" (REVERSE and a NUL) and R1
+    := where the name's print left it (one past the 8th cell of row 44) + 0xF2: two rows down, seven cells back, so row 46,
+    columns 52-58, the last letter under the name's; rows 46-47. First [0x501434] := 0x82 (the game's EXPERT red, `mov.w` as the
+    word the printer reads); the game's word is put back after it as in a normal race. The glyphs are the printer's own: their
+    black outline is in the tiles (colour 2 of the 8 x 16 font), so the word has the name's dark edge with no more code. After it
+    R0 (past the text's NUL) and R1 (row 46, column 59) are written before any read (0xff47b6, 0xff47af), R3 is 0 and R8
+    [0x50143c] as after any print, R2 the restored word. The routine is 160 bytes, the whole listing 34 instructions (this test
+    and the two before it pin every one), and no environment variable changes it (the prototype's VR_HUD_REVERSE is gone)."""
+    from vrtools.arcade import hudname
+    from vrtools.arcade.hudname import FIELD_CELLS, REVERSE_ATTR, REVERSE_TEXT, hudname_routines, placeholders
+    rs, out, lay = _installed(romset_zip)
+    assert REVERSE_TEXT == b"REVERSE" and REVERSE_ATTR == 0x82 and 2 * 0x80 - 2 * len(REVERSE_TEXT) == 0xF2 and FIELD_CELLS == 8
+    lines, texts, at = _hudname(out, lay)
+    assert texts[27:-3] == [f"mov.w   #{REVERSE_ATTR:X}, {ATTR:X}", "add.w   #F2, R1", f"mov.w   #{lay['hudrev']:X}, R0", f"jsr     {PRINTER:X}"]
+    assert len(texts) == 34 and lay["hudattr"] - lay["hudname"] == 160
+    assert out.program[lay["hudrev"] - 0x200000:lay["hudrev"] - 0x200000 + 8] == b"REVERSE\0"
+    assert lay["hudrev"] == lay["hudattr"] + 3 and lay["hudrev"] + 8 == lay["end"]
+    assert listing(rs, 0xFF47AF, 1)[0].text == "movea.w 7000BA[PC], R1"                       # R1 written before any read
+    assert not hasattr(hudname, "reverse_style") and not hasattr(hudname, "STYLES")
+    plain = hudname_routines(0x27B000, placeholders({}, 0x27B000))
+    monkeypatch.setenv("VR_HUD_REVERSE", "off")
+    assert hudname_routines(0x27B000, placeholders({}, 0x27B000)) == plain and plain["hudrev"] == b"REVERSE\0"
+
+
 def test_hudname_follows_the_direction_screens_routines(romset_zip):
     """The routine and its 3-byte table join the directory image after the direction screen's "dirtext" (plan D10's room); the
-    image stays inside the 6 900-byte bound (tests/test_directory.py's; stage 4 Task 5, decision L2: 6 000 -> 6 500; Phase 27
-    Task 1: 6 374 bytes; Task 3: 6 856 bytes, 6 500 -> 6 900)."""
+    image stays inside the 7 000-byte bound (tests/test_directory.py's; stage 4 Task 5, decision L2: 6 000 -> 6 500; Phase 27
+    Task 1: 6 374 bytes; Task 3: 6 856 bytes, 6 500 -> 6 900; Phase 27b: 6 895 bytes; Phase 32, the word REVERSE under the name:
+    6 947 bytes, 6 900 -> 7 000). The text "hudrev" is the image's last part: a later routine printing the word reads the key."""
     from vrtools.arcade.dirscreen import LABELS, TITLE
     from vrtools.arcade.hudname import ROUTINES, hudname_size
     rs, out, lay = _installed(romset_zip)
-    assert ROUTINES == ("hudname", "hudattr")
+    assert ROUTINES == ("hudname", "hudattr", "hudrev")
     assert lay["hudname"] == lay["dirtext"] + len(TITLE) + 1 + sum(len(t) + 1 for t in LABELS)
-    assert lay["dirtext"] < lay["hudname"] < lay["hudattr"] < lay["end"] and lay["end"] - lay["hudname"] == hudname_size()
-    assert lay["end"] - lay["loader"] < 6900
+    assert lay["dirtext"] < lay["hudname"] < lay["hudattr"] < lay["hudrev"] < lay["end"] and lay["end"] - lay["hudname"] == hudname_size()
+    assert lay["end"] - lay["loader"] == 6947 < 7000

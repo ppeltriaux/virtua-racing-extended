@@ -120,7 +120,7 @@ def quads(obj: Object, tex_adr: int = 0) -> list[Quad]:
 
 # --- encoding (converter side) -----------------------------------------------
 
-MAX_RECORDS = 5500           # the display-list builder passes this cap as the object size
+MAX_RECORDS = 5500           # the display-list builder passes the frame budget as the object size: the game's 5 500 (10 500 since Phase 28)
 
 
 class ConvertError(Exception):

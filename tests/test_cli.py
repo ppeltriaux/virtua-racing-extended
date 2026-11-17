@@ -112,7 +112,18 @@ def test_build_writes_the_set_and_the_report(tmp_path, romset_zip, saturn_cue):
         assert (out / name).exists() == (roms / name).exists()
     report = (out / "build-report.txt").read_text()
     assert report.startswith("TGP budget:")
-    assert sum(1 for line in report.splitlines() if line.startswith("entry ")) == 7
+    from vrtools.arcade.tencourse import COURSES
+    tops = [line for line in report.splitlines() if line.startswith("entry ")]
+    courses = [line for line in tops if " reverse variant" not in line]          # one line per converted course, in menu order
+    assert [line.split(":")[0] for line in courses] == [f"entry {3 + k} {p.name}" for k, p in enumerate(COURSES)]
+    firsts = [line for line in tops if " reverse variant (from its own arcade tables): " in line]   # Phase 33: one per original
+    d0 = decode_directory(built)
+    assert [line.split(" reverse variant")[0] for line in firsts] == [f"entry {k} {d0[k].name}" for k in range(3)]
+    assert len(tops) == len(courses) + len(firsts) == 10
+    for k, line in enumerate(firsts):                                    # the addresses the built set's directory names
+        rv = d0[k].reverse
+        assert f": load {rv.at:#x}, " in line and f"header {rv.entry.header_base:#x} in bank {d0[k].bank}, " in line, line
+        assert f"race blob {rv.entry.race:#x}, " in line, line
     assert report.count("coverage") >= 7 and "mame vr -rompath" in report
     assert "polygon ROM left" in report.splitlines()[0]                  # Phase 18: the scenery layers' budget
     assert report.count("layers g0-g4, terrain thinned ") == 7 and report.count("terrain thinned ") == 7

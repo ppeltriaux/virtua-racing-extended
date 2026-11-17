@@ -57,8 +57,11 @@ end)}
 if os.getenv("VR_DLIST_LOG") and lua_dir then dofile(lua_dir .. "/dlist_log.lua") end
 if os.getenv("VR_TRACE_LOG") and lua_dir then dofile(lua_dir .. "/memtrace.lua") end
 if os.getenv("VR_RATE_LOG") and lua_dir then dofile(lua_dir .. "/renderrate.lua") end
+if (os.getenv("VR_FRAME_LOG") or os.getenv("VR_HOLD_CLOCK")) and lua_dir then dofile(lua_dir .. "/frame_rate.lua") end   -- Phase 28
+if os.getenv("VR_PASS_LOG") and lua_dir then dofile(lua_dir .. "/pass_state.lua") end                                   -- Phase 28
 if os.getenv("VR_COLLISION_LOG") and lua_dir then dofile(lua_dir .. "/collision_log.lua") end
 if os.getenv("VR_AUTOPILOT") and lua_dir then dofile(lua_dir .. "/autopilot.lua") end
+if (os.getenv("VR_INPUT_LOG") or os.getenv("VR_INPUT_REPLAY")) and lua_dir then dofile(lua_dir .. "/input_tape.lua") end   -- Phase 28
 if os.getenv("VR_FIELD_LOG") and lua_dir then dofile(lua_dir .. "/fieldtrace.lua") end
 if os.getenv("VR_HUDMAP_LOG") and lua_dir then dofile(lua_dir .. "/hudmap_log.lua") end
 if os.getenv("VR_WHEELS_LOG") and lua_dir then dofile(lua_dir .. "/wheels_log.lua") end
@@ -71,9 +74,12 @@ if os.getenv("VR_EDGES_LOG") and lua_dir then dofile(lua_dir .. "/edges_log.lua"
 if os.getenv("VR_SELECT_DIR") and lua_dir then dofile(lua_dir .. "/select_dump.lua") end
 if os.getenv("VR_DIR_LOG") and lua_dir then dofile(lua_dir .. "/dirscreen_log.lua") end
 if os.getenv("VR_HUD_LOG") and lua_dir then dofile(lua_dir .. "/hud_log.lua") end         -- stage 3 Task 6: the HUD name's cells
+if os.getenv("VR_TILE_DUMP_DIR") and lua_dir then dofile(lua_dir .. "/tile_dump.lua") end   -- Phase 32: the tile RAM at given frames
+if os.getenv("VR_HUDROWS_LOG") and lua_dir then dofile(lua_dir .. "/hudrows_log.lua") end   -- Phase 32: the HUD's rows 44-47
 if os.getenv("VR_SLOT_LOG") and lua_dir then dofile(lua_dir .. "/slot_log.lua") end       -- stage 3 Task 7: the middle slot on screen
 if os.getenv("VR_PIT_LOG") and lua_dir then dofile(lua_dir .. "/pit_log.lua") end         -- stage 4 Task 4: the pit stop and its crew
 if os.getenv("VR_CREW_DRAW_LOG") and lua_dir then dofile(lua_dir .. "/crewdraw_log.lua") end   -- stage 4 Task 5: the crew's mirrored pushes
+if os.getenv("VR_SOUND_LOG") and lua_dir then dofile(lua_dir .. "/sound_log.lua") end         -- Phase 37: the sound latch and the tunnel flag
 
 local function field(tag, name)
   local port = manager.machine.ioport.ports[tag]
@@ -179,5 +185,5 @@ emu.register_frame_done(function()
     if manual then start:set_value((start_off and answering and mem:read_u8(0x501139) == 0x10) and 0 or 1) end
   end
 end)
--- VR_EXTRA_LUA: another script to run alongside (experiments)
-if os.getenv("VR_EXTRA_LUA") then dofile(os.getenv("VR_EXTRA_LUA")) end
+-- VR_EXTRA_LUA: other scripts to run alongside (experiments), separated by ';' (Phase 27b: race_end.lua and ranking_attract.lua)
+if os.getenv("VR_EXTRA_LUA") then for path in string.gmatch(os.getenv("VR_EXTRA_LUA"), "[^;]+") do dofile(path) end end

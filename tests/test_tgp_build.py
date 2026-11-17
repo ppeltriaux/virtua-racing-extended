@@ -243,6 +243,20 @@ def _seven(romset_zip, saturn_cue):
     return _SEVEN[key]
 
 
+_PLAIN: dict = {}
+
+
+def _seven_plain(romset_zip, saturn_cue):
+    """Phase 33: the session's set built WITHOUT the three originals' reverse variants (`originals_reverse=False`): the set as
+    it was before Phase 33, for the tests of an entry without a variant and as the reference the full set is compared with."""
+    from vrtools.arcade.tencourse import ten_course_set
+    key = str(romset_zip)
+    if key not in _PLAIN:
+        out, conv = _built(romset_zip, saturn_cue)
+        _PLAIN[key] = (ten_course_set(out, conv, originals_reverse=False), conv)
+    return _PLAIN[key]
+
+
 @pytest.mark.parametrize("k", range(1, 7))                                   # the six new courses (Alpine is Phase 7's gate)
 def test_each_new_course_drives_at_the_arcade_rate(tmp_path, romset_zip, saturn_cue, k):
     from vrtools.arcade.select import WHEEL_FOR_ENTRY

@@ -10,7 +10,10 @@ from vrtools.arcade.tgp import slot_table
 from tests.test_convert_collision import _saturn_course
 
 
-BANK_ONE_FLOOR = 13_000     # Phase 26 stage 2: bytes bank 1 keeps in its largest free run (recon §2: 13 488 with three stored reverse lines)
+BANK_ONE_FLOOR = 1_152      # bytes bank 1 has in its largest free run, EXACTLY (review, Phase 33 fix wave: not a floor chosen to pass).
+                            # Phase 26 stage 2 kept 13 000 as a floor (13 488 left with three stored reverse lines a converted course);
+                            # Phase 33's Bay Bridge one-line reverse variant (a stopgap, tencourse.ORIGINAL_REVERSE_PAIRS) takes 12 336
+                            # of the 13 488, by design: the bank is full, and any other writer into bank 1 changes this number
 
 
 def replace_copro_free(rs: RomSet, words: int) -> RomSet:
@@ -280,7 +283,7 @@ def test_every_course_has_its_own_backdrop(romset_zip, saturn_cue):
         a, b = read_panorama(rs, course_entry_at(rs, bank)), read_panorama(out, course_entry_at(out, bank))
         assert a.tiles == b.tiles and a.palettes == b.palettes and (a.map == b.map).all() and a.uploads == b.uploads, bank
         if bank == 1:                                                      # Phase 26 stage 2: design §6.4 (Pascal) spends bank 1's free space on the
-            assert max(n for _, n in free_runs(out, bank, min_size=16)) >= BANK_ONE_FLOOR, bank   # reverse lines (99 888 of 113 380 bytes), so the
+            assert max(n for _, n in free_runs(out, bank, min_size=16)) == BANK_ONE_FLOOR, bank   # reverse lines (99 888 of 113 380 bytes), so the
         else:                                                              # Phase 18b reserve no longer applies there; a later writer that does not
             assert sum(n for _, n in free_runs(out, bank)) >= 16 * 1024, bank   # fit fails in place_blob with the sizes
     for c in conv:

@@ -23,12 +23,12 @@ from vrtools.mame.runner import LUA_DIR, parse_edges, parse_field, parse_race_lo
 from tests.test_race_build import (BACKSTEP_MAX, CURSOR_LEAD_MAX, CURSOR_LEAD_MAXES, LEADER_FLOOR, MOVED_FLOOR, PARKED_DEFAULT,
                                    RATE_FLOOR, _drive_entry, _drive_line, _race)
 from tests.test_tencourse import BANK_ONE_FLOOR
-from tests.test_tgp_build import _built, _seven
+from tests.test_tgp_build import _built, _seven, _seven_plain
 
 COURSES = {3: 452, 4: 330, 5: 457, 6: 365, 7: 410, 8: 387, 9: 441}   # Phase 26 stage 2: entry -> road points (recon §2)
 METROPOLIS = 6              # the put-back and the warning's positive control stay on Metropolis (stage 2 Task 6: the races run on COURSES)
 N = COURSES[METROPOLIS]     # Metropolis's road points (recon §3.1)
-BAY_BRIDGE = 1              # an original course: no variant (the flag-without-variant test)
+BAY_BRIDGE = 1              # an original course: no variant on the set without the originals' variants (`_seven_plain`, Phase 33)
 
 
 def _plan(entry):
@@ -49,7 +49,7 @@ def line_pointers(rs, entry):
 
 def _annex(d):
     """[lo, hi): from the first variant's load record to the end of the last variant's race blob."""
-    rec = [e.reverse for e in d[3:10]]
+    rec = [e.reverse for e in d if e.reverse is not None]      # Phase 33: the originals' records follow the seven's
     return min(r.at for r in rec), max(r.entry.race for r in rec) + RACE_BLOB_BYTES
 
 
@@ -79,7 +79,7 @@ def test_every_converted_course_has_a_reverse_record(romset_zip, saturn_cue):
     not the normal pair's quad, the normal box turned half a turn (on Metropolis moved up the lane to z 269.74)."""
     out, conv = _seven(romset_zip, saturn_cue)
     d = decode_directory(out)
-    assert [e.reverse is not None for e in d[:10]] == [False] * 3 + [True] * 7
+    assert [e.reverse is not None for e in d[:10]] == [True] * 10        # Phase 33: the originals too (tests/test_originals_reverse.py)
     assert [e.name for e in d[3:10]] == [p.name for p in PLANS]
     for entry in COURSES:
         _, n, rv, _, _ = _both(out, entry)
@@ -420,11 +420,12 @@ def test_the_variant_only_adds_bytes(romset_zip, saturn_cue):
     variant's blob in its entry's data bank, and the entries' words of the directory's reverse table: nothing of the normal
     build moves or is overwritten. The boot ROM is the same: the direction sites are patched with or without the variants.
     Phase 27 (L3): the ranking image's attract groups also differ, by exactly each variant's reverse id after its course's id
-    (`ranking.attract_groups`); the groups' 48 bytes stay where they are."""
+    (`ranking.attract_groups`); the groups' 48 bytes stay where they are. Phase 27b: so do the positions (a byte by ranking id,
+    `ranking.attract_positions`), each set's from its own groups."""
     import numpy as np
-    from vrtools.arcade.ranking import GROUP_BYTES, REVERSE_ID_SHIFT, attract_groups, ranking_layout
+    from vrtools.arcade.ranking import GROUP_BYTES, IDS, REVERSE_ID_SHIFT, attract_groups, attract_positions, ranking_layout
     a = ten_course_set(*_built(romset_zip, saturn_cue), reverse=False)
-    b, _ = _seven(romset_zip, saturn_cue)
+    b, _ = _seven_plain(romset_zip, saturn_cue)                  # Phase 33: the seven's variants alone (the originals': test_originals_reverse.py)
     assert (a.boot, a.polygons, a.copro_data, a.tgp_program) == (b.boot, b.polygons, b.copro_data, b.tgp_program)
     d = decode_directory(b)
     assert all(e.reverse is None for e in decode_directory(a))
@@ -448,7 +449,11 @@ def test_the_variant_only_adds_bytes(romset_zip, saturn_cue):
                       for k in range(3)]
     assert read(bp) == attract_groups(d) and read(ap) == attract_groups(decode_directory(a))
     assert read(ap) == [[i for i in g if i < 3 + REVERSE_ID_SHIFT] for g in read(bp)] != read(bp)   # only the reverse ids added
-    rest = ~words & ~grp
+    positions = ranking_layout(directory_layout()["ranking"])["positions"] - V60_PROGRAM     # Phase 27b
+    pos = (positions <= prog) & (prog < positions + IDS)
+    assert list(bp[positions:positions + IDS]) == attract_positions(d)
+    assert list(ap[positions:positions + IDS]) == attract_positions(decode_directory(a))
+    rest = ~words & ~grp & ~pos
     assert ((lo - V60_PROGRAM <= prog[rest]) & (prog[rest] < hi - V60_PROGRAM)).all(), [hex(V60_PROGRAM + i) for i in prog[rest][:8]]
     assert (ap[prog[rest]] == 0xFF).all()                                        # the annex was erased
     assert (ap[table:table + 40] == 0).all()                                     # no reverse record in the set without
@@ -884,7 +889,7 @@ def test_a_set_flag_changes_nothing_on_a_course_without_a_variant(tmp_path, roms
     from vrtools.arcade.course import DIRECTION_RAM
     from vrtools.mame.runner import parse_collision
 
-    out, conv = _seven(romset_zip, saturn_cue)
+    out, conv = _seven_plain(romset_zip, saturn_cue)
     assert out is not None and decode_directory(out)[BAY_BRIDGE].reverse is None
     dump = {"VR_TRACE_DUMP": "2200", "VR_TRACE_FROM": "0", "VR_TRACE_TO": "0"}
     streams = {}
@@ -961,8 +966,8 @@ def _print_start(label, player, cars):
 def test_the_flag_leaves_big_forests_pit_start_alone(tmp_path, romset_zip, saturn_cue):
     """The original Big Forest (entry 0, no variant) with the flag held at 1 on the select screen: the loader serves the normal
     record and writes back 0 before 0xfe41d6, so the crew start is taken (pit state 6 during mode 0x12, the green after the
-    crew's wait) and the run is the run with the flag 0, frame for frame."""
-    out, _ = _seven(romset_zip, saturn_cue)
+    crew's wait) and the run is the run with the flag 0, frame for frame. Phase 33: on the set without the originals' variants."""
+    out, _ = _seven_plain(romset_zip, saturn_cue)
     runs = {r: _start_run(tmp_path, romset_zip, out, 0, r, f"bigforest_{'flag' if r else 'plain'}") for r in (True, False)}
     for r, (load, player, cars, _) in runs.items():
         _print_start(f"bigforest flag={int(r)}", player, cars)
@@ -1106,8 +1111,9 @@ def test_the_flag_leaves_acropolis_figures_alone(tmp_path, romset_zip, saturn_cu
     record and writes back 0 before the race-start task runs, so the three figures are placed and their stream (flags, record,
     position, animation offset, headings) and the player's are the flag-0 run's, frame for frame. Task 8 (the Task 7 review: the
     test could pass with a flag that never reached the byte): the byte read 1 on the select screen's last frame in the flag run
-    and 0 in the plain run, and 0 in both from the figures' first frame on (the loader's write-back)."""
-    out, _ = _seven(romset_zip, saturn_cue)
+    and 0 in the plain run, and 0 in both from the figures' first frame on (the loader's write-back). Phase 33: on the set
+    without the originals' variants."""
+    out, _ = _seven_plain(romset_zip, saturn_cue)
     runs = {r: _figures_run(tmp_path, romset_zip, out, ACROPOLIS, r, f"acropolis_{'flag' if r else 'plain'}") for r in (True, False)}
     for r, (load, player, figures) in runs.items():
         placed = _placed(figures)

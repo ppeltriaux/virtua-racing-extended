@@ -6,6 +6,8 @@ import math
 import os
 import struct
 import subprocess
+import threading
+from contextlib import nullcontext
 from dataclasses import dataclass
 from pathlib import Path
 from typing import NamedTuple
@@ -17,13 +19,34 @@ class MameError(Exception):
     pass
 
 
+_SLOTS: dict[int, threading.BoundedSemaphore] = {}
+_SLOTS_LOCK = threading.Lock()
+
+
+def _slot():
+    """VR_MAME_JOBS=n: at most n MAME processes of this Python process run at once (the test sessions start theirs in parallel
+    threads); unset, no limit."""
+    n = os.environ.get("VR_MAME_JOBS")
+    if not n:
+        return nullcontext()
+    try:
+        k = int(n)
+    except ValueError:
+        k = 0
+    if k <= 0:
+        raise MameError(f"VR_MAME_JOBS must be a positive integer, not {n!r}")
+    with _SLOTS_LOCK:
+        return _SLOTS.setdefault(k, threading.BoundedSemaphore(k))
+
+
 def run_mame(script: Path, seconds: int, workdir: Path, rom_dir: Path, env: dict[str, str] | None = None,
              mame: str = "mame", timeout: float | None = None, extra_args: list[str] | None = None) -> subprocess.CompletedProcess:
     """Run MAME headless for `seconds` emulated seconds with the Lua `script`; MameError when it fails or, with
     `timeout` (wall-clock seconds), when it does not end in time (it is killed). `extra_args` go at the end of the
     command (e.g. `["-aviwrite", "run.avi"]`: MAME writes the AVI under its snapshot directory, with sound). The scripts get
     VR_LUA_DIR and (Phase 26 stage 3) VR_REVERSE_TABLE, the reverse table's address in this tree's directory layout (hex), with
-    which autoplay.lua knows the courses whose lock opens the COURSE DIRECTION screen; `env` overrides either."""
+    which autoplay.lua knows the courses whose lock opens the COURSE DIRECTION screen; `env` overrides either. With VR_MAME_JOBS
+    set in the environment, at most that many of these calls run MAME at once (`_slot`)."""
     from vrtools.arcade.directory import directory_layout
     workdir = Path(workdir)
     workdir.mkdir(parents=True, exist_ok=True)
@@ -33,7 +56,8 @@ def run_mame(script: Path, seconds: int, workdir: Path, rom_dir: Path, env: dict
            "-cfg_directory", str(workdir / "cfg")] + list(extra_args or [])
     full_env = {**os.environ, "VR_LUA_DIR": str(LUA_DIR), "VR_REVERSE_TABLE": f"{directory_layout()['reverse']:x}", **(env or {})}
     try:
-        proc = subprocess.run(cmd, cwd=workdir, env=full_env, capture_output=True, text=True, timeout=timeout)
+        with _slot():
+            proc = subprocess.run(cmd, cwd=workdir, env=full_env, capture_output=True, text=True, timeout=timeout)
     except subprocess.TimeoutExpired as e:
         raise MameError(f"mame did not end within {timeout} s and was killed") from e
     except FileNotFoundError as e:                       # no such program: say so instead of the system's own error
@@ -242,6 +266,30 @@ def parse_hud_log(path: Path) -> list[HudFrame]:
             words = tuple(int(v, 16) for v in p[4:])
             out.append(HudFrame(int(p[2], 16), int(p[1]), int(p[3], 16), words[:n], words[n:]))
     return out
+
+
+class HudRows(NamedTuple):
+    """One R line of hudrows_log.lua (Phase 32): layer 0's rows 44-47, all 64 columns."""
+    frame: int          # counted from 1 at the first frame end, as autoplay.lua counts
+    mode: int           # 0x501138
+    tag: str            # load, race, lap, goal, m, m30 (hudrows_log.lua)
+    race: int           # the session's race, from 1
+    rows: dict[int, tuple[int, ...]]        # row (44-47) -> its 64 tile words
+
+
+def parse_hudrows_log(path: Path) -> tuple[list[HudRows], dict[int, int]]:
+    """hudrows_log.lua's lines: the R lines, and {race: writes} from the T lines (the writes to rows 44-47 from column 19 on,
+    from the race line to the race's end: each race's last T line). Incomplete lines are skipped (MAME can end a run in the
+    middle of a line)."""
+    rows, writes = [], {}
+    for line in open(path):
+        p = line.split()
+        if p and p[0] == "R" and len(p) == 5 + 4 * 64:
+            w = tuple(int(v, 16) for v in p[5:])
+            rows.append(HudRows(int(p[1]), int(p[2], 16), p[3], int(p[4]), {44 + k: w[64 * k:64 * k + 64] for k in range(4)}))
+        elif p and p[0] == "T" and len(p) == 4:
+            writes[int(p[2])] = int(p[3])
+    return rows, writes
 
 
 class FigureLoad(NamedTuple):
@@ -461,6 +509,70 @@ def drive_summary(samples: list[CollisionSample]) -> dict:
             "ymin": min(s.result_y for s in head) if head else None, "ymax": max(s.result_y for s in head) if head else None,
             "onroad_calls": len(head),
             "onroad_distance": sum(math.hypot(b.x - a.x, b.z - a.z) for a, b in zip(head, head[1:]))}
+
+
+SOUND_HIGH_PC = 0xFFA2A6            # Phase 37: the instruction that writes a sound command's high byte to the latch 0xc40000 ...
+SOUND_LOW_PC = 0xFFA36A             # ... and the one that writes its low byte, a logic frame later
+SOUND_TUNNEL_ON, SOUND_TUNNEL_OFF, SOUND_RESET = 0xC201, 0xC200, 0x8100
+RACE_MODE = 0x14                    # the mode byte 0x501139 from the green to the race's end
+PLAYER_HANDLER = 0xFE8E18           # the player's handler in a race (stage 4 recon: the pit release restores it)
+
+
+class SoundFlag(NamedTuple):
+    """One F line of sound_log.lua: the player at a frame end at which the mode, the gate, the handler, the quad or a flag changed."""
+    frame: int
+    mode: int           # 0x501139
+    gate: int           # 0x501120 (bits 18 and 20 let a race sound through 0xffa24b)
+    handler: int        # +0xa
+    quad: int           # +0x30, the lap-position quad whose segment flag the player copies
+    flag: int           # +0x152, that flag
+    previous: int       # +0x195, last logic frame's copy
+    road_point: int     # +0xa6
+
+
+class SoundLog(NamedTuple):
+    commands: list[tuple[int, int]]      # (frame of the low byte, 16-bit command) in the order sent
+    flags: list[SoundFlag]
+    complete: bool                       # the log ends with END
+
+    def tunnel(self) -> list[tuple[int, int]]:
+        """The commands that move the sound board's tunnel bit: C201 sets it, C200 and the reset 8100 clear it."""
+        return [(f, c) for f, c in self.commands if c in (SOUND_TUNNEL_ON, SOUND_TUNNEL_OFF, SOUND_RESET)]
+
+    def bit_at(self, frame: int) -> int:
+        """The sound board's tunnel bit after every command sent up to `frame` (0 at power-on: the board's own reset clears it)."""
+        bit = 0
+        for f, c in self.tunnel():
+            if f > frame:
+                break
+            bit = 1 if c == SOUND_TUNNEL_ON else 0
+        return bit
+
+
+def parse_sound_log(path: Path) -> SoundLog:
+    """sound_log.lua's log (VR_SOUND_LOG). A command is a high byte from SOUND_HIGH_PC followed by the next byte from SOUND_LOW_PC;
+    MameError for any other byte or order (the boot's own writes before the game runs, from other PCs, are skipped)."""
+    commands, flags, high, complete = [], [], None, False
+    for line in open(path):
+        p = line.split()
+        if not p:
+            continue
+        if p[0] == "END":
+            complete = True
+        elif p[0] == "S" and len(p) == 4:
+            frame, byte, pc = int(p[1]), int(p[2], 16), int(p[3], 16)
+            if pc == SOUND_HIGH_PC:
+                if high is not None:
+                    raise MameError(f"{path}: two high bytes in a row at frame {frame}")
+                high = byte
+            elif pc == SOUND_LOW_PC:
+                if high is None:
+                    raise MameError(f"{path}: a low byte without its high byte at frame {frame}")
+                commands.append((frame, high << 8 | byte))
+                high = None
+        elif p[0] == "F" and len(p) == 9:
+            flags.append(SoundFlag(int(p[1]), *(int(v, 16) for v in p[2:8]), int(p[8])))
+    return SoundLog(commands, flags, complete)
 
 
 def write_centreline(path: Path, points) -> Path:

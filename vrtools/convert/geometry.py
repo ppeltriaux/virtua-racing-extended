@@ -7,7 +7,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from vrtools.arcade.colours import Palette, nearest
+from vrtools.arcade.colours import PALETTE_BASE, Palette, nearest
 from vrtools.arcade.polyrom import Quad, decode_object, quads as poly_quads
 from vrtools.arcade.romset import RomSet
 from vrtools.arcade.course import tile_table
@@ -29,6 +29,8 @@ class WorldQuad:
     rgb: tuple[int, int, int]
     one_sided: bool = False      # Phase 26 stage 2: drawn only from the side the Saturn's winding shows it to (a gate's lettering
                                  # and its mirrored copy: gates.lettered_quads); every other face is drawn from both sides
+    palette: int | None = None   # Phase 29: an arcade prop's own palette index (props.baked), written as it is; None: the palette
+                                 # entry nearest `rgb`
 
 
 _PLACEMENT = [1.0, 0.0, 0.0, 0.0]        # cos, sin, tx, tz of the course placement in arcade space (identity by default)
@@ -173,6 +175,7 @@ TILE_GRID = CellGrid(-1024.0, -1024.0, 128.0, 128.0)   # the game's rule: tile c
 TILE_GROUPS = (0, 1, 2, 3, 4)                          # the Saturn's layers (Phase 18 recon §1): 0 road and ground, 1 terrain,
                                                        # 2 road paint, 3 structures; 4 the props
 TERRAIN_GROUP = 1
+STRUCTURE_GROUP = 3            # the Saturn's structures (Alpine: its pines and buildings)
 TERRAIN_KEEP_DISTANCE = 60.0   # arcade units: terrain this close to the centreline is never thinned (the roadside stays whole)
 
 
@@ -220,37 +223,81 @@ OUTSIDE_MAP_MAX = 50           # Phase 22l: a lap start at the Saturn's flag may
                                # (the Surfers Oval's and Road's 11 at x 1024); they are left out, not an error
 
 
+def first_split(cell: int, coloured: list, max_records: int, holds_props: bool = False) -> tuple[list, bool]:
+    """The faces of `cell` that one object of `max_records` holds (`polyrom.split_quads`' first part) and whether the cell was capped
+    (the rest is not drawn). A capped cell that holds prop faces is a ConvertError (Phase 29 review): the props are added last, so
+    the cap would drop them, or half a copy, without a word."""
+    from vrtools.arcade.polyrom import split_quads
+    parts = split_quads(coloured, max_records)
+    if len(parts) > 1 and holds_props:
+        raise ConvertError(f"cell {cell:#x} holds prop faces and is over {max_records} records ({len(coloured)} faces): the cap "
+                           f"would drop them; plant fewer props there")
+    return parts[0], len(parts) > 1
+
+
 def convert_tiles(sat: SaturnCourse, rs: RomSet, course_index: int, groups: tuple[int, ...] = TILE_GROUPS,
                   max_records: int = 5500, thin: float = 0.0,
                   keep_near: list[tuple[float, float]] | None = None, terrain_thin: float = 0.0,
-                  outside_limit: int = 0, lettering: bool = True) -> tuple[dict[int, tuple[bytes, object, int]], dict[int, int], dict]:
+                  outside_limit: int = 0, lettering: bool = True, props=(), prop_collision=(),
+                  far_copies: tuple = ()) -> tuple[dict[int, tuple[bytes, object, int]], dict[int, int], dict]:
     """The Phase 4 pipeline for a course's scenery: Saturn tiles (groups) -> world quads -> 128-unit cells ->
     coloured, encoded polygon-ROM objects, one per cell, with the colour-table entries they need.
 
     Returns (cell_objects {cell: (bytes, ObjectLayout, tex_start)}, colour_words {tex: word}, report). A quad
     whose centre leaves the collision map (|x| or |z| >= 1024) is a ConvertError: the course needs a translation —
     unless at most `outside_limit` do (Phase 22l: a flag start's trade-off), which are left out (report["outside"]).
-    A cell over `max_records` keeps its first split (report["capped_cells"]). With `thin` > 0, quads smaller than
+    A cell over `max_records` keeps its first split (report["capped_cells"]; `first_split`: a ConvertError if it holds prop faces). With `thin` > 0, quads smaller than
     `thin` (XZ area) and farther than THIN_KEEP_DISTANCE from every `keep_near` point are left out
     (report["thinned"]): the render-rate lever for the busiest courses. The terrain goes through `scenery_quads`
     first (`terrain_thin`; report["terrain_thinned"]). The props (group 4) come from `gates.lettered_quads`: a drawn gate's
     lettering one-sided with a mirrored one-sided copy facing the other way (Phase 26 stage 2; `lettering` False: every
     prop face two-sided, as before; report["lettering_copies"]: the copies added); the collision never sees them (it reads
-    the Saturn course itself)."""
+    the Saturn course itself). Phase 29: `props` ((props.ArcadeProp, [(x, z, heading)], [road point or None]), ...) are planted
+    (`props.plant`) on the drawn ground and terrain kept here, away from the kept structures and props (groups 3 and 4) and from
+    `prop_collision` (the collision quads' corners), and added after the thinning, each copy whole in the cell of its foot
+    (`props.cells_by_foot`; report["props"]: the copies as built, report["prop_faces"]: their faces, report["prop_models"]: each
+    entry's prop as planted; "quads" stays the Saturn's). A prop may be given as a callable taking the kept upright scenery and
+    returning the ArcadeProp (Phase 34: `props.CourseProp`).
+    With `far_copies` (Phase 31 prototype: silhouette.FarCopy) the objects, words and every other
+    report key are what they are without them; report["far_cells"] holds the quads of the cells the copies change, for
+    `farcopy.install_far_copies` to install after everything else, and report["far_copies"] their counts."""
     from vrtools.arcade.colours import colour_table, free_runs, palette_from_rom
-    from vrtools.arcade.polyrom import encode_object, split_quads
+    from vrtools.arcade.polyrom import encode_object
     from vrtools.convert.gates import GATE_GROUP, lettered_quads
     by_group = {g: course_quads(sat, groups=(g,)) for g in groups}
     copies = 0
     if lettering and GATE_GROUP in by_group:
-        props = len(by_group[GATE_GROUP])
+        faces = len(by_group[GATE_GROUP])
         by_group[GATE_GROUP] = lettered_quads(sat)          # Phase 26 stage 2: the gates' lettering reads from both sides (scenery only)
-        copies = len(by_group[GATE_GROUP]) - props
+        copies = len(by_group[GATE_GROUP]) - faces
     if ROAD_GROUP in by_group:
         by_group[ROAD_GROUP] = road_greys(by_group[ROAD_GROUP])          # Phase 24: the road at the arcade's grey levels
     layered, layer_report = scenery_quads(by_group, keep_near, terrain_thin)
     quads, thinned = thin_quads(layered, thin, keep_near)
+    planted: list = []
+    prop_copies: list = []                                  # (review I1: not `copies`, the gates' lettering count above)
+    prop_models: list = []                                  # Phase 34: each entry's prop as planted
+    if props:
+        from vrtools.convert.props import plant
+        kept = {id(q) for q in quads}
+        ground = [q for g in (ROAD_GROUP, TERRAIN_GROUP) for q in by_group.get(g, []) if id(q) in kept]
+        upright = [q for g in (STRUCTURE_GROUP, GATE_GROUP) for q in by_group.get(g, []) if id(q) in kept]
+        for prop, sites, points in props:
+            if callable(prop):                              # Phase 34: a prop cut from this course's own upright scenery
+                prop = prop(upright)                        # (props.CourseProp), read here where that scenery is
+            prop_models.append(prop)
+            pq, pp = plant(prop, sites, ground, upright, prop_collision, points)
+            n = len(prop.faces)
+            prop_copies += [(site, pq[n * i:n * (i + 1)]) for i, site in enumerate(pp)]
+            planted.extend(pp)
     cells, outside = bin_quads(quads, TILE_GRID)
+    prop_cells: set[int] = set()
+    if prop_copies:
+        from vrtools.convert.props import cells_by_foot
+        for cell, faces in cells_by_foot(prop_copies, TILE_GRID).items():     # a copy stays whole in its foot's cell
+            cells.setdefault(cell, []).extend(faces)
+            prop_cells.add(cell)
+    prop_faces = sum(len(f) for _, f in prop_copies)
     if outside and len(outside) > outside_limit:
         q = outside[0]
         raise ConvertError(f"{len(outside)} scenery quads leave the collision map (first centre "
@@ -261,20 +308,27 @@ def convert_tiles(sat: SaturnCourse, rs: RomSet, course_index: int, groups: tupl
     objects: dict[int, tuple[bytes, object, int]] = {}
     words: dict[int, int] = {}
     capped = 0
+    capped_cells: set[int] = set()
     for cell, cq in sorted(cells.items()):
         coloured, w = assign_colours(cq, pal, tex_start=tex)
         if tex + len(w) > run_start + run_len:
             raise ConvertError("colour table free run exhausted")
         words.update(w)
-        parts = split_quads(coloured, max_records)
-        if len(parts) > 1:
-            capped += 1
-        blob, layout = encode_object(parts[0], tex_start=tex, no_cull=True)
+        first, over = first_split(cell, coloured, max_records, cell in prop_cells)
+        capped += over
+        if over:
+            capped_cells.add(cell)
+        blob, layout = encode_object(first, tex_start=tex, no_cull=True)
         objects[cell] = (blob, layout, tex)
         tex += len(w)
     report = {"outside": len(outside), "cells": len(objects), "quads": len(quads), "colour_entries": len(words),
               "polygon_bytes": sum(len(o[0]) for o in objects.values()), "capped_cells": capped, "thinned": thinned,
               "lettering_copies": copies, **layer_report}
+    if props:
+        report.update(props=planted, prop_faces=prop_faces, prop_models=prop_models)
+    if far_copies:                                                               # Phase 31 (prototype): installed later
+        from vrtools.convert.silhouette import far_copy_cells
+        report["far_cells"], report["far_copies"] = far_copy_cells(cells, tuple(far_copies), capped=capped_cells)
     return objects, words, report
 
 
@@ -332,8 +386,10 @@ def assign_colours(quads: list[WorldQuad], pal: Palette, tex_start: int) -> tupl
     Returns polyrom Quads (with tex_adr set) and the table words {tex_adr: word} to write. A one-sided WorldQuad (Phase 26
     stage 2) becomes a one-sided Quad with its corners reversed under the lighting normal it had: the arcade draws a culled
     record from the side its corners' right-hand normal faces (the originals' culled ground faces up that way: 9 177 of
-    9 793 horizontal records on Big Forest), the opposite of the Saturn's winding (the converted road's points down)."""
-    keyed = sorted(((nearest(pal, qd.rgb), i, qd) for i, qd in enumerate(quads)), key=lambda k: (k[0], k[1]))
+    9 793 horizontal records on Big Forest), the opposite of the Saturn's winding (the converted road's points down). A quad with a
+    `palette` index (Phase 29: an arcade prop's face) takes that entry instead of the nearest colour."""
+    keyed = sorted(((nearest(pal, qd.rgb) if qd.palette is None else PALETTE_BASE + qd.palette, i, qd) for i, qd in enumerate(quads)),
+                   key=lambda k: (k[0], k[1]))
     out: list[Quad] = []
     words: dict[int, int] = {}
     tex = tex_start - 1

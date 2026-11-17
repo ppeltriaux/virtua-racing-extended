@@ -37,7 +37,8 @@ Words used below:
 - §11 the playtest set;
 - §12 not verified;
 - §13 status;
-- §14 review items parked, open.
+- §14 review items parked, open;
+- §15 the follow-up: the attract's first page after a game (Phase 27b).
 
 ## 1. What was built
 
@@ -546,3 +547,84 @@ The items as the ledger worded them, task by task:
   updated (§10); §9's partly drawn rows at one frame end per screen of a normal page (closed by the lead's ruling as within main's
   own spread, not measured further);
   the launcher's start battery RAM takes the fresh path (§11).
+
+## 15. The attract's first page after a game
+
+A follow-up on branch `phase27b-attract-jump` (from main at 6d04860), on Pascal's request: "Add the follow up to jump to the race we
+just did" (§14's parked question). Their only words on it. Not merged, not driven by Pascal.
+
+- **What was built** (`vrtools/arcade/ranking.py`): at the race's end, after the ranking setter, the counter of the raced course's
+  attract group is set to the position in that group of the table the setter chose (the course's id, or id + 7 in a reverse race),
+  so the attract's first ranking page after the game shows that table; `attract` then stores position + 1 as before and the
+  rotation goes on from the member after it, wrapping as before.
+  - **The site** 0xfc40e1 (10 bytes; `movz.bw 501934[PC], R0; bsr FC4208`, bytes `0d20f253d853ff482001`, checked before the patch;
+    no branch in the listing lands inside it) becomes `bsr FC4208; jsr raceend; nop`. The `movz.bw` was dead since Phase 22r (the
+    setter loads the ranking id itself). The insert at 0xfc40eb follows unchanged.
+  - **`raceend`** (22 bytes): `movz.bw 501934, R1; mov.b positions(R0), 40FC6A(R1); rsr`. R0 is the id the setter chose (`common`
+    keeps it); R1 and R0 are reloaded by the insert's next two instructions. The counter written is the data index's, the group the
+    first page after the game reads (recon §3: the page after a Metropolis race read Acropolis's group).
+  - **`positions`** (17 bytes, by ranking id 0..16; `attract_positions`): each id's index in its group; 0 for an id in no group.
+  - **Not touched:** the name entry's setter call (0xfc4226), the attract page's (0xfc3c33), the setter, the page, the insert.
+  - **Room:** the directory image's `end − loader` 6 856 → **6 895** bytes; the test bound 6 900 is not raised. The free run below the
+    start-gantry block: 2 000 bytes at 0x28f1a0 → **1 952 at 0x28f1d0** (the tables after the image moved +0x30).
+  - **Battery RAM:** one byte written that a race did not write before (`0x40fc6a + data index`, the counter the attract page
+    already keeps). Magic and reverse tag unchanged; a v0.2.1 save keeps everything.
+  - **Which races:** every race that reaches the setter at 0xfc40e1, that is every finished race (0xfc40d6 tests the finish bit 1
+    of 0x501174, set by the lap count code at 0xfea2d8), with or without a record, normal or reverse, any course. A race that does
+    not finish (time over) skips the insert and the setter and leaves the counter: the attract goes on with its rotation (read in
+    the listing, not run).
+- **Harness:** autoplay.lua's VR_EXTRA_LUA takes several scripts separated by ';' (race_end.lua and ranking_attract.lua together);
+  `run_mame` honours VR_MAME_JOBS=n (at most n MAME processes at once from one pytest process). The autopilot finishes a one-lap Bay
+  Bridge race on the Saturn track's centreline with a lookahead of 3 points (with the default 6 the car stuck on a wall from frame ~4 000; 10 finished later;
+  scratch runs `out/p27b/bay*`, `la3`, `la10`, `lift3`).
+- **Measured** (MAME 0.289, one-lap `race_end.lua` races under the autopilot, fresh battery RAM; tests in
+  `tests/test_reverse_ranking.py`, "Phase 27b"):
+
+  | run | race (time, 1/32 s) | first page after the game (frame, group, id) | then | main (6d04860) |
+  |---|---|---|---|---|
+  | Metropolis normal | 1 896, record | 8 046, Acropolis's, **6** (four screens, its title) | next of that group 15 072: **13** (Metropolis reverse) | 8 046, id 1 (Acropolis) |
+  | Amazon Falls reverse | 1 683, record | 7 620, Bay Bridge's, **11** "AMAZON FALLS REVERSE RANKING", one screen of four rows | | 7 620, id 4 (measured on this tree before the change) |
+  | Bay Bridge (an original) | 2 136, record | 8 526, Bay Bridge's, **0** (MEDIUM COURSE RANKING) | | 8 526, id 4 (before the change) |
+  | Metropolis reverse, no record (the table preset 4 .. 1 s faster at its results) | 1 908, no record, no name entry | 6 532, Acropolis's, **13** | next of that group 12 370: **1** (the wrap from the last member) | 6 532, id 1 (before the change) |
+
+  - `raceend` wrote the counter once a race, on the insert's frame (6 049, 5 623, 6 529, 6 073), with the position (3, 2, 0, 4);
+    the page then stored position + 1 (4, 3, 1, 5), as `attract` always did.
+  - **A race against main** (`test_a_race_writes_as_on_main_but_its_group_s_counter`; the same normal Metropolis race on
+    `out/p27play1`, both from a fresh battery RAM): the same race time and frames; up to the attract load (frame 8 040) all 16 727
+    battery writes identical (frame, address, data, mask, boot-ROM PCs) besides `raceend`'s one; the modes identical frame for frame
+    up to 11 400; from the attract load to 11 400, 6 725 writes on the same frames, addresses and masks, the data differing only in
+    the shown id (0x40fc69) and the counter (0x40fc6b).
+  - **No game against main** (`test_with_no_game_the_attract_is_main_s_frame_for_frame`, 1 250 s from a fresh boot on this set and on
+    `out/p27play1`): the modes, all 101 page lines (frame, shown id, data index, table, first entry shown), the title rows and the
+    page rows identical, and all 147 928 battery writes identical (frame, address, data, mask, boot-ROM PCs).
+  - **Before the change** (RED, this tree's tests on the unchanged product code, `out/p27b/red_mame.log`): the first pages after the
+    same races showed ids 1, 4, 4 and 1 (each group's next member), the tests failed on that; the wrap test saw 1 then 5.
+
+- **The tests** (`VR_MAME_JOBS=3`, `--basetemp out/p27b/pytest`): `tests/test_reverse_ranking.py tests/test_ranking.py
+  tests/test_directory.py tests/test_hudname.py tests/test_dirscreen_build.py`: 131 passed, 1 failed in 52 min 18 s. The failure was
+  the new race-against-main test's frame bound (60 frames a second; main's 200-s run ends at frame 11 504, the video's 57.5 Hz):
+  test only, bound set to 57 a second, then that test alone: 1 passed (13 min 39 s, `out/p27b/pytest2`). Also alone (no MAME):
+  `tests/test_reverse_build.py::test_the_variant_only_adds_bytes`, updated for the positions (each set's from its own groups):
+  1 passed; `tests/test_mame_runner.py`: passed. The whole suite was not run.
+- **Not verified:** the whole suite; a race that runs out of time (read only: no setter call, no jump); a five-lap race; linked play and the
+  operator's fixed course (they reach the same site: the same jump, read only); a human's drive; Acropolis and Big Forest races
+  (originals: only Bay Bridge run); the other converted courses than Metropolis and Amazon Falls (the positions table is checked
+  statically against the groups).
+
+- **Review and fix wave** (`out/p27b/review.md`, independent, read-only): verdict ready to merge with fixes; no Critical or Important
+  finding. This wave changed: M1 the README's Phase 27b paragraph has its own heading after the "Public release v0.2.1" section;
+  M2 "a race that runs out of time does not reach the setter" is marked "(read in the listing, not run)" in the README and
+  `docs/follow-ups.md`; M3 `VR_MAME_JOBS` that is not a positive integer (0, negative, text) raises a `MameError` instead of waiting
+  forever or a bare ValueError (unit test first: it failed on the old code, `0` by hanging, then passed); M5 the no-game test's skip
+  names `out/p27play1`; M8 the `VR_MAME_JOBS` cap test pairs its fakes on a barrier and asserts the peak never exceeds the cap (no
+  timing). M4: `tests/test_reverse_ranking.py` and `tests/test_mame_runner.py` in one invocation on the final text
+  (`VR_MAME_JOBS=3`, `out/p27b/fix_pytest.log`): **77 passed in 1512 s (25 min 12 s)**, no failure.
+  - Parked, as the review words them:
+    - M6: the group comes from DATA_INDEX and the position from RANKING_INDEX(+7); if they disagree (linked play, the operator's
+      course: not run) the first page shows an arbitrary member of the group, harmless, clamped; document, no code (no room).
+    - M7: `raceend` does not clamp the data index as `attract` does (>= 3 gives 0); no reachable path found; a data index of 3..5
+      would write 0x40fc6d..6f (free bytes); document, a clamp would need 6+ bytes the image does not have.
+    - M9: no run covers data index 2 (Big Forest's group, counter 0x40fc6c) or the Acropolis / Big Forest originals; none needed
+      before merge.
+    - M10: `test_a_normal_race_writes_as_on_main`'s same-frames-after-the-attract-load holds only because RUN_SECONDS = 200 ends
+      before the group's second page after the game; comment the dependency or cut the comparison at the first page's end.

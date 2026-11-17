@@ -27,6 +27,10 @@ SEGMENT_MAX_LEN = 200.0        # a quad longer than this is a degenerate sliver 
 SEGMENT_REACH = 60.0           # ... unless no point there is within this distance of the quad's front (side-by-side strips sit up to 60 units out)
 FLAG_PIT = 66                            # the arcade's pit-lane segments (Big Forest quads 30-59, 1085-1088); never emitted here
 MIN_POINT_GAP = 2.0
+FLAG_TUNNEL = 0x80                       # Phase 37: the arcade's tunnel bit (Bay Bridge's quads 69-88 carry 0x81). The player's routine
+                                         # 0xffa671 sends the sound board C201 when the bit comes on under the car and C200 when it
+                                         # goes off: the engine's mix. Nothing else in the game reads it (recon, docs/spike/
+                                         # 2026-11-phase37-tunnel-sound-recon.md §1.2)
 
 
 @dataclass
@@ -192,6 +196,33 @@ def segment_credits(pts: list[tuple[float, float]], tarmac_quads: list[Quad16]) 
     if segments[-1].road_point >= n - 1 - END_SNAP:
         segments[-1] = Segment(len(segments) - 1, n - 1, FLAG_PLAIN)
     return segments
+
+
+def tunnel_quads(segments: list[Segment], stretches: tuple, n: int) -> frozenset[int]:
+    """Phase 37: the tarmac quads of the stretches `stretches`, ((first, last), ...) in road points of a lap of `n`, ends
+    included: every quad the segment array credits to a point of a stretch, whatever its place across the road (the road's own
+    quads, its side strips, a pit lane beside it). The indices serve the reverse array too: a tunnel is a place, not a direction.
+    ConvertError for a stretch that is not two ints with 0 <= first <= last < n, or that touches another."""
+    taken: set[int] = set()
+    for st in stretches:
+        if not (isinstance(st, tuple) and len(st) == 2 and all(type(v) is int for v in st) and 0 <= st[0] <= st[1] < n):
+            raise ConvertError(f"tunnel stretch {st!r}: need (first, last) road points with 0 <= first <= last < {n}")
+        pts = set(range(st[0], st[1] + 1))
+        if pts & taken:
+            raise ConvertError(f"tunnel stretch {st!r} overlaps another")
+        taken |= pts
+    return frozenset(s.index for s in segments if s.road_point in taken)
+
+
+def with_tunnel_flags(tables: RoadTables, quads: frozenset[int]) -> RoadTables:
+    """Phase 37: `tables` with FLAG_TUNNEL set in the flags of the segments `quads` (`tunnel_quads`), nothing else changed; the
+    tables themselves when `quads` is empty. ConvertError for an index outside the array."""
+    if not quads:
+        return tables
+    if not all(0 <= k < len(tables.segments) for k in quads):
+        raise ConvertError(f"tunnel quads outside the segment array of {len(tables.segments)}: {sorted(quads)[-3:]}")
+    return RoadTables(tables.lines, [Segment(s.index, s.road_point, s.flag | FLAG_TUNNEL) if s.index in quads else s
+                                     for s in tables.segments])
 
 
 def segment_links(segments: list[Segment], n: int) -> list[int]:

@@ -389,3 +389,129 @@ Status: **open** (still in the build), **fixed** (was a deviation, no longer), *
   converter. On those courses the course select's own lock look (the chosen picture in colour, the others grey) is replaced by the
   screen's (D7). The arcade has no such screen; the originals, linked play and the operator's fixed course keep the game's flow.
   A reverse race records no best time and asks for no name (the flow of a race without a record).
+- **Two far buildings on Metropolis are drawn from two cell rows further away** (Phase 31; Pascal after one 107-s run of the prototype: "yes it s good keep it"; merged 15 Nov on their
+  "Yes all your recommendation"). The arcade draws a cell's scenery when the camera is within two
+  cells of it; the buildings at the far end of Metropolis's long straight are also stored in two nearer cells, so they are on
+  screen before their own cells are drawn (and drawn twice while both are; where two of the tall block's walls tie in depth the
+  front one is then drawn, one grey step lighter than the hidden one main draws there). Scenery only; the collision and the race
+  are main's.
+  `docs/spike/2026-11-phase31-far-silhouette-findings.md`.
+- **The frame's draw budget is 10 500 records, not 5 500** (by Pascal's choice, Phase 28: "3 first", then "Ok" to the session
+  lead's recommendation of 10 500). The arcade counts the polygon records it sends in a frame and skips every object list it
+  reaches once the count is past its budget; the scenery cells come last, so on a busy frame the far cells drop out for that frame
+  (far pop-in). Sega's own courses passed 5 500 on 3-22 % of race frames. At 10 500 no measured frame of any course, pit stop or
+  attract scene skips a list (the highest need measured, 9 771, on Big Forest), so **the three original courses now draw far
+  scenery that the real arcade dropped on busy frames**, and the converted courses' start-line skips (Diablo Canyon, Metropolis,
+  Pacific Coast) are gone. In MAME the game's rate holds (one picture every second frame, the overrun counter still, the V60 at
+  most 14.6 ms of its 34.77 ms in races and 18.0 ms in the attract's scenes), and the game's state at the end of every logic pass
+  is main's, measured on Big Forest, Acropolis and Metropolis with the same inputs and the same battery RAM. A linked cabinet's
+  budget (the game's 5 000) is raised by the same 5 000 to 10 000; linked play was not run. **Real hardware is untested:** MAME
+  does not model the render board's time and the game does not wait for the renderer, and Sega's 5 500 may match what the
+  renderer can draw in a picture, so on a real board this change might cost pictures; the set is for MAME.
+  `docs/spike/2026-11-phase28-draw-budget-findings.md`.
+- **Arcade trees on Alpine: objects the Saturn course never had** (Phase 29; Pascal after one 110-s run of the prototype: "i think it s good"; later the same day: "Keep the trees"; merged 15 Nov on their "Yes all your recommendation").
+  21 copies of Big Forest's tree (a 4-face canopy on a 3-face trunk, read from the user's own polygon ROM at build time, its own
+  palette colours) are baked into four of Alpine's scenery cells beside road points 406-449: on the snow crests left of 406-408
+  and 439-449 and on the flat ground right of 448-449, each with its foot at least 10 units outside every collision quad (the canopy reaches 5.1 from the foot; drawn only: the
+  collision is byte for byte main's). The three original courses are byte for byte the same, in place; the six other converted
+  courses have every cell object and colour word identical in content but relocated (Alpine grows ahead of them), so their tile
+  tables, colour entries and reverse-annex addresses differ. The copies are not record for record the arcade's (type-1 records
+  with a repeated corner where four source faces are triangle records; the source's flag bits 23 and 24 clear); real hardware
+  untested. The Saturn's Alpine has no such trees; the tree is 16.35 units tall and Alpine's own pines 30-120, about 2 to 7
+  times taller.
+  `docs/spike/2026-11-phase29-alpine-trees-findings.md`.
+- **The word REVERSE in the race HUD** (Phase 32; Pascal: "One additional idea, when playing a track in reverse it could have the
+  word "reverse" under the track name(maybe in a neon red style?)", then "Ok maybe just a shadows reverse then", then, shown
+  three stills, "Yes all your recommendation" to red on every course and the placement as built; merged 16 Nov on their "Yes to all"; after a later run of a set with it: "reverse word was good also on the normal tracks"). The
+  arcade shows no such word (it has no reverse races). In a reverse race on a converted course the HUD shows REVERSE under the
+  course's name, on the screen's last two tile rows (rows 46-47, columns 52-58), in the game's own 8 x 16 font and its EXPERT red,
+  with the font's own black outline. A normal race and the three originals show what they showed (the tile RAM byte-identical
+  to main's set at the same frames). A real monitor's overscan on those last rows is untested.
+  `docs/spike/2026-11-phase32-hud-reverse-findings.md`.
+- **Thirteen more palms on Surfers Road than the Saturn course has** (Phase 34; merged 16 Nov on Pascal's "merge update md commit and push"; Pascal, 16 Nov, after one 28-s run of the set `out/p34play3`: "those ones are great keep saturn"; after one 94-s run of the final set `out/p34play4`, asked how the palms looked: "look good", then "palm").
+  They are copies of the Saturn course's own roadside palm (the one at road point 47: its 28 faces and its colours as this course
+  converts them, 11.4 units tall, nothing scaled), baked into four of Surfers Road's scenery cells right of road points 25-93:
+  three on the sand slope at 25-28, two at 75-77 and a row of eight on the grass at 82-93, where the Saturn has bare ground. Each
+  stands with its foot at least 10 units, and every leaf corner more than 5, outside every collision quad: drawn only (the
+  collision is byte for byte main's; a car cannot reach one). The three originals and the six other converted courses are the
+  same in content (Metropolis's two far-copy cells and Surfers Road's later data are stored elsewhere). Nothing is borrowed from an
+  arcade course: Bay Bridge's small palm was tried at these sites first, at the arcade's size and scaled 3.0, and not kept.
+  Real hardware untested.
+  `docs/spike/2026-11-phase34-surfers-palms-findings.md`.
+- **The arcade's tunnel sound in three covered stretches** (Phase 37; merged 16 Nov on Pascal's "merge update md commit and push"; of it they have heard Alpine's tunnel in one 53-s run, 16 Nov: "tunnel sound is
+  good, launch the game again i want to test something" and, after a run through Bay Bridge's own tunnel, "ok tunnel is validated"
+  (Metropolis's stretches, reverse and the pit stop not driven by them); branch `phase37-tunnel-sound`, not merged). In Alpine's mountain tunnel (road points 108-146) and on
+  Metropolis under the roof beside the pit lane (50-62, the lane's quads under it included) and in its long tunnel (251-311),
+  in both directions, the player's engine sounds as it does in Bay Bridge's tunnel on the arcade: the game's own flag (bit 7 of
+  the segment flag) set on those tarmac quads, the game's own commands (`C201` / `C200`), the sound board's own mix. Whether the
+  Saturn game changes its sound there is not known, so this may be something the Saturn courses do not have. The stretches are
+  the ones Pascal agreed to on 16 Nov ("Yes to all", to the recon's questions as put to them), which were put to them as
+  Alpine 106-145 and Metropolis 245-313 and 50-62 (the recon's driven samples) and are built as 108-146, 251-311 and 50-62 (the
+  quads whose centre is under the drawn roof: the same places); two Metropolis underpasses (176-178, 186-191) were not in the
+  list they answered, were put to them separately with a recommendation to leave both out ("yes correct") and are not flagged; the arches, bridges, gates and
+  Metropolis's building before the line have none. The three originals are untouched. Nothing else of the set differs from
+  main's (196 flag bytes). `docs/spike/2026-11-phase37-tunnel-sound-findings.md`.
+- **The three original courses can be raced in reverse** (a prototype on branch `phase33-originals-reverse`; Pascal's
+  request of 15 Nov: "We also need to do the reverse for the three initial tracks"; they drove stage 1 on 16 Nov: "reverse on
+  original track is good but: - some checkpoint flags are white without the C.P. the pit isnt working. relaunch", then "reverse is not
+  showing in the reverse track during gameplay, relaunch"; stage 2 answers those three; they drove it the same day: "1)fixed. 2)
+  working. 3) looks good nice 5) single file doesnt bother me for beach i need a relaunch to try again 5) another relaunch",
+  and of a normal race on an original "normal race look fine". Where the list below
+  says no pit stop, blank C.P. banners and the level word alone, the stage 2 paragraph after it holds). The arcade has
+  no reverse race. What the build changes for Big Forest, Bay Bridge and Acropolis:
+  - **In the normal direction: one thing.** After the course is confirmed on the course select, the COURSE DIRECTION screen now
+    appears for an original as it does for the seven (a second press of the gas, or its ten-second countdown, which takes
+    NORMAL). The race that follows is the arcade's: the same bytes of course data (the data banks' original content, the tile
+    tables, spawn lists, polygon and TGP ROMs are not written), and, fed the same inputs from the same battery RAM, the same
+    game state at the end of every logic pass as the build before it (measured on all three, 120 s each). In linked play, with
+    the operator's fixed course and in the attract mode the screen does not appear and nothing changes.
+  - **A reverse race on an original**, against the quality of its normal race: no pit stop (the pit lane is plain road; pit
+    stops in reverse are a later stage); no best time is recorded and no name asked (the battery RAM has no room for three more
+    tables; **since Phase 35 a reverse race on an original keeps four best times, see the entry below**); **Bay Bridge's fifteen opponents all follow the centreline** (a stopgap: data bank 1 has room for one reversed
+    line, not eight); Big Forest's opponents use six of its eight lines (the two innermost left a bend onto the verge every
+    lap); the grid is not the game's (Bay Bridge and Acropolis: the cars two road points apart, the grid twice as long; Big
+    Forest: another order at the front), because on the game's grid 3 to 10 cars stood turned 25-56 degrees; Big Forest starts
+    on the grid with the READY lights, not with the pit crew; the C.P. banners are blank white from behind (START reads
+    from behind, by the converted courses' both-sided frames); the arrow boards (Big Forest 4, Bay Bridge 10) are not there
+    (Pascal: removed in reverse). The HUD's label is the game's
+    level word and the HUD map is where the game draws it, as in the normal race.
+  - **Stage 2 (16 Nov)**: in a reverse race on an original the six checkpoint banners read "C.P." from behind (lettering
+    mirrored behind the banner, in the reverse race's own object lists; the normal race's banners are the arcade's); Big
+    Forest and Acropolis have a pit stop in reverse: entered by the normal race's pit exit, at the end of the reverse lap just
+    before the line, the car and the crew turned half round on the arcade's own box, the same two stops, PIT WORK and time on
+    the box as the normal stop (Bay Bridge has no pit lane in the arcade); the HUD shows REVERSE in red under the arcade's level
+    word, ending under its last visible letter (one cell further left under MEDIUM and EXPERT than under BEGINNER and the
+    seven's names). The grids, Big Forest's six lines and the HUD map's place stay as built (Pascal: "Yes to all").
+  - **Fix wave (16 Nov)**: on the COURSE DIRECTION screen an original's picture is the course select's own two-layer picture,
+    pixel for pixel, under the arrows (stages 1 and 2 drew its front layer alone: flat cyan or magenta where the water, the
+    track and the name belong; Pascal: "the colors in the track select looks bugged with ping highlighted on the track").
+  - **Second fix wave (16 Nov)**: in a reverse race on an original the game does not put a car back onto fifteen quads whose
+    centre faces a wall or a barrier within 25 units (Bay Bridge's last three before the fork's divider among them; Pascal:
+    "it did put me back on bay bridge after a while but i ended up right in an obstacle."): it is put back on the quad before,
+    and the off-course counter runs while a car is on one of them (the longest such stretch: six road points of one lane on
+    Acropolis, about 63 units). A car that never steers after the put-back before Bay Bridge's fork drives into the divider's
+    nose 28 units on and is put back again, about every 8 s. The arcade's own normal direction has such spots and keeps
+    them.
+  `docs/spike/2026-11-phase33-originals-reverse-findings.md`.
+- **Best-time tables for reverse races on the three originals** (Phase 35; merged 17 Nov on Pascal's "merge upadte md commit and push";
+  not driven by them). Pascal's words: 15 Nov, to a list including "best times three per table on all ten
+  reverse courses": "Yes all your recommendation"; 16 Nov, to five recommendations (four times a table on all ten; the level
+  word in the title; each original's reverse page straight after its own normal ranking page; the seven's rule for the starting
+  times; the same release as the originals in reverse) and the condition that four entries depends on a check of every
+  test-menu page (passed, recon §11): "yes to all"; 17 Nov, asked whether to release v0.3 without them: "Release with the
+  original best time", then "Version 0.3". The arcade has no reverse race and no reverse table. What the build adds:
+  - a reverse race on Big Forest, Bay Bridge or Acropolis that finishes at or under its table's fourth time is inserted in a
+    4-entry table of its own and asks for a name, exactly as on the seven converted courses (Phase 33's `rankgate3`, which made
+    such a race record nothing, is gone; the race end's boot bytes at 0xfc40ce are the arcade's again);
+  - the three tables live in battery RAM the arcade never touched in any tapped run (formats §23: `0x40e6e4`, `0x40e744`,
+    `0x40f010`, their slot words in three unused words, a tag "ORG4"); no byte saved by v0.2.1 moves or is written on the
+    upgrade; the test mode's BACKUP RAM CLEAR resets them through the project's `slot_init`, as it does the seven's;
+  - starting times: the first four of each original's own normal table (Big Forest and Bay Bridge 4'00 to 4'15, Acropolis 5'00
+    to 5'15) and the game's first four default names;
+  - in the attract each original's reverse table is shown right after its own table, one screen of four rows titled
+    "BEGINNER REVERSE RANKING" (Big Forest), "MEDIUM REVERSE RANKING" (Bay Bridge), "EXPERT REVERSE RANKING" (Acropolis): the
+    level word and REVERSE in red, RANKING in white. Each original's group is one page longer, so the arcade's own pages and
+    the seven's come round one loop later than before; the pages themselves are unchanged. After a reverse race on an original
+    the attract's first page is its reverse table (Phase 27b's rule).
+  Not verified: any human drive; linked play; real hardware (a real board's battery content is unknown).
+  `docs/spike/2026-11-phase35-reverse-times-findings.md`.

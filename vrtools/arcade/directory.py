@@ -52,6 +52,7 @@ from vrtools.arcade.backdrop import GFX_MAGIC
 from vrtools.arcade.direction import direction_routines, direction_size, patch_direction_sites
 from vrtools.arcade.dirscreen import LINKED_BANK_SITES, dirscreen_routines, dirscreen_size, patch_dirscreen_sites, placeholders
 from vrtools.arcade import hudname
+from vrtools.arcade.budget import patch_budget
 from vrtools.arcade.course import (BANK_SITE_LEN, BANK_SITE_PATTERN, BANK_SITES, CAR_TABLE_PATTERN, CAR_TABLE_SITE, CAR_TABLE_SITE_LEN,
                                    CODE_FREE, CROSS_TILE_CELL, DIRECTION_RAM, LOADER, LOADER_LEN, MAP_CROSS_PATTERN, MAP_CROSS_RAM, MAP_CROSS_SITE,
                                    MAP_CROSS_SITE_LEN, MAP_OBJ_PATTERN, MAP_OBJ_SITE, MAP_OBJ_SITE_LEN, MAP_OBJ_TABLE, MAP_TX_RAM, MUSIC_SITE, MUSIC_SITE_LEN, OFF_COURSE_COUNTER, OFF_COURSE_PATTERN,
@@ -738,6 +739,7 @@ def install_directory(rs: RomSet, d: Directory, code_base: int = CODE_FREE[0], c
                                                                  # (stage 4 Task 5)
     patch_dirscreen_sites(out, lay)                              # stage 3: mode 0x10 state 0's `dirclear`, the course lock's `dirlock`
     hudname.patch_hudname_sites(out, lay)                        # stage 3 Task 6: the HUD's level word, `hudname`
+    patch_budget(out)                                            # Phase 28: the frame's draw budget, 10 500 (budget.py)
     for site in BANK_SITES:
         have = rs.boot[site - 0xFC0000:site - 0xFC0000 + BANK_SITE_LEN]
         if any(p != ord("?") and p != h for p, h in zip(BANK_SITE_PATTERN, have)):

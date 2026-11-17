@@ -259,12 +259,15 @@ def _pages(log) -> list[tuple[int, int, int, list[int]]]:
 def test_attract_and_race_end_rankings_name_their_course(tmp_path, romset_zip, saturn_cue):
     """MAME, the full ten-course set: the attract mode's ranking pages show each original's own table under its own
     title (EXPERT shows Acropolis's 5'00 table again, not the last chosen course's), then, a loop later, the converted
-    courses in its slot under their names; after a race on Amazon Falls the ranking is Amazon Falls' under its name.
+    courses in its slot under their names; after a race on Amazon Falls that runs out of time the next page of its group is the
+    group's next member under its own title.
     Phase 27 Task 3: the groups hold the reverse ids too (the directory read back, with its variants): a reverse page shows
-    its reverse table under "<NAME> REVERSE RANKING" (tests/test_reverse_ranking.py covers every member)."""
+    its reverse table under "<NAME> REVERSE RANKING" (tests/test_reverse_ranking.py covers every member). Phase 35: an original's
+    reverse table (ids 17..19) follows the original in its group, under "<LEVEL WORD> REVERSE RANKING"."""
     import shutil
     from vrtools.arcade.directory import ORIGINALS, decode_directory
-    from vrtools.arcade.ranking import NEW_TABLES, ORIG_TABLES, REVERSE_TABLES, attract_groups, reverse_title_columns, title_columns
+    from vrtools.arcade.ranking import (NEW_TABLES, ORIG_NAMES, ORIG_REVERSE_TABLES, ORIG_TABLES, REVERSE_TABLES, attract_groups,
+                                        reverse_title_columns, title_columns)
     from vrtools.arcade.select import WHEEL_FOR_ENTRY
     from vrtools.arcade.tencourse import COURSES as PLANS, build_all, ten_course_set
     from vrtools.mame.runner import LUA_DIR, run_mame
@@ -279,7 +282,7 @@ def test_attract_and_race_end_rankings_name_their_course(tmp_path, romset_zip, s
     d = decode_directory(out)
     assert [e.name for e in d] == [e.name for e in ORIGINALS] + [c.entry.name for c in conv]
     groups = attract_groups(d)
-    table = lambda r: (ORIG_TABLES + NEW_TABLES + REVERSE_TABLES)[r]
+    table = lambda r: (ORIG_TABLES + NEW_TABLES + REVERSE_TABLES + ORIG_REVERSE_TABLES)[r]
     original_title = {0: ("MEDIUM", 9), 1: ("EXPERT", 9), 2: ("BEGINNER", 8)}
 
     def check(page):
@@ -290,7 +293,7 @@ def test_attract_and_race_end_rankings_name_their_course(tmp_path, romset_zip, s
         elif shown < 10:
             want = _title_words(out, d[shown].name, title_columns(d[shown].name)[0], 0x8300)
         else:                                                                            # Phase 27: a reverse table
-            name = d[shown - 7].name
+            name = d[shown - 7].name if shown < 17 else ORIG_NAMES[shown - 17]          # Phase 35: an original's level word
             n, c, r = reverse_title_columns(name)
             want = _title_words(out, name, n, 0x8300) + _title_words(out, "REVERSE", c, 0x8300) + _title_words(out, "RANKING", r, 0x8200)
         for c, w in want:
@@ -301,16 +304,20 @@ def test_attract_and_race_end_rankings_name_their_course(tmp_path, romset_zip, s
     seen = [(p[0], p[1]) for p in pages]
     for k in range(3):
         assert (k, groups[k][0]) in seen                                               # each original's own table
-    assert (0, groups[0][1]) in seen and (1, groups[1][1]) in seen                       # then the first converted ones
+    assert (0, groups[0][1]) in seen and (1, groups[1][1]) in seen                       # then each one's next member (Phase 35:
+    assert groups[0][1] == 17 and groups[1][1] == 18                                     # its own reverse table)
     for p in pages:
         assert p[1] in groups[p[0]], p[:3]
         check(p)
     env = {"VR_COURSE": "0", "VR_WHEEL": str(WHEEL_FOR_ENTRY[4]), "VR_COLLISION_LOG": str(tmp_path / "c.txt"),
            "VR_EXTRA_LUA": str(LUA_DIR / "ranking_title_log.lua"), "VR_RANKING_LOG": str(tmp_path / "r.log"), "VR_SNAPS": ""}
     run_mame(LUA_DIR / "autoplay.lua", 130, tmp_path / "r", build, env=env, timeout=1500)
-    race = [p for p in _pages(tmp_path / "r.log") if p[1] == 4]                          # entry 4: Amazon Falls, timed out
-    assert race and names[4] == "AMAZON FALLS"
-    check(race[0])
+    # entry 4: Amazon Falls, timed out: a race that runs out of time does not reach the setter (Phase 27b), so the attract's
+    # next page of Bay Bridge's group is its next member, position 1: Amazon Falls (4) until Phase 35, Bay Bridge's own reverse
+    # table (17) since (the race run's pages: 0 before the coin, then 17)
+    race = [p for p in _pages(tmp_path / "r.log")]
+    assert names[4] == "AMAZON FALLS" and [p[1] for p in race][:2] == [groups[0][0], groups[0][1]] == [0, 17], [p[:3] for p in race]
+    check(race[1])
 
 
 def test_the_attract_and_title_routines_decode_as_intended(romset_zip):
@@ -332,3 +339,53 @@ def test_the_attract_and_title_routines_decode_as_intended(romset_zip):
     setter = listing_bytes(img[lay["setter"] - base:lay["slot_init"] - base], lay["setter"])     # Phase 27: `common` follows the
     common = [l for l in setter if l.addr >= lay["common"]]                                      # reverse id choice
     assert " ".join(common[0].text.split()) == f"mov.b R0, {SHOWN_ID:X}" and setter[0].addr == lay["setter"] < lay["common"]
+
+
+def _with_reverse(ids=(3, 7)):
+    """`_directory` with a reverse variant on the entries `ids` (Phase 27: each followed by its reverse id in its group)."""
+    from dataclasses import replace
+    from vrtools.arcade.directory import ReverseRecord
+    return [replace(e, reverse=ReverseRecord(0x2C0000 + 0x80 * i, replace(e, race=0))) if i in ids else e
+            for i, e in enumerate(_directory())]
+
+
+def test_attract_positions_give_each_ranking_id_its_place_in_its_group():
+    """Phase 27b: per ranking id 0..16 (Phase 35: 0..19), its position in the attract group that holds it (`attract_groups`:
+    the original at 0, then each hosted course and its reverse id); an id in no group (a reverse id without a variant, here also
+    the originals' 17..19: these originals have none) gets 0, its group's first."""
+    from vrtools.arcade.ranking import IDS, attract_groups, attract_positions
+    d = _with_reverse()
+    assert attract_groups(d) == [[0, 3, 10, 6, 9], [1, 4, 7, 14], [2, 5, 8]]
+    assert attract_positions(d) == [0, 0, 0, 1, 1, 1, 3, 2, 2, 4, 2, 0, 0, 0, 3, 0, 0, 0, 0, 0] and len(attract_positions(d)) == IDS == 20
+    for g in attract_groups(d):
+        assert [attract_positions(d)[i] for i in g] == list(range(len(g)))
+
+
+def test_the_race_end_points_its_group_s_counter_at_the_table_raced(romset_zip):
+    """Phase 27b: MAME's disassembler on the race end's setter call (RACE_END_SITE, 10 bytes: `movz.bw 501934[PC], R0;
+    bsr FC4208` on the original): `bsr FC4208` (the setter as before: from its entry, the course's ranking id, + 7 in a reverse
+    race), `jsr raceend`, `nop`; the insert after it is the original's. `raceend` writes the position of the id the setter chose
+    (R0: `common` keeps it) into the attract counter of the data index's group, one byte, and returns: so the attract's first
+    page after the game shows that table. The image's positions are `attract_positions`. The name entry's call of the setter
+    (0xfc4226) and the attract page's (0xfc3c33, `attract`) are as before."""
+    from vrtools.arcade.disasm import listing, listing_bytes
+    from vrtools.arcade.ranking import (ATTRACT_COUNTERS, ATTRACT_SITE, DATA_INDEX, IDS, RACE_END_SITE, RACE_END_SITE_BYTES,
+                                        attract_positions, install_ranking, ranking_image, ranking_layout)
+    rs = _romset(romset_zip)
+    d = _with_reverse()
+    base = CODE_FREE[0]
+    lay = ranking_layout(base)
+    text = lambda lines: [" ".join(l.text.split()) for l in lines]
+    span = lambda r, site, n: [l for l in listing(r, site, n) if l.addr < site + n]
+    assert RACE_END_SITE == 0xFC40E1 and rs.boot[RACE_END_SITE - V60_BOOT:RACE_END_SITE - V60_BOOT + 10] == RACE_END_SITE_BYTES
+    assert text(span(rs, RACE_END_SITE, 10)) == ["movz.bw 501934[PC], R0", "bsr FC4208"]
+    out = install_ranking(rs, d, base)
+    assert text(span(out, RACE_END_SITE, 10)) == ["bsr FC4208", f"jsr {lay['raceend']:X}", "nop"]
+    assert listing(out, RACE_END_SITE + 10, 2) == listing(rs, RACE_END_SITE + 10, 2)          # (the insert's add: Phase 27's site)
+    assert listing(out, 0xFC4226, 2) == listing(rs, 0xFC4226, 2)                     # the name entry's call: untouched
+    assert text(span(out, ATTRACT_SITE, 10)) == [f"jsr {lay['attract']:X}", "nop", "nop", "nop", "nop"]
+    img = ranking_image(rs, d, base)
+    assert list(img[lay["positions"] - base:lay["positions"] - base + IDS]) == attract_positions(d)
+    end = min(a for a in lay.values() if a > lay["raceend"])
+    routine = text(listing_bytes(img[lay["raceend"] - base:end - base], lay["raceend"]))
+    assert routine == [f"movz.bw {DATA_INDEX:X}, R1", f"mov.b {lay['positions']:X}(R0), {ATTRACT_COUNTERS:X}(R1)", "rsr"]

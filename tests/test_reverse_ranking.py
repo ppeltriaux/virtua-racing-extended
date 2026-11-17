@@ -174,8 +174,10 @@ def test_the_page_calls_pagecmp_and_pagerows(romset_zip):
     assert _text(_routine(out, rl, "pagerows")) == ["mov.w R1, 501924", f"movz.bw {ROWS_CELL:X}, R3", "rsr"]
 
 
-def _paths(lines, start):
-    """Every path through the decoded routine from `start` to an `rsr`: the list of instruction texts along it."""
+def _paths(lines, start, back=frozenset()):
+    """Every path through the decoded routine from `start` to an `rsr`: the list of instruction texts along it. Branches go
+    forward, but for the one branch back out of each block that starts at an address of `back` (Phase 35: the setter's
+    out-of-line `original`, reached once a path)."""
     at = {l.addr: k for k, l in enumerate(lines)}
     out = []
 
@@ -189,7 +191,7 @@ def _paths(lines, start):
             m = re.fullmatch(r"(b\w+) ([0-9A-F]+)", t)
             if m:
                 target = at[int(m.group(2), 16)]
-                assert target > k, t                                   # forward branches only: every path ends
+                assert target > k or any(at[a] <= k for a in back), t  # forward branches only: every path ends
                 if m.group(1) == "br":
                     k = target
                     continue
@@ -201,9 +203,10 @@ def _paths(lines, start):
 
 def test_the_setter_chooses_by_the_flag_at_the_race_and_by_the_id_in_the_attract(romset_zip):
     """MAME's disassembler on the setter: from its entry (the race's end and the name entry, through 0xfc4208) it takes the
-    ranking id and adds REVERSE_ID_SHIFT when the direction flag is set and the id is 3..9; from `common` (the attract page's
+    ranking id and adds REVERSE_ID_SHIFT when the direction flag is set and the id is 3..9, ORIG_REVERSE_SHIFT (17) when it is
+    0..2 (Phase 35: an original's reverse table; out of line, after the routine's last `rsr`); from `common` (the attract page's
     entry, which never reads the flag) it stores the shown id, takes the table and slot of the id from the image's arrays (ids
-    10..16 the reverse ones) and writes BOTH cells on every path: 0x228 and 6 for ids 0..9, 0x48 and 4 for ids 10..16."""
+    10..19 the reverse ones) and writes BOTH cells on every path: 0x228 and 6 for ids 0..9, 0x48 and 4 for ids 10..19."""
     from vrtools.arcade.ranking import (LAST_OFFSET_CELL, RANKING_INDEX, ROWS_CELL, SHOWN_ID, SLOT_RAM, TABLE_RAM, ranking_image,
                                         ranking_layout)
     rs = _with_blobs(RomSet.from_zip(romset_zip), _directory())
@@ -214,15 +217,17 @@ def test_the_setter_chooses_by_the_flag_at_the_race_and_by_the_id_in_the_attract
     texts = _text(lines)
     at = {l.addr: k for k, l in enumerate(lines)}
     c = at[lay["common"]]
+    original = lines[c + 13].addr
     assert texts[:c] == [f"movz.bw {RANKING_INDEX:X}, R0", f"cmp.b #0, {DIRECTION_RAM:X}", f"be {lay['common']:X}",
-                         "cmp.w #3, R0", f"blt {lay['common']:X}", "cmp.w #A, R0", f"bge {lay['common']:X}", "add.w #7, R0"]
+                         "cmp.w #3, R0", f"blt {original:X}", "cmp.w #A, R0", f"bge {lay['common']:X}", "add.w #7, R0"]
     short = lines[c + 10].addr
-    assert texts[c:] == [f"mov.b R0, {SHOWN_ID:X}", f"mov.w {lay['bases']:X}(R0), R1", f"mov.w R1, {TABLE_RAM:X}",
+    assert texts[c + 13:] == ["add.w #11, R0", f"br {lay['common']:X}"]            # Phase 35: ids 0..2 with the flag set
+    assert texts[c:c + 13] == [f"mov.b R0, {SHOWN_ID:X}", f"mov.w {lay['bases']:X}(R0), R1", f"mov.w R1, {TABLE_RAM:X}",
                          f"mov.w {lay['slots']:X}(R0), R1", f"mov.w R1, {SLOT_RAM:X}", "cmp.w #A, R0", f"bge {short:X}",
                          f"mov.w #228, {LAST_OFFSET_CELL:X}", f"mov.b #6, {ROWS_CELL:X}", "rsr",
                          f"mov.w #48, {LAST_OFFSET_CELL:X}", f"mov.b #4, {ROWS_CELL:X}", "rsr"]
     for entry, count in ((lay["setter"], 8), (lay["common"], 2)):
-        paths = _paths(lines, entry)
+        paths = _paths(lines, entry, back={original})
         assert len(paths) == count
         for p in paths:                                                # each cell written exactly once on every path
             assert sum(t.endswith(f", {LAST_OFFSET_CELL:X}") for t in p) == 1 and sum(t.endswith(f", {ROWS_CELL:X}") for t in p) == 1, p
@@ -230,16 +235,21 @@ def test_the_setter_chooses_by_the_flag_at_the_race_and_by_the_id_in_the_attract
 
 
 def test_the_image_s_arrays_run_on_over_the_reverse_ids(romset_zip):
-    """The setter's two arrays are indexed by the ranking id 0..16: ids 10..16 (entries 3..9 + REVERSE_ID_SHIFT) hold the
-    reverse tables and their slots, in entry order; ids 0..9 are as before."""
-    from vrtools.arcade.ranking import (NEW_SLOTS, NEW_TABLES, ORIG_SLOTS, ORIG_TABLES, REVERSE_ID_SHIFT, REVERSE_SLOTS,
-                                        REVERSE_TABLES, ranking_image, ranking_layout)
+    """The setter's two arrays are indexed by the ranking id 0..19: ids 10..16 (entries 3..9 + REVERSE_ID_SHIFT) hold the
+    reverse tables and their slots, in entry order; ids 0..9 are as before; Phase 35: ids 17..19 (the originals' ids 0..2 +
+    ORIG_REVERSE_SHIFT) hold the originals' reverse tables and their slots, the first three words of NEW_SLOTS."""
+    from vrtools.arcade.ranking import (IDS, NEW_SLOTS, NEW_TABLES, ORIG_REVERSE_SHIFT, ORIG_REVERSE_SLOTS, ORIG_REVERSE_TABLES,
+                                        ORIG_SLOTS, ORIG_TABLES, REVERSE_ID_SHIFT, REVERSE_SLOTS, REVERSE_TABLES, ranking_image,
+                                        ranking_layout)
     rs = _with_blobs(RomSet.from_zip(romset_zip), _directory())
     base = CODE_FREE[0]
     lay = ranking_layout(base)
     img = ranking_image(rs, _directory(), base)
-    bases = struct.unpack_from("<17I", img, lay["bases"] - base)
-    slots = struct.unpack_from("<17I", img, lay["slots"] - base)
+    assert (IDS, ORIG_REVERSE_SHIFT, ORIG_REVERSE_SLOTS) == (20, 17, NEW_SLOTS)
+    bases = struct.unpack_from("<20I", img, lay["bases"] - base)
+    slots = struct.unpack_from("<20I", img, lay["slots"] - base)
+    assert bases[17:] == ORIG_REVERSE_TABLES and slots[17:] == tuple(NEW_SLOTS + 4 * r for r in range(3))
+    assert lay["slots"] - lay["bases"] == lay["counts"] - lay["slots"] == 80
     assert bases[:10] == ORIG_TABLES + NEW_TABLES and slots[:10] == ORIG_SLOTS + tuple(NEW_SLOTS + 4 * r for r in range(3, 10))
     for entry in range(3, 10):
         k = entry - 3
@@ -468,7 +478,10 @@ def test_a_normal_race_writes_as_on_main(rank_runs, entry):
     get the identical write log (frame, PC, address, data); the mode log is identical frame for frame (the select handler
     compared where it is a boot ROM address); every other battery write is identical (frame, address, data and the PC where it
     is in the boot ROM) but the two cells, which main does not have and this set writes at every setter call; main's writes
-    besides the tables, slots and bookkeeping are MAIN_OUTSIDE's."""
+    besides the tables, slots and bookkeeping are MAIN_OUTSIDE's. Phase 27b: besides, `raceend` writes the course's group counter
+    once on the insert's frame, and from the attract load on the first page's shown id and that counter may hold other data
+    (the page shows the course raced: on Metropolis, Acropolis's group's next member on main); frames, addresses and masks are
+    main's."""
     run, main = rank_runs.run("normal", entry), rank_runs.run("main", entry)
     table, slot = NEW_TABLES[entry - 3], NEW_SLOTS + 4 * entry
     mine = lambda w: table <= w[2] < table + TABLE_BYTES or slot <= w[2] < slot + 4
@@ -481,7 +494,17 @@ def test_a_normal_race_writes_as_on_main(rank_runs, entry):
     assert outside <= MAIN_OUTSIDE and set(range(0x40F000, 0x40F008)) | {RANKING_INDEX, SHOWN_ID} <= outside, sorted(map(hex, outside))
     cells = lambda w: LAST_OFFSET_CELL <= w[2] <= ROWS_CELL
     key = lambda w: (w[0], _boot_pc(w[1]), w[2], w[3], w[4])
-    assert [key(w) for w in run.writes if not cells(w)] == [key(w) for w in main.writes]
+    group = {METROPOLIS: 1, AMAZON_FALLS: 0}[entry]                 # the course's host (data index)
+    pcs = _raceend_pcs()
+    jump = [w for w in run.writes if w[1] in pcs]
+    assert [(w[0], w[2], w[4]) for w in jump] == [(_insert_frame(run), ATTRACT_COUNTERS, 0xFF << 8 * group)], jump
+    attract = next(l.frame for l in _race(run, 0) if l.mode == 0x02)
+    mine = [w for w in run.writes if not cells(w) and w not in jump]
+    assert [key(w) for w in mine if w[0] < attract] == [key(w) for w in main.writes if w[0] < attract]
+    after = [w for w in mine if w[0] >= attract], [w for w in main.writes if w[0] >= attract]
+    assert [(w[0], w[2], w[4]) for w in after[0]] == [(w[0], w[2], w[4]) for w in after[1]]
+    differ = {(w[2], w[4]) for w, m in zip(*after) if w[3] != m[3]}
+    assert differ <= {(SHOWN_ID & ~1, 0xFF00), (ATTRACT_COUNTERS, 0xFF << 8 * group)}, differ
     assert any(cells(w) for w in run.writes)
 
 
@@ -628,11 +651,13 @@ def test_reverse_titles_fit_the_line(romset_zip):
 
 
 def test_the_image_holds_the_reverse_titles_and_first_defaults(romset_zip):
-    """The titles by ranking id 0..16: ids 10..16 all `revtitle`; "REVERSE"; the seven first default times (`reverse_defaults`'
-    first column: `revinit` steps 5 s from it); `revtitle`'s five arrays by reverse entry: the name string, the tiles of the name,
-    REVERSE and the third word on the title row, the third word's string (RANKING, or the "" after REVERSE when it does not fit)."""
-    from vrtools.arcade.ranking import (RANKING_STRING, TITLE_ROW, ranking_image, ranking_layout, reverse_defaults,
-                                        reverse_title_columns)
+    """The titles by ranking id 0..19: ids 10..19 all `revtitle`; "REVERSE"; the ten first default times (`reverse_defaults`'
+    first column, then `original_reverse_defaults`': `revinit` and `originit` step 5 s from them); `revtitle`'s five arrays by
+    reverse id 10..19: the name string, the tiles of the name, REVERSE and the third word on the title row, the third word's string
+    (RANKING, or the "" after REVERSE when it does not fit). Phase 35: for ids 17..19 the name is the game's own level word in
+    the boot ROM (MEDIUM, EXPERT, BEGINNER by ranking id: Bay Bridge, Acropolis, Big Forest), centred with REVERSE RANKING."""
+    from vrtools.arcade.ranking import (ORIG_NAME_STRINGS, ORIG_NAMES, RANKING_STRING, TITLE_ROW, original_reverse_defaults,
+                                        ranking_image, ranking_layout, reverse_defaults, reverse_title_columns)
     d = _planned()
     rs = _with_blobs(RomSet.from_zip(romset_zip), d)
     d[9] = replace(d[9], name="A" * 15)                                         # one name too long for RANKING
@@ -640,11 +665,20 @@ def test_the_image_holds_the_reverse_titles_and_first_defaults(romset_zip):
     lay = ranking_layout(base)
     img = ranking_image(rs, d, base)
     at = lambda a: a - base
-    titles = struct.unpack_from("<17I", img, at(lay["titles"]))
-    assert titles[10:] == (lay["revtitle"],) * 7 and lay["revtitle"] not in titles[:10]
+    titles = struct.unpack_from("<20I", img, at(lay["titles"]))
+    assert titles[10:] == (lay["revtitle"],) * 10 and lay["revtitle"] not in titles[:10]
     assert img[at(lay["revword"]):at(lay["revword"]) + 8] == b"REVERSE\0"
     assert list(struct.unpack_from("<7I", img, at(lay["firsts"]))) == [t[0] for t in reverse_defaults(rs, d)]
-    args = [struct.unpack_from("<7I", img, at(lay["revargs"]) + 28 * f) for f in range(5)]
+    originals = original_reverse_defaults(rs, d)
+    assert list(struct.unpack_from("<3I", img, at(lay["firsts"]) + 28)) == [t[0] for t in originals] == [0x1E00, 0x2580, 0x1E00]
+    assert originals == [[first + 0xA0 * k for k in range(4)] for first in (0x1E00, 0x2580, 0x1E00)]   # 4'00, 5'00, 4'00; 5 s steps
+    args = [struct.unpack_from("<10I", img, at(lay["revargs"]) + 40 * f) for f in range(5)]
+    assert ORIG_NAMES == ("MEDIUM", "EXPERT", "BEGINNER")
+    for r, word in enumerate(ORIG_NAMES):
+        n, c, k = reverse_title_columns(word)
+        assert rs.boot[ORIG_NAME_STRINGS[r] - V60_BOOT:ORIG_NAME_STRINGS[r] - V60_BOOT + len(word) + 1] == word.encode() + b"\0"
+        assert [a[7 + r] for a in args] == [ORIG_NAME_STRINGS[r], TITLE_ROW + 2 * n, TITLE_ROW + 2 * c, RANKING_STRING, TITLE_ROW + 2 * k]
+        assert 0 <= n and k + 14 <= 62                                              # the whole line on the 62 columns
     for k, e in enumerate(d[3:]):
         n, c, r = reverse_title_columns(e.name)
         assert args[0][k] == lay["names"] + 16 * k and img[at(args[0][k]):at(args[0][k]) + len(e.name) + 1] == e.name.encode() + b"\0"
@@ -660,37 +694,46 @@ def test_revinit_revtag_and_revtitle_decode_as_intended(romset_zip):
     reverse tables (base and slot from the setter's arrays at ids 10..16), stores the base in the slot and writes four entries:
     the rank 1..4, the time from its first default stepping 0xa0, +8 = 0, +0xc = -1, the time again, the name word from
     DEFAULT_NAMES + 4 stepping 8; then the tag. `revtag` compares the tag, calls `revinit` when it differs and loads the magic's
-    length absolute (the instruction it replaces). `title` takes ids up to 16 through its table; `revtitle` prints the name and
-    REVERSE in red and the third word in white, by the shown id, with the game's string printer."""
-    from vrtools.arcade.ranking import (DEFAULT_NAMES, MAGIC_LENGTH, REVERSE_TAG, REVERSE_TAG_BYTES, STRING_PRINT, ranking_image,
-                                        ranking_layout)
+    length absolute (the instruction it replaces). `title` takes ids up to 19 through its table; `revtitle` prints the name and
+    REVERSE in red and the third word in white, by the shown id, with the game's string printer. Phase 35: `slot_init` then calls
+    `originit`, which is `revinit` for the tables 7..9 of the same arrays (ids 17..19) and the tag ORG4; `revtag` calls it when
+    that tag is missing, after the seven's check."""
+    from vrtools.arcade.ranking import (DEFAULT_NAMES, MAGIC_LENGTH, ORIG_TAG, ORIG_TAG_BYTES, REVERSE_TAG, REVERSE_TAG_BYTES,
+                                        STRING_PRINT, ranking_image, ranking_layout)
     rs = _with_blobs(RomSet.from_zip(romset_zip), _planned())
     base = CODE_FREE[0]
     lay = ranking_layout(base)
     img = ranking_image(rs, _planned(), base)
     text = lambda a, b: _text(listing_bytes(img[lay[a] - base:lay[b] - base], lay[a]))
-    assert text("slot_init", "id_store")[-2:] == [f"jsr {lay['revinit']:X}", "rsr"]
+    assert text("slot_init", "id_store")[-3:] == [f"jsr {lay['revinit']:X}", f"jsr {lay['originit']:X}", "rsr"]
     tag = struct.unpack("<I", REVERSE_TAG_BYTES)[0]
     init = listing_bytes(img[lay["revinit"] - base:lay["revtag"] - base], lay["revinit"])
     table, entry = init[2].addr, init[8].addr
-    assert _text(init) == ["pushm #1F", "mov.w #0, R0", f"mov.w {lay['bases'] + 40:X}(R0), R1", f"mov.w {lay['slots'] + 40:X}(R0), R2",
-                           "mov.w R1, [R2]", f"mov.w {lay['firsts']:X}(R0), R2", f"mov.w #{DEFAULT_NAMES + 4:X}, R3", "mov.w #1, R4",
-                           "mov.w R4, [R1]", "mov.w R2, 4[R1]", "mov.w #0, 8[R1]", "mov.w #FFFFFFFF, C[R1]", "mov.w R2, 10[R1]",
-                           "mov.w [R3], 14[R1]", "add.w #8, R3", "add.w #A0, R2", "add.w #18, R1", "add.w #1, R4", "cmp.w #5, R4",
-                           f"bne {entry:X}", "add.w #1, R0", "cmp.w #7, R0", f"bne {table:X}", f"mov.w #{tag:X}, {REVERSE_TAG:X}",
-                           "popm #1F", "rsr"]
+    def loop(first, last, mark, mark_at, table, entry):
+        return ["pushm #1F", f"mov.w #{first:X}, R0", f"mov.w {lay['bases'] + 40:X}(R0), R1", f"mov.w {lay['slots'] + 40:X}(R0), R2",
+                "mov.w R1, [R2]", f"mov.w {lay['firsts']:X}(R0), R2", f"mov.w #{DEFAULT_NAMES + 4:X}, R3", "mov.w #1, R4",
+                "mov.w R4, [R1]", "mov.w R2, 4[R1]", "mov.w #0, 8[R1]", "mov.w #FFFFFFFF, C[R1]", "mov.w R2, 10[R1]",
+                "mov.w [R3], 14[R1]", "add.w #8, R3", "add.w #A0, R2", "add.w #18, R1", "add.w #1, R4", "cmp.w #5, R4",
+                f"bne {entry:X}", "add.w #1, R0", f"cmp.w #{last:X}, R0", f"bne {table:X}", f"mov.w #{mark:X}, {mark_at:X}",
+                "popm #1F", "rsr"]
+    assert _text(init) == loop(0, 7, tag, REVERSE_TAG, table, entry)
+    otag = struct.unpack("<I", ORIG_TAG_BYTES)[0]
+    assert (ORIG_TAG, ORIG_TAG_BYTES) == (0x40FDB8, b"ORG4")
+    oinit = listing_bytes(img[lay["originit"] - base:lay["title3"] - base], lay["originit"])
+    assert _text(oinit) == loop(7, 10, otag, ORIG_TAG, oinit[2].addr, oinit[8].addr)
     check = listing_bytes(img[lay["revtag"] - base:lay["revtitle"] - base], lay["revtag"])
     assert _text(check) == [f"cmp.w #{tag:X}, {REVERSE_TAG:X}", f"be {check[3].addr:X}", f"jsr {lay['revinit']:X}",
+                            f"cmp.w #{otag:X}, {ORIG_TAG:X}", f"be {check[6].addr:X}", f"jsr {lay['originit']:X}",
                             f"mov.w {MAGIC_LENGTH:X}, R0", "rsr"]
     title = text("title", "pagecmp")
-    assert title[1] == "cmp.w #11, R0" and title[-3:] == [f"mov.w {lay['titles']:X}(R0), R0", "jsr [R0]", "rsr"]
-    arg = lambda f: f"{lay['revargs'] + 28 * f - 40:X}(R0)"
+    assert title[1] == "cmp.w #14, R0" and title[-3:] == [f"mov.w {lay['titles']:X}(R0), R0", "jsr [R0]", "rsr"]
+    arg = lambda f: f"{lay['revargs'] + 40 * f - 40:X}(R0)"
     want = [f"movz.bw {SHOWN_ID:X}, R0"]
     for attr, tile, string in (("8300", arg(1), arg(0)), ("8300", arg(2), None), ("8200", arg(4), arg(3))):
         want += [f"movz.hw #{attr}, [-SP]", f"mov.w {tile}, [-SP]",
                  f"mov.w {string}, [-SP]" if string else f"movea.b {lay['revword']:X}, [-SP]", f"call {STRING_PRINT:X}, [SP]",
                  "add.w #C, SP"]
-    assert text("revtitle", "title3") == want + ["rsr"]
+    assert text("revtitle", "raceend") == want + ["rsr"]                         # (Phase 27b: `raceend` follows)
 
 
 def test_the_s_ram_check_calls_revtag_first(romset_zip):
@@ -720,7 +763,8 @@ def test_the_s_ram_check_calls_revtag_first(romset_zip):
 # race_end.lua race on out/p26play6 to its name entry, the battery RAM MAME saved at its end).
 from tests.test_ranking import _title_words                          # noqa: E402
 
-ATTRACT_SECONDS = 1250      # every member of each attract group: measured, the last (Bay Bridge's ninth) at video frame 64 104 (1 115 s)
+ATTRACT_SECONDS = 1450      # every member of each attract group: measured, the last (Bay Bridge's ninth) at video frame 64 104 (1 115 s);
+                            # Phase 35: Bay Bridge's group has a tenth member (its own reverse table)
 BOOT_SECONDS = 150          # a boot and the attract's first page
 CLEAR_SECONDS = 60          # the test mode's backup clear (TEST_INPUT)
 BLANK = "0020"              # an empty column of the page's layer (every page starts on a cleared layer: recon §3)
@@ -787,7 +831,7 @@ class BootSession:
     """The session's boot runs, made in parallel at the first use: "fresh" (this set, no battery RAM, ATTRACT_SECONDS) then
     "fresh2" (its second boot); "main" (main's set, no battery RAM); "upgrade" (this set on main's battery RAM with a best time)
     then "upgrade2"; "mainboot" (main's set on that battery RAM); "clear" (this set, no battery RAM, a reverse table poked, the
-    test mode's backup clear)."""
+    test mode's backup clear); Phase 27b: "p27main" (P27_SET, main's since Phase 27, no battery RAM, ATTRACT_SECONDS)."""
 
     def __init__(self, romset_zip, saturn_cue, base: Path, main_battery: bytes | None):
         out, conv = _seven(romset_zip, saturn_cue)
@@ -805,6 +849,8 @@ class BootSession:
                 ("clear",): (("clear", build, CLEAR_SECONDS, {"VR_RANK_POKE": poke, "VR_RANK_INPUT": TEST_INPUT}, None),)}
         if (MAIN_SET / "vr.zip").is_file():
             jobs[("main",)] = (("main", MAIN_SET, BOOT_SECONDS, None, None),)
+        if (P27_SET / "vr.zip").is_file():                            # Phase 27b: main since Phase 27, the attract with no game
+            jobs[("p27main",)] = (("p27main", P27_SET, ATTRACT_SECONDS, {"VR_REVERSE_TABLE": f"{MAIN_REVERSE_TABLE:x}"}, None),)
         if main_battery is not None:
             jobs[("upgrade", "upgrade2")] = (("upgrade", build, BOOT_SECONDS, None, main_battery),
                                              ("upgrade2", build, BOOT_SECONDS, None, "prev"))
@@ -826,7 +872,7 @@ class BootSession:
 
     def run(self, label: str) -> BootRun:
         if label not in self.runs:
-            pytest.skip(f"main's set is not at {MAIN_SET}")
+            pytest.skip(f"main's set is not at {P27_SET if label == 'p27main' else MAIN_SET}")
         r = self.runs[label]
         if isinstance(r, BaseException):
             raise r
@@ -846,8 +892,12 @@ def boot_runs(romset_zip, saturn_cue, tmp_path_factory, rank_runs) -> BootSessio
     return _BOOT[key]
 
 
+# (the seven's slot words: NEW_SLOTS' words 3..9; its first three, never used before Phase 35, are the originals' reverse slots)
 NORMAL_BLOCK = (set().union(*(range(t, t + TABLE_BYTES) for t in ORIG_TABLES + NEW_TABLES), *(range(a, a + 4) for a in ORIG_SLOTS),
-                            range(NEW_SLOTS, NEW_SLOTS + 40), range(0x40E6D0, 0x40E6D0 + 18)) | {RANKING_INDEX})   # + the S-RAM magic
+                            range(NEW_SLOTS + 12, NEW_SLOTS + 40), range(0x40E6D0, 0x40E6D0 + 18)) | {RANKING_INDEX})   # + the S-RAM magic
+# Phase 35: the originals' reverse block (three tables, their slots, the tag), made by `originit` (tests/test_reverse_times.py)
+ORIG_BLOCK = set().union(*(range(t, t + 24 * SHORT_ENTRIES) for t in (0x40E6E4, 0x40E744, 0x40F010)), range(NEW_SLOTS, NEW_SLOTS + 12),
+                         range(0x40FDB8, 0x40FDBC))
 REVERSE_BLOCK = set().union(*(range(t, t + 24 * SHORT_ENTRIES) for t in REVERSE_TABLES), range(REVERSE_SLOTS, REVERSE_SLOTS + 28),
                             range(0x40FDAC, 0x40FDB0))                                                  # tables, slots, the tag
 GAME_RECORD = set(range(0x40F000, 0x40F00C))   # the game's record (0x40f000..0x40f00b, recon §5), written at every boot (0xfe05ae..)
@@ -938,12 +988,12 @@ def test_a_battery_ram_saved_by_main_keeps_every_time(boot_runs, rank_runs):
     for a in PAGE_OWN:                                                                 # the page's rewrites stand at the end
         last = [v for _, _, b, v in written if b == a]
         assert run.battery[a - 0x400000] == (last[-1] if last else before[a - 0x400000]), hex(a)
-    others = {a for _, _, a, _ in written} - REVERSE_BLOCK - CELLS - PAGE_OWN - set(BOOKKEEPING) - GAME_RECORD
+    others = {a for _, _, a, _ in written} - REVERSE_BLOCK - ORIG_BLOCK - CELLS - PAGE_OWN - set(BOOKKEEPING) - GAME_RECORD
     assert not others, sorted(map(hex, others))
     main = boot_runs.run("mainboot")
     reverse_page = next(f for f, _, a, v in written if a == SHOWN_ID and v >= 10)     # its setter call (mode 0x03 state 2)
     key = lambda w: (w[0], _boot_pc(w[1]), w[2], w[3], w[4])
-    mine = [key(w) for w in run.writes if w[0] < reverse_page and not (w[2] in REVERSE_BLOCK or LAST_OFFSET_CELL <= w[2] <= ROWS_CELL)]
+    mine = [key(w) for w in run.writes if w[0] < reverse_page and not (w[2] in REVERSE_BLOCK | ORIG_BLOCK or LAST_OFFSET_CELL <= w[2] <= ROWS_CELL)]
     assert mine == [key(w) for w in main.writes if w[0] < reverse_page]
 
 
@@ -955,7 +1005,7 @@ def test_a_second_boot_writes_no_table(boot_runs, label):
     bookkeeping and the attract pages' (PAGE_OWN and the cells)."""
     run = boot_runs.run(label)
     written = {a for _, _, a, _ in _bytes(run.writes)}
-    assert not written & (NORMAL_BLOCK | REVERSE_BLOCK), sorted(map(hex, written & (NORMAL_BLOCK | REVERSE_BLOCK)))[:10]
+    assert not written & (NORMAL_BLOCK | REVERSE_BLOCK | ORIG_BLOCK), sorted(map(hex, written & (NORMAL_BLOCK | REVERSE_BLOCK | ORIG_BLOCK)))[:10]
     assert written <= CELLS | PAGE_OWN | set(BOOKKEEPING) | GAME_RECORD, sorted(map(hex, written - CELLS - PAGE_OWN - set(BOOKKEEPING)))
     assert _at(run.battery, NORMAL_BLOCK | REVERSE_BLOCK) == _at(run.before, NORMAL_BLOCK | REVERSE_BLOCK)
 
@@ -988,11 +1038,10 @@ def test_the_attract_shows_every_member_of_each_group(boot_runs):
     entry 0, then 6 past the end), SHORT_PAGE frames, rows 1..4 drawn and rows 5 and 6 empty (BLANK) on every frame, the title
     "<NAME> REVERSE RANKING": the name and REVERSE in red (0x8300), RANKING in white (0x8200), at `reverse_title_columns`. The
     direction flag is 0 on every frame."""
-    from vrtools.arcade.ranking import attract_groups, reverse_title_columns, title_columns
+    from vrtools.arcade.ranking import attract_groups
     run, rs, d = boot_runs.run("fresh"), boot_runs.rs, boot_runs.d
     assert {flag for _, _, _, flag in run.lines} == {0}
     groups = attract_groups(d)
-    bases = list(ORIG_TABLES + NEW_TABLES + REVERSE_TABLES)
     pages = _spans(run)
     print("PAGES", [(p["start"], p["id"], p["end"] - p["start"]) for p in pages])
     for k, g in enumerate(groups):
@@ -1000,23 +1049,34 @@ def test_the_attract_shows_every_member_of_each_group(boot_runs):
         assert set(shown) == set(g), (k, shown, g)
         start = g.index(shown[0])
         assert shown == [g[(start + j) % len(g)] for j in range(len(shown))], (k, shown)
-    original = {0: ("MEDIUM", 9), 1: ("EXPERT", 9), 2: ("BEGINNER", 8)}
     for p in pages:
-        ident = p["id"]
-        assert p["table"] == bases[ident], (p["start"], ident)
-        if ident < 10:
-            assert p["firsts"] == [0, 6, 12, 18, 24] and p["end"] - p["start"] == NORMAL_PAGE, (p["start"], ident, p["firsts"])
-            assert all(r[j] - {BLANK} for j in range(6) for r in p["rows"][-1:]), p["start"]      # six rows a screen
-            text, col = original[ident] if ident < 3 else (d[ident].name, title_columns(d[ident].name)[0])
-            want = _title_words(rs, text, col, 0x8300)
-        else:
-            assert p["firsts"] == [0, 6] and p["end"] - p["start"] == SHORT_PAGE, (p["start"], ident, p["firsts"])
-            assert p["rows"] and all(r[4] == r[5] == {BLANK} for r in p["rows"]), p["start"]
-            assert all(r[j] - {BLANK} for j in range(4) for r in p["rows"][-1:]), p["start"]      # (drawn over two frames)
-            name = d[ident - 7].name
-            n, c, r = reverse_title_columns(name)
-            want = _title_words(rs, name, n, 0x8300) + _title_words(rs, "REVERSE", c, 0x8300) + _title_words(rs, "RANKING", r, 0x8200)
-        assert p["titles"] and all(t[col] == w for t in p["titles"][-1:] for col, w in want), (p["start"], ident)
+        _assert_page(p, rs, d)
+
+
+def _assert_page(p: dict, rs, d) -> None:
+    """One attract page (`_spans`) as its id's page is drawn: its id's table; a normal page four screens of six rows (first
+    entries 0, 6, 12, 18), NORMAL_PAGE frames, its course's title as the game and Phase 23b print it; a reverse page one screen
+    (first entry 0, then 6 past the end), SHORT_PAGE frames, rows 1..4 drawn and rows 5 and 6 empty on every frame, the title
+    "<NAME> REVERSE RANKING" (the name and REVERSE in red, RANKING in white, at `reverse_title_columns`)."""
+    from vrtools.arcade.ranking import reverse_title_columns, title_columns
+    from vrtools.arcade.ranking import ORIG_NAMES, ORIG_REVERSE_TABLES
+    bases = list(ORIG_TABLES + NEW_TABLES + REVERSE_TABLES + ORIG_REVERSE_TABLES)
+    original = {0: ("MEDIUM", 9), 1: ("EXPERT", 9), 2: ("BEGINNER", 8)}
+    ident = p["id"]
+    assert p["table"] == bases[ident], (p["start"], ident)
+    if ident < 10:
+        assert p["firsts"] == [0, 6, 12, 18, 24] and p["end"] - p["start"] == NORMAL_PAGE, (p["start"], ident, p["firsts"])
+        assert all(r[j] - {BLANK} for j in range(6) for r in p["rows"][-1:]), p["start"]      # six rows a screen
+        text, col = original[ident] if ident < 3 else (d[ident].name, title_columns(d[ident].name)[0])
+        want = _title_words(rs, text, col, 0x8300)
+    else:
+        assert p["firsts"] == [0, 6] and p["end"] - p["start"] == SHORT_PAGE, (p["start"], ident, p["firsts"])
+        assert p["rows"] and all(r[4] == r[5] == {BLANK} for r in p["rows"]), p["start"]
+        assert all(r[j] - {BLANK} for j in range(4) for r in p["rows"][-1:]), p["start"]      # (drawn over two frames)
+        name = d[ident - 7].name if ident < 17 else ORIG_NAMES[ident - 17]      # Phase 35: an original's level word
+        n, c, r = reverse_title_columns(name)
+        want = _title_words(rs, name, n, 0x8300) + _title_words(rs, "REVERSE", c, 0x8300) + _title_words(rs, "RANKING", r, 0x8200)
+    assert p["titles"] and all(t[col] == w for t in p["titles"][-1:] for col, w in want), (p["start"], ident)
 
 
 def test_the_backup_clear_resets_the_reverse_tables(boot_runs):
@@ -1249,3 +1309,242 @@ def test_both_directions_on_one_course_keep_their_own_times(rank_runs, kind, ent
         game = {a for f, _, a, _ in _bytes(run.writes) if f in _window(run, k)}
         foreign = REVERSE_BLOCK if direction == "normal" else TABLES
         assert game & ours and not game & foreign, (direction, sorted(map(hex, game & foreign))[:10])
+
+
+# --- Phase 27b (MAME): the attract's first page after a game shows the table just raced -----------------------------------------
+# At the race's end the raced course's group counter is pointed at the table the setter chose there (`ranking.raceend`), so the
+# attract's first ranking page after the game shows it and the rotation goes on from the member after it. One-lap races of
+# race_end.lua under the autopilot, from a fresh battery RAM, with ranking_attract.lua beside it (autoplay.lua's VR_EXTRA_LUA runs
+# both) logging every attract page (its shown id, data index, table, title and rows: `_spans`); the battery taps from the coin as
+# in `rank_runs`. On the session's seven-course set, and on main's (P27_SET) for the comparison of a race's writes.
+P27_SET = Path(__file__).resolve().parents[1] / "out" / "p27play1"   # main's tested set since Phase 27 (6d04860's product code;
+                                                                      # git-ignored); its reverse table is at MAIN_REVERSE_TABLE too
+BAY_BRIDGE = 1                         # the original Bay Bridge's menu entry (data index and ranking id 0)
+BAY_BRIDGE_TRACK = "BAYBRIDG/TRCKBAYB"  # the autopilot's line there: the Saturn track's centreline (it lands on the arcade's tiles,
+BAY_LOOKAHEAD = "3"                    # tests/test_convert_geometry.py); autopilot.lua's lookahead 3 points (6: stuck at a wall)
+SLOW = (-128, -96, -64, -32)           # VR_END_PRESET: the reverse table 4 .. 1 s faster than the race's time at its results
+JUMP_SECONDS, NEXT_SECONDS = 200, 540  # a game to its first attract page after it; on to the next page of the same group
+JUMPS = {"normal6": ("normal", METROPOLIS, NEXT_SECONDS, {}),
+         "reverse4": ("reverse", AMAZON_FALLS, JUMP_SECONDS, {}),
+         "bay": ("normal", BAY_BRIDGE, JUMP_SECONDS, {"VR_AUTOPILOT_LOOKAHEAD": BAY_LOOKAHEAD}),
+         "slow13": ("reverse", METROPOLIS, NEXT_SECONDS, {"VR_END_PRESET": f"{REVERSE_TABLES[METROPOLIS - 3]:x}:{','.join(map(str, SLOW))}"}),
+         "main6": ("normal", METROPOLIS, JUMP_SECONDS, {})}           # on P27_SET
+
+
+def test_autoplay_runs_several_extra_scripts():
+    """Phase 27b's harness: autoplay.lua's VR_EXTRA_LUA takes several scripts separated by ';' (race_end.lua and
+    ranking_attract.lua side by side), each run once, in order."""
+    text = (LUA_DIR / "autoplay.lua").read_text()
+    assert 'for path in string.gmatch(os.getenv("VR_EXTRA_LUA"), "[^;]+") do dofile(path) end' in text
+
+
+def _jump(base: Path, build: Path, conv, saturn_cue, label: str) -> tuple[RankRun, BootRun]:
+    """One JUMPS run in base / label: race_end.lua's log (taps, modes) and ranking_attract.lua's (the attract pages)."""
+    from tests.test_convert_collision import _saturn_course
+    from vrtools.convert.lap import centreline, order_slices
+    direction, entry, seconds, extra = JUMPS[label]
+    wd = base / label
+    line = _drive_line(conv[entry - 3]) if entry >= 3 else centreline(order_slices(_saturn_course(saturn_cue, BAY_BRIDGE_TRACK)))
+    path = write_centreline(wd / "line.csv", reverse_points(line) if direction == "reverse" else line)
+    env = {"VR_COURSE": "0", "VR_WHEEL": str(WHEEL_FOR_ENTRY[entry]), "VR_COLLISION_LOG": str(wd / "c.txt"), "VR_SNAPS": "",
+           "VR_AUTOPILOT": str(path), "VR_EXTRA_LUA": f"{LUA_DIR / 'race_end.lua'};{LUA_DIR / 'ranking_attract.lua'}",
+           "VR_END_LOG": str(wd / "end.txt"), "VR_RANK_LOG": str(wd / "log.txt"), "VR_DIRECTION_RAM": f"{DIRECTION_RAM:x}",
+           "VR_END_TABLE": f"{BATTERY[0]:x}-{BATTERY[1]:x}", "VR_END_TAP_AT": str(TAP_AT), **extra}
+    if direction == "reverse":
+        env["VR_DIRECTION"] = "1"
+    rom = build
+    if label.startswith("main"):
+        rom, env["VR_REVERSE_TABLE"] = P27_SET, f"{MAIN_REVERSE_TABLE:x}"
+    run_mame(LUA_DIR / "autoplay.lua", seconds, wd, rom, env=env)
+    battery = (wd / "nvram" / "vr" / "nvram").read_bytes()
+    return _parse_rank(wd / "end.txt", (direction,), battery), _parse_attract(wd / "log.txt", None, battery)
+
+
+class JumpSession:
+    """The session's JUMPS runs, made in parallel at the first use (main's only when P27_SET is there)."""
+
+    def __init__(self, romset_zip, saturn_cue, base: Path):
+        out, conv = _seven(romset_zip, saturn_cue)
+        self.rs, self.d = out, decode_directory(out)
+        build = _build(base, romset_zip, out)
+        labels = [k for k in JUMPS if not k.startswith("main") or (P27_SET / "vr.zip").is_file()]
+        with ThreadPoolExecutor(len(labels)) as ex:
+            futures = {k: ex.submit(_jump, base, build, conv, saturn_cue, k) for k in labels}
+        self.runs = {k: f.exception() or f.result() for k, f in futures.items()}
+
+    def run(self, label: str) -> tuple[RankRun, BootRun]:
+        if label not in self.runs:
+            pytest.skip(f"main's set is not at {P27_SET}")
+        r = self.runs[label]
+        if isinstance(r, BaseException):
+            raise r
+        return r
+
+
+_JUMP: dict[str, JumpSession] = {}
+
+
+@pytest.fixture
+def jump_runs(romset_zip, saturn_cue, tmp_path_factory) -> JumpSession:
+    key = str(romset_zip)
+    if key not in _JUMP:
+        _JUMP[key] = JumpSession(romset_zip, saturn_cue, tmp_path_factory.mktemp("jump"))
+    return _JUMP[key]
+
+
+def _after_game(race: RankRun, boot: BootRun) -> list[dict]:
+    """The attract's ranking pages after the game (`_spans` starting after the race's load), in order."""
+    pages = [p for p in _spans(boot) if p["start"] > race.loads[0]]
+    print("PAGES AFTER THE GAME", [(p["start"], p["di"], p["id"]) for p in pages])
+    return pages
+
+
+def _jump_write(race: RankRun, group: int) -> list[tuple[int, int, int]]:
+    """The race's writes of its group's counter byte from its load up to the first attract page's setter call (the game's
+    load, the race's end, the name entry): (frame, pc, value) each."""
+    attract = next(l.frame for l in _race(race, 0) if l.mode == 0x02)
+    page = next(f for f, _, a, _ in _bytes(race.writes) if a == SHOWN_ID and f >= attract)
+    return [(f, pc, v) for f, pc, a, v in _bytes(race.writes) if a == ATTRACT_COUNTERS + group and race.loads[0] <= f < page]
+
+
+def _raceend_pcs() -> range:
+    from vrtools.arcade.ranking import ranking_layout
+    rl = ranking_layout(directory_layout()["ranking"])
+    return range(rl["raceend"], rl["title3"])
+
+
+def _insert_frame(race: RankRun) -> int:
+    """The race end's setter call: its store of the shown id on the frame the mode first reads 0x1b after the race (recon §7)."""
+    end = next(l.frame for l in _race(race, 0) if l.mode == 0x1B)
+    return next(f for f, _, a, _ in _bytes(race.writes) if a == SHOWN_ID and f >= end - 1)
+
+
+def test_after_a_normal_race_the_first_page_shows_the_course_raced(jump_runs):
+    """A normal one-lap Metropolis race (a record, the name entry): at the race's end its group's counter (Acropolis's, data
+    index 1) is written once, by `raceend`, on the insert's frame, with Metropolis's position in the group; the attract's first
+    ranking page after the game shows Metropolis's table under its own title (four screens of six rows); the next page of that
+    group shows the member after it (Metropolis reverse), its own page. Main showed the group's next member (Acropolis) there."""
+    from vrtools.arcade.ranking import attract_groups, attract_positions
+    race, boot = jump_runs.run("normal6")
+    d, group = jump_runs.d, attract_groups(jump_runs.d)[1]
+    assert d[METROPOLIS].name == "METROPOLIS" and d[METROPOLIS].template == 1 and METROPOLIS in group
+    assert _after_finish(_race(race, 0)) == RECORD
+    pages = _after_game(race, boot)
+    assert (pages[0]["di"], pages[0]["id"]) == (1, METROPOLIS)
+    _assert_page(pages[0], jump_runs.rs, d)
+    nxt = next(p for p in pages[1:] if p["di"] == 1)
+    assert nxt["id"] == group[group.index(METROPOLIS) + 1] == METROPOLIS + 7
+    _assert_page(nxt, jump_runs.rs, d)
+    w = _jump_write(race, 1)
+    assert [(f, v) for f, _, v in w] == [(_insert_frame(race), group.index(METROPOLIS))] and w[0][1] in _raceend_pcs(), w
+    assert attract_positions(d)[METROPOLIS] == group.index(METROPOLIS)
+
+
+def test_after_a_reverse_race_the_first_page_shows_its_reverse_table(jump_runs):
+    """A reverse one-lap Amazon Falls race (a record in its reverse table): its group's counter (Bay Bridge's, data index 0) is
+    pointed at the reverse id's position at the race's end; the first page after the game is "AMAZON FALLS REVERSE RANKING"
+    (id 11): one screen of four rows, rows 5 and 6 empty, SHORT_PAGE frames."""
+    from vrtools.arcade.ranking import attract_groups
+    race, boot = jump_runs.run("reverse4")
+    d, group = jump_runs.d, attract_groups(jump_runs.d)[0]
+    assert d[AMAZON_FALLS].name == "AMAZON FALLS" and AMAZON_FALLS + 7 in group
+    assert _after_finish(_race(race, 0)) == RECORD and all(l.flag == 1 for l in _driving(_race(race, 0)))
+    pages = _after_game(race, boot)
+    assert (pages[0]["di"], pages[0]["id"]) == (0, AMAZON_FALLS + 7) == (0, 11)
+    _assert_page(pages[0], jump_runs.rs, d)
+    assert [(f, v) for f, _, v in _jump_write(race, 0)] == [(_insert_frame(race), group.index(AMAZON_FALLS + 7))]
+
+
+def test_after_a_race_on_an_original_the_first_page_shows_its_table(jump_runs):
+    """A normal one-lap race on the original Bay Bridge (menu entry 1, data index and ranking id 0; the autopilot on the Saturn
+    track's centreline): the race finishes and records; its counter is pointed at position 0; the first page after the game is
+    Bay Bridge's own table under the game's own title (MEDIUM COURSE RANKING), not its group's next member."""
+    race, boot = jump_runs.run("bay")
+    assert jump_runs.d[BAY_BRIDGE].name == "BAY BRIDGE" and jump_runs.d[BAY_BRIDGE].template == 0
+    assert race.times and _after_finish(_race(race, 0)) == RECORD, race.times
+    pages = _after_game(race, boot)
+    assert (pages[0]["di"], pages[0]["id"]) == (0, 0)
+    _assert_page(pages[0], jump_runs.rs, jump_runs.d)
+    assert [(f, v) for f, _, v in _jump_write(race, 0)] == [(_insert_frame(race), 0)]
+
+
+def test_a_race_without_a_record_jumps_too(jump_runs):
+    """A reverse one-lap Metropolis race whose reverse table was preset at its results 4 .. 1 s faster than its time (race_end.lua's
+    VR_END_PRESET): no record flag, no name entry (the NO_RECORD modes); the setter still ran at the race's end (before the
+    qualify test), so the counter is pointed there all the same and the first page after the game is "METROPOLIS REVERSE
+    RANKING" (id 13)."""
+    from vrtools.arcade.ranking import attract_groups
+    race, boot = jump_runs.run("slow13")
+    group = attract_groups(jump_runs.d)[1]
+    lines = _race(race, 0)
+    assert not any(l.record & 1 for l in lines) and _after_finish(lines) == NO_RECORD, [hex(m) for m in _after_finish(lines)]
+    assert race.presets
+    pages = _after_game(race, boot)
+    assert (pages[0]["di"], pages[0]["id"]) == (1, METROPOLIS + 7)
+    _assert_page(pages[0], jump_runs.rs, jump_runs.d)
+    assert [(f, v) for f, _, v in _jump_write(race, 1)] == [(_insert_frame(race), group.index(METROPOLIS + 7))]
+
+
+def test_the_last_member_of_a_group_wraps_to_the_first(jump_runs):
+    """Metropolis reverse (id 13) is the last member of Acropolis's group: after the race that showed it first, the next page of
+    that group is the group's first member, Acropolis's own table (as `attract` wraps past the end)."""
+    from vrtools.arcade.ranking import attract_groups
+    race, boot = jump_runs.run("slow13")
+    group = attract_groups(jump_runs.d)[1]
+    assert group[-1] == METROPOLIS + 7 and group[0] == 1
+    pages = _after_game(race, boot)
+    assert pages[0]["id"] == METROPOLIS + 7
+    nxt = next(p for p in pages[1:] if p["di"] == 1)
+    assert nxt["id"] == group[0]
+    _assert_page(nxt, jump_runs.rs, jump_runs.d)
+
+
+def test_a_race_writes_as_on_main_but_its_group_s_counter(jump_runs):
+    """The same normal one-lap Metropolis race on main's set (P27_SET), both from a fresh battery RAM: up to the attract load
+    after the name entry every battery write is main's (frame, address, data, mask, and the PC where it is in the boot ROM) but
+    one, `raceend`'s write of the group's counter byte on the insert's frame; the modes are main's frame for frame over main's
+    run (the insert, the name entry, the attract and its pages' timing); after the attract load the writes are main's in frame,
+    address and mask, their data differing only in the shown id and that counter (the page shows the course raced)."""
+    race, _ = jump_runs.run("normal6")
+    main, _ = jump_runs.run("main6")
+    limit = JUMP_SECONDS * 57                                                    # main's run (the video's 57.5 Hz)
+    attract = next(l.frame for l in _race(race, 0) if l.mode == 0x02)
+    assert attract == next(l.frame for l in _race(main, 0) if l.mode == 0x02)
+    key = lambda w: (w[0], _boot_pc(w[1]), w[2], w[3], w[4])
+    pcs = _raceend_pcs()
+    jump = [w for w in race.writes if w[1] in pcs]
+    assert [(w[0], w[2], w[4]) for w in jump] == [(_insert_frame(race), ATTRACT_COUNTERS, 0xFF00)], jump
+    assert [key(w) for w in race.writes if w[0] < attract and w not in jump] == [key(w) for w in main.writes if w[0] < attract]
+    frames = lambda r: [(l.frame, l.mode, l.state, l.flag, l.record, _boot_pc(l.handler)) for l in r.lines if l.frame <= limit]
+    assert race.loads == main.loads and frames(race) == frames(main)
+    after = lambda r: [w for w in r.writes if attract <= w[0] < limit]
+    assert [(w[0], w[2], w[4]) for w in after(race)] == [(w[0], w[2], w[4]) for w in after(main)]
+    differ = {(w[2], w[4]) for w, m in zip(after(race), after(main)) if w[3] != m[3]}
+    assert differ <= {(SHOWN_ID & ~1, 0xFF00), (ATTRACT_COUNTERS, 0xFF00)}, differ
+
+
+def test_with_no_game_the_attract_is_main_s_frame_for_frame(boot_runs):
+    """With no game played (a fresh boot, ATTRACT_SECONDS of attract: every member of each group), this set's attract is main's
+    (P27_SET) until the first page of an original's reverse table (Phase 35: a page main does not have): up to that page's setter
+    call the same modes on the same frames, the same pages (frames, shown ids, data indices, tables, screens), titles and rows,
+    and the same battery writes (frame, address, data, mask, and the PC where it is in the boot ROM; the originals' reverse block,
+    which `originit` makes at the boot, aside). After it the pages come later than main's, so they are compared group by group:
+    the pages of each data index, the originals' reverse pages left out, are main's pages of that data index in main's order,
+    each with main's table, screens, title and rows."""
+    run, main = boot_runs.run("fresh"), boot_runs.run("p27main")
+    assert len(_spans(run)) >= 20
+    new = next(f for f, _, a, v in _bytes(run.writes) if a == SHOWN_ID and v >= 17)       # the first such page's setter call
+    assert new > 4000 and any(p["id"] >= 17 for p in _spans(run))
+    upto = lambda rows: [r for r in rows if r[0] < new]
+    assert upto(run.lines) == upto(main.lines)
+    assert upto(run.pages) == upto(main.pages)
+    assert upto(run.titles) == upto(main.titles) and upto(run.rows) == upto(main.rows)
+    key = lambda w: (w[0], _boot_pc(w[1]), w[2], w[3], w[4])
+    assert [key(w) for w in upto(run.writes) if w[2] not in ORIG_BLOCK and w[2] + 1 not in ORIG_BLOCK] == [key(w) for w in upto(main.writes)]
+    page = lambda p: (p["id"], p["table"], p["firsts"], p["end"] - p["start"], p["titles"][-1], p["rows"][-1])
+    for k in range(3):
+        mine = [page(p) for p in _spans(run) if p["di"] == k and p["id"] < 17]
+        theirs = [page(p) for p in _spans(main) if p["di"] == k]
+        n = min(len(mine), len(theirs))
+        assert n >= 3 and mine[:n] == theirs[:n], (k, [m[0] for m in mine], [t[0] for t in theirs])
+        assert [p["id"] for p in _spans(run) if p["di"] == k and p["id"] >= 17] and not [t for t in theirs if t[0] >= 17]

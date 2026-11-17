@@ -252,3 +252,38 @@ def test_the_pit_log_can_force_a_work_state():
     assert 'local damage = tonumber(os.getenv("VR_PIT_DAMAGE") or "")' in text
     assert "if counting and mem:read_u32(b + 0xa) == 0xff2345 then damage = nil" in text
     assert "elseif counting then mem:write_u8(b + 0x1ab, damage) end" in text
+
+
+def test_vr_mame_jobs_caps_the_mame_processes_at_once(tmp_path, monkeypatch):
+    """Phase 27b: with VR_MAME_JOBS=n in the environment, at most n run_mame calls run MAME at once (the test sessions start
+    their runs in parallel threads); the others wait for a slot. Deterministic: the fakes pair up on a barrier (so two do run
+    at once, or the barrier times out and the test fails) and the count of those inside is never above the cap."""
+    import subprocess
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
+    lock, running, peak = threading.Lock(), [0], [0]
+    barrier = threading.Barrier(2, timeout=10)
+
+    def fake(cmd, cwd, env, capture_output, text, timeout):
+        with lock:
+            running[0] += 1
+            peak[0] = max(peak[0], running[0])
+        barrier.wait()                                    # two must be inside together; a cap of 1 times out here
+        with lock:
+            running[0] -= 1
+        return subprocess.CompletedProcess(cmd, 0, "Average speed: 100%", "")
+    monkeypatch.setattr(subprocess, "run", fake)
+    monkeypatch.setenv("VR_MAME_JOBS", "2")
+    with ThreadPoolExecutor(6) as ex:
+        list(ex.map(lambda k: run_mame(LUA_DIR / "autoplay.lua", 1, tmp_path / str(k), tmp_path), range(6)))
+    assert peak[0] <= 2
+
+
+@pytest.mark.parametrize("value", ["0", "-1", "two", "1.5"])
+def test_vr_mame_jobs_that_is_not_a_positive_integer_is_an_error(tmp_path, monkeypatch, value):
+    """Phase 27b review M3: VR_MAME_JOBS=0 used to wait forever and a negative one raised a bare ValueError."""
+    import subprocess
+    monkeypatch.setattr(subprocess, "run", lambda *a, **k: pytest.fail("MAME must not start"))
+    monkeypatch.setenv("VR_MAME_JOBS", value)
+    with pytest.raises(MameError, match="VR_MAME_JOBS must be a positive integer"):
+        run_mame(LUA_DIR / "autoplay.lua", 1, tmp_path, tmp_path)

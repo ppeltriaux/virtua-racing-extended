@@ -19,7 +19,8 @@ SPANS = ({(0xFE48ED, 0xB7), (0xFE8E8F, 0xD), (0xFC270B, 4), (0xFC28A3, 4), (0xFC
           (0xFE69F7, 7), (0xFE6A18, 7), (0xFC270F, 9),      # S-RAM initialiser's count, arrays and slot stores, the magic, the id store, the boot clear
           (0xFC3C33, 10), (0xFC3CFF, 19),                    # Phase 23b: the attract page's setter call, the ranking title
           (0xFC40F9, 7), (0xFC4184, 7), (0xFC3CA1, 6), (0xFC3D8C, 10),   # Phase 27: the insert's two offsets, the page's end and rows,
-          (0xFE69F0, 7)}                                                  # Task 3: the S-RAM check's call of the reverse block's tag check
+          (0xFE69F0, 7),                                                  # Task 3: the S-RAM check's call of the reverse block's tag check
+          (0xFC40E1, 10)}                                                 # Phase 27b: the race end's setter call, then `raceend`
          | {(s, 0x16) for s in (0xFE1D37, 0xFE2160, 0xFE2B07, 0xFE2CF7, 0xFE415B)}
          | {(s, 16) for s in (0xFE8D0B, 0xFE8F97, 0xFE9147, 0xFE92FD, 0xFEA927, 0xFEAA82, 0xFEAB05, 0xFEBD50, 0xFF2205, 0xFF241C, 0xFF4C9E)}
          | {(s, 14) for s in (0xFEC003, 0xFEC152, 0xFFCFFC)}                    # Phase 26: the fourteen command-0x1800 sites (direction.py)
@@ -30,7 +31,8 @@ SPANS = ({(0xFE48ED, 0xB7), (0xFE8E8F, 0xD), (0xFC270B, 4), (0xFC28A3, 4), (0xFC
                                                                                 # gate's 0xfc40ce is the original's again since Phase 27)
          | {(0xFC2788, 9)}                                                      # stage 3 Task 2: the course lock's handler, `dirlock`
          | {(0xFF4799, 6)}                                                      # stage 3 Task 6: the HUD label's print, `hudname`
-         | {(s, 7) for s in (0xFF2518, 0xFF26F0, 0xFF2735, 0xFF277A)})       # stage 4 Task 5: the crew spawns' sites, `crewturn<state>`
+         | {(s, 7) for s in (0xFF2518, 0xFF26F0, 0xFF2735, 0xFF277A)}        # stage 4 Task 5: the crew spawns' sites, `crewturn<state>`
+         | {(0xFE11C0, 4), (0xFE11D6, 4)})                                      # Phase 28: the draw budget's two immediates (budget.py)
 
 
 def _ten():
@@ -171,7 +173,7 @@ def test_loader_and_car_routines_serve_the_entry(romset_zip):
     assert any("FCD395" in t for t in cars) and any("FCD195" in t for t in cars) and "rsr" in cars
     assert [l.text.split()[0] for l in listing(out, 0xFE8A91, 2)] == ["jsr", "nop"]
     assert listing(out, 0xFE8AA7, 1)[0].text.startswith("and.w")                            # the instruction after the span is intact
-    assert directory_layout()["end"] - directory_layout()["loader"] < 6900                  # routines stay small (Phase 21: + picture (unrolled for speed), start; 22i: the pit
+    assert directory_layout()["end"] - directory_layout()["loader"] < 7300                  # routines stay small (Phase 21: + picture (unrolled for speed), start; 22i: the pit
                                                                                             # routines; 22r: the ranking arrays and routines, 0x1b0 bytes; 23b: the
                                                                                             # attract groups, the names and seven 100-byte title routines, ~0x380;
                                                                                             # Phase 26 stage 3 (plan D10): the direction screen's routines, ~0x3a0;
@@ -179,7 +181,15 @@ def test_loader_and_car_routines_serve_the_entry(romset_zip):
                                                                                             # Phase 27 Task 1: the setter's reverse choice, its arrays, the page's
                                                                                             # two hooks, less `rankgate`: 6 251 -> 6 374, the bound holds;
                                                                                             # Task 3: the reverse block's initialiser, boot tag check and title,
-                                                                                            # its arrays, ids 10..16's title words: 6 374 -> 6 856, 6 500 -> 6 900)
+                                                                                            # its arrays, ids 10..16's title words: 6 374 -> 6 856, 6 500 -> 6 900;
+                                                                                            # Phase 27b: `raceend` and its 17 positions: 6 856 -> 6 895, the bound holds;
+                                                                                            # Phase 32: the HUD's word REVERSE in a reverse race, 6 895 -> 6 947, 6 900 -> 7 000;
+                                                                                            # Phase 35: the originals' reverse tables: the setter's arrays by id grow
+                                                                                            # from 17 to 20 words (bases, slots, titles), ten first default times and
+                                                                                            # `revtitle`'s five arrays of ten, three positions, the setter's out-of-line
+                                                                                            # ids 0..2, `originit` (revinit's loop for the three, its tag), `revtag`'s
+                                                                                            # second check and `slot_init`'s call: 6 947 -> 7 221, 7 000 -> 7 300: the
+                                                                                            # arrays are indexed by id and stay in one piece inside the image)
 
 
 def test_laps_are_written_only_in_the_normal_game_mode(romset_zip):

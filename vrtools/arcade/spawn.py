@@ -22,6 +22,7 @@ START_GANTRY = 0xFFB07F
 CHECKPOINT_GANTRIES = (0xFFB08A, 0xFFB095, 0xFFB0A0, 0xFFB0AB)
 GRID_BOARDS = 0xFFC17E
 KEEP_HANDLERS = {MINIMAP, START_GANTRY, *CHECKPOINT_GANTRIES, GRID_BOARDS}
+ARROW_BOARD = 0xFFAA67            # Phase 33: the one-sided arrow boards before a bend (Big Forest 4, Bay Bridge 10; recon §5.1)
 
 
 @dataclass(frozen=True)

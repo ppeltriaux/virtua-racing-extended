@@ -1,20 +1,21 @@
-# Virtua Racing Extended v0.2.1
+# Virtua Racing Extended v0.3
 
 Virtua Racing Extended is the 1992 Sega Model 1 arcade Virtua Racing with ten courses: its own three
 (Big Forest, Bay Bridge, Acropolis) and the seven the 1995 Saturn port added (Alpine, Amazon Falls,
 Diablo Canyon, Metropolis, Pacific Coast, Surfers Oval, Surfers Road). The seven are converted from
 the Saturn disc into the arcade game's own data formats and race on the arcade's engine in MAME: its
-fifteen opponents, its time limits and checkpoints, its render rate. The three original courses are
-untouched, byte for byte. The project page, with videos and screenshots:
+fifteen opponents, its time limits and checkpoints, its render rate. The three original courses keep
+their own course data byte for byte; since v0.3 they can also be raced in reverse (see "What's new in
+v0.3"). The project page, with videos and screenshots:
 https://continuearcade.com/virtua-racing-extended/
 
 This repository is a patch: one command builds the game on your machine from your own copies of the
 arcade game and of the Saturn port. It holds none of either (see "What is in the patch").
 
-> **v0.2.1 is an early release, not a finished one.** All ten courses load and race, with opponents,
-> pit lanes, walls, checkpoints, the in-race map and a best-time table per course, and the seven
-> converted courses can be raced in reverse, but the tuning and the finish are still being worked on:
-> see "Known issues in v0.2.1" and "Planned".
+> **v0.3 is an early release, not a finished one.** All ten courses load and race, with opponents,
+> pit lanes, walls, checkpoints, the in-race map and a best-time table per course, and all ten can be
+> raced in reverse, but the tuning and the finish are still being worked on: see "Known issues in v0.3"
+> and "Planned".
 
 ## What you need
 
@@ -78,12 +79,13 @@ Windows: see "What you need".
 (steering left/right): BIG FOREST, BAY BRIDGE, ACROPOLIS, then ALPINE, AMAZON FALLS, DIABLO CANYON,
 METROPOLIS, PACIFIC COAST, SURFERS OVAL, SURFERS ROAD. Grand Prix is untouched.
 
-**Reverse (new in v0.2):** after you pick one of the seven converted courses, a COURSE DIRECTION screen shows
-the course twice, NORMAL on the left and REVERSE on the right. It starts on NORMAL; turn the wheel right for
+**Reverse (new in v0.2; on the three original courses since v0.3):** after you pick a course, a COURSE DIRECTION
+screen shows the course twice, NORMAL on the left and REVERSE on the right. It starts on NORMAL; turn the wheel right for
 REVERSE (bring it to the centre or left first if it is already to the right), and press the gas to start. Doing
-nothing races the normal way. The three original courses have no reverse and go straight to the race.
-Since v0.2.1 each converted course keeps its four best reverse times, apart from its normal table; they are shown in
-the attract mode after the course's own table (see "What's new in v0.2.1"). In v0.2 a reverse race recorded no best time.
+nothing races the normal way. In v0.2 and v0.2.1 only the seven converted courses had it; the three original courses
+went straight to the race. Each course keeps its four best reverse times, apart from its normal table; they are shown in
+the attract mode after the course's own table (the converted courses since v0.2.1, the three original courses since
+v0.3). In v0.2 a reverse race recorded no best time.
 
 **Best times:** each course keeps its own ranking table in the game's battery-backed RAM. On the first
 boot of the patched set the game finds its RAM laid out for three tables and initialises it for ten,
@@ -94,9 +96,51 @@ you want them.
 (`pace`), its checkpoint time extensions (`time_factor`) and sets its race length (`laps`, 1 to 7);
 repeat `--tune` per course. The defaults are 5 laps and the values the build was tested with.
 
+## What's new in v0.3
+
+Each item says how it was tested. The release build itself was tested in MAME with the test autopilot and has not
+been played by hand (see "Known issues in v0.3"). Upgrading from v0.2 or v0.2.1 keeps every best time already saved.
+
+- **The table you just raced comes first:** after a race you finish, the attract mode's first ranking page now shows
+  the best-time table of the course and direction you just raced (normal or reverse, with or without a new best time),
+  and the rotation goes on from there. Before, it showed the next table in the rotation, so a new time could take many loops
+  (up to about 18 minutes) to come round. Tested with the test autopilot in one-lap races in MAME; not yet played by hand.
+- **No more far pop-in on busy frames:** the game's limit on polygons drawn in a frame is raised from 5 500 to 10 500, so the
+  far scenery no longer drops out for a frame where the arcade ran out of budget: on the three original courses (where the
+  real arcade did it on many frames) and at the starts of Diablo Canyon, Metropolis and Pacific Coast. The game keeps its
+  rate (the arcade's own rate, about 29 pictures a second); tested in MAME with the test autopilot, and the project's owner
+  ran a test build of it in MAME. MAME does not model the time the arcade's graphics board takes to draw, and the original limit may
+  match what that board can draw in a picture, so on real hardware this change is untested and might cost pictures.
+- **Trees on Alpine:** 21 of Big Forest's trees (taken from your own arcade ROMs at build time) stand beside one stretch of
+  Alpine. The Saturn course has no such trees. Scenery only: the walls and the race are unchanged.
+- **Metropolis's far buildings appear earlier:** the two buildings at the far end of the long straight are drawn from further
+  away, so the one at the end of the street no longer appears half-way down it. One place only. In reverse, part of one
+  building's front is one shade of grey lighter for a few seconds as you pass it.
+- **REVERSE in the race HUD:** in a reverse race on one of the seven converted courses, the word REVERSE is shown in red under
+  the course's name. Tested in MAME with the test autopilot; the project's owner ran a test build with it in MAME.
+- **More palms on Surfers Road:** 13 more of the course's own palm stand inside the long bend (the Saturn course has none
+  there). Scenery only: the walls and the race are unchanged.
+- **Tunnel sound on the converted courses:** the arcade's own in-tunnel engine sound (the one in Bay Bridge's tunnel) now
+  plays in Alpine's mountain tunnel, Metropolis's long tunnel and Metropolis's roofed road by the pits, in both directions.
+  Tested in MAME with the test autopilot; the project's owner drove a test build with it in MAME.
+- **The three arcade courses in reverse:** Big Forest, Bay Bridge and Acropolis can now be raced the other way round too,
+  chosen on the COURSE DIRECTION screen, which now also appears after you pick one of them (for a normal race: one more press
+  of the gas, or wait). START and checkpoint banners read the right way, pit stops work in reverse on Big Forest and
+  Acropolis, and the HUD shows REVERSE under the level word. On Bay Bridge the opponents all share one racing line in reverse.
+  Tested in MAME with the test autopilot; the project's owner drove test builds of it in MAME.
+- **Best times for reverse races on the three arcade courses:** Big Forest, Bay Bridge and Acropolis now keep their four
+  best reverse times too, as the seven converted courses do: a reverse race that finishes at or under the fourth time asks
+  for your name. Each table starts with the course's own first four default times (Big Forest and Bay Bridge 4'00 to 4'15,
+  Acropolis 5'00 to 5'15) and is shown in the attract mode right after the course's own table, titled with its level word
+  ("BEGINNER REVERSE RANKING", "MEDIUM REVERSE RANKING", "EXPERT REVERSE RANKING"). Upgrading from v0.2 or v0.2.1 keeps every best time already
+  saved (the three tables are added in battery-backed RAM no other table uses), and the test mode's BACKUP RAM CLEAR resets
+  them with the others. Tested in MAME with the test autopilot; not yet played by hand.
+
+The trees, the far buildings and the palms were tested in MAME with the test autopilot; the project's owner ran a test build of each in MAME.
+
 ## What's new in v0.2.1
 
-Built and tested with the test autopilot in MAME; not yet played by hand (see "Known issues in v0.2.1").
+Built and tested with the test autopilot in MAME; not yet played by hand (see "Known issues in v0.3").
 
 - **Best times for reverse races:** each of the seven converted courses keeps its four best reverse times, apart from
   its normal table. A reverse race that finishes at or under the fourth time asks for your name, as a normal race does,
@@ -166,19 +210,23 @@ Built and tested with the test autopilot in MAME; not yet played by hand (see "K
 
 The game the patch builds changes on those four courses only. v0.1.1 changed the tests only.
 
-## Known issues in v0.2.1
+## Known issues in v0.3
 
-- **Reverse best times (new in v0.2.1):** the tables, the name entry and the attract pages were tested with the test
-  autopilot in one-lap races, not yet played by hand; a full five-lap reverse race to a record and a typed name were not
-  run. After you enter a reverse best time, the attract mode shows the next table of its rotation, so yours can take a
-  while to come round (the game does the same for normal tables).
+- **Not yet played by hand:** the v0.3 build as released. The reverse best times (the seven converted courses' since
+  v0.2.1, the three original courses' new in v0.3) and the table-you-just-raced page were tested with the test autopilot
+  in one-lap races; a full five-lap reverse race to a record and a typed name were not run.
+- **The three original courses in reverse (new in v0.3):** on Bay Bridge the opponents all share one racing line in
+  reverse (its ROM bank has room for one). A car that does not steer after being put back at Bay Bridge's reverse fork
+  still meets the divider and is put back again.
+- **Polygon budget (new in v0.3):** raised in MAME, where the game keeps its rate; untested on real hardware, where it
+  might cost pictures (see "What's new in v0.3"). Nothing has been tried on a real Model 1 board.
 
-- **Reverse:** the reverse pit stops and Diablo Canyon's trimmed pit lane were measured with the test
+- **Reverse on the seven converted courses:** the reverse pit stops and Diablo Canyon's trimmed pit lane were measured with the test
   autopilot on all seven courses, not yet driven through by hand on each. On Alpine, Diablo Canyon and
   Metropolis some cars stand turned on the reverse start grid. On Amazon Falls, Pacific Coast, Surfers Oval
   and Surfers Road the opponents share three racing lines in reverse (eight in the normal direction). On
   Alpine a reverse car that runs along the very edge of the road on the pit side, just past the pit exit,
-  is taken for a pit stop. The three original courses have no reverse.
+  is taken for a pit stop.
 
 - **Music:** races on the seven converted courses play the select screen's track, not the Saturn
   course's music.
@@ -193,7 +241,7 @@ The game the patch builds changes on those four courses only. v0.1.1 changed the
   and the camera can bounce on some sections.
 - **Original program bytes:** the patch finds and checks its sites in the arcade program by short
   instruction patterns (the instructions being replaced or next to them: 15 patterns, 286 bytes in all, up to
-  v0.1.5; v0.2's reverse direction adds more, not recounted for this release). A later
+  v0.1.5; the reverse direction since v0.2 adds more, not recounted for this release). A later
   release will check them by checksum instead, so the patch holds no bytes of the program.
 - How the converted courses differ from the Saturn's, measured: `docs/deviations.md`.
 
