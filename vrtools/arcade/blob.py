@@ -9,6 +9,7 @@ collision map (128 × 128 halfwords) · surface table (one byte per collision qu
 """
 from __future__ import annotations
 
+import dataclasses
 from typing import Callable
 
 from vrtools.arcade.bank import LINES, POINT_BYTES, WRAP_POINTS, BankError, encode_line
@@ -137,7 +138,7 @@ def place_blob(rs: RomSet, bank: int, build: Callable[[int], bytes], min_run: in
             abs_off = bank * BANK_SIZE + base
             if any(b != 0xFF for b in rs.data[abs_off:abs_off + size]):
                 raise PatchError(f"bank {bank} +{base:#x} is not free")
-            out = RomSet(rs.program, rs.boot, rs.data, rs.polygons, rs.copro_data, rs.tgp_program)
+            out = dataclasses.replace(rs)
             write_data(out, abs_off, blob)
             return out, WINDOW + base
     raise PatchError(f"no free run of {size} bytes in bank {bank} (runs: {[(hex(o), n) for o, n in free_runs(rs, bank, min_run)]})")

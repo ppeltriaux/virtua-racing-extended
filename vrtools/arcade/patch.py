@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 import struct
 from dataclasses import dataclass, field
 
@@ -157,7 +158,7 @@ def patch_course_tiles(rs: RomSet, course_index: int, cell_objects: dict[int, tu
     Every tex_adr an object reads (layout.tex_first..tex_last, starting at its record's tex_start) must be
     in colour_words; polygon space and colour entries must still be erased in `rs`. `tile_table` names a
     table written by write_tile_table instead of the original course's."""
-    out = RomSet(rs.program, rs.boot, rs.data, rs.polygons, rs.copro_data, rs.tgp_program)
+    out = dataclasses.replace(rs)
     alloc = Allocator(holes if holes is not None else poly_free_runs(rs))     # erased space left by earlier courses
     write_colour_entries(out, colour_words)
     for cell in range(256):
@@ -269,7 +270,7 @@ def patch_pit_entry(rs: RomSet, slot: int, quad: int | None) -> RomSet:
         raise PatchError(f"slot {slot} is not one of {ORIGINAL_SLOTS}")
     if quad is not None and not (0 <= quad < 0xFFFF):
         raise PatchError(f"pit entry quad {quad} is not a quad index below 0xffff")
-    out = RomSet(rs.program, rs.boot, rs.data, rs.polygons, rs.copro_data, rs.tgp_program)
+    out = dataclasses.replace(rs)
     write_boot(out, PIT_ENTRY_TABLE - V60_BOOT + 2 * slot, struct.pack("<H", 0xFFFF if quad is None else quad))
     return out
 
@@ -298,7 +299,7 @@ def install_collision(rs: RomSet, collision: Collision, slot: int, holes: list[t
         if off not in collision.lists:
             raise PatchError(f"cell {cell}: no list at offset {off:#x}")
         cells[cell] = off
-    out = RomSet(rs.program, rs.boot, rs.data, rs.polygons, rs.copro_data, rs.tgp_program)
+    out = dataclasses.replace(rs)
     alloc = Allocator(holes if holes is not None else copro_free_runs(rs))   # what is still blank: the zero fillers
     lists = encode_lists(collision.lists)                                      # between the originals' blocks and the tail
     quads = encode_quads(collision.quads, strict=strict)

@@ -25,6 +25,15 @@ of Task 1's run) shows its middle picture's own characters and palettes in the m
 Task 7: Task 1's two Metropolis runs also log, every second video frame (one scan per logic frame), the visible cells of the tile layers that name the middle
 slot's blocks (slot_log.lua) and dump tile RAM after every mode change from the race load on: no screen from the race load to the
 next game's select upload shows the arrows' and caption's blocks.
+
+Weather stage 1 (docs/superpowers/plans/2026-11-18-weather-stage-1-screens.md): the session's set has the COURSE WEATHER screen.
+While the direction is chosen the select entity's handler is `wxdir` (the screen's own handler, then the grey-out: Pascal, "i just
+notice a separate bug: selecting reverse or normal doesnt grey out the one not selected (will need a fix)"); the direction lock
+hands it to `wxsel`, which holds the lock look 16 logic frames and opens COURSE WEATHER; the weather lock hands it to the game's
+lock handler, so the race loads LOCK_TO_LOAD frames after the WEATHER lock. autoplay.lua answers the direction screen earlier
+(ANSWER_LOCK, 1302) and the weather screen (DRY) on WEATHER_LOCK (1402), where the direction lock was, so the race loads on
+ANSWER_LOAD (1600) as before. The tests that pinned the direction screen's old look and timing say how they changed (docs/spike/
+2026-11-phase80-weather-findings.md lists them); the weather screen's own tests are tests/test_weather_screen.py.
 """
 import struct
 from dataclasses import dataclass
@@ -98,8 +107,8 @@ _RUNS: dict[str, EndLog] = {}
 _DUMPS: dict[str, object] = {}
 _SLOTS: dict[str, object] = {}              # Task 7: label -> the run's directory (slot.txt, slot/)
 SELECT_DUMP_AFTER = 300                     # Task 5: frames from a select screen's start to its dump (the wheel settled, no lock yet)
-SLOT_LOCKED_DUMP = 1462                     # Task 7: 60 frames after autoplay's direction lock (ANSWER_LOCK, 1402: autoplay.lua's second
-                                            # press at 1400); the race loads at 1600
+SLOT_LOCKED_DUMP = 1462                     # Task 7: 60 frames after autoplay's last lock (weather stage 1: the weather lock, WEATHER_LOCK
+                                            # 1402: autoplay.lua's press at 1400); the race loads at 1600
 
 
 def _run(tmp_path_factory, romset_zip, saturn_cue, label) -> EndLog:
@@ -125,7 +134,7 @@ def _run(tmp_path_factory, romset_zip, saturn_cue, label) -> EndLog:
             if reverse:                                           # the attract's six pit scenes, then the second game; Task 5: a
                 env["VR_END_COIN"] = str(PIT_SCENES)              # dump SELECT_DUMP_AFTER frames into each select screen
                 env["VR_SELECT_DUMP_SELECT"] = str(SELECT_DUMP_AFTER)
-            _drive_entry(base, out, romset_zip, METROPOLIS, c, seconds=430 if reverse else 200, reverse=reverse, extra_env=env)
+            _drive_entry(base, out, romset_zip, METROPOLIS, c, seconds=450 if reverse else 200, reverse=reverse, extra_env=env)
         _RUNS[label] = _parse(log)
     return _RUNS[label]
 
@@ -169,8 +178,9 @@ def test_the_flag_is_zero_whenever_a_select_screen_starts(tmp_path_factory, roms
     coin and START the second game's select screen starts with the flag 0 (no Lua writes the flag) and keeps it 0 up to its
     course lock. Nobody answers that game (final review Minor 4): the course select's own countdown locks the course
     (SELECT_COUNTDOWN frames after its first frame, so not a gas edge), `dirsel` then runs until its own countdown lock COUNTDOWN
-    frames after its first frame (as test_the_countdown_decides), the race loads LOCK_TO_LOAD frames after that lock, and the
-    flag is 0 in that second race (the screen's countdown took NORMAL)."""
+    frames after its first frame (as test_the_countdown_decides; weather stage 1: the lock hands over to `wxsel`, the hold and
+    COURSE WEATHER, left to its countdown too), the race loads LOCK_TO_LOAD frames after the weather lock, and the flag is 0 in that
+    second race (the screen's countdown took NORMAL)."""
     run = _run(tmp_path_factory, romset_zip, saturn_cue, "reverse")
     lines = _after_load(run)
     attract = next(k for k, l in enumerate(lines) if l.mode == 0x02)
@@ -192,9 +202,10 @@ def test_the_flag_is_zero_whenever_a_select_screen_starts(tmp_path_factory, roms
     assert course and course_lock and first and lock and load, (course, course_lock, first, lock, load)
     print("SECOND GAME course select", course.frame, "course lock", course_lock.frame, "screen", first.frame, "lock", lock.frame, "load", load.frame)
     assert abs(course_lock.frame - course.frame - SELECT_COUNTDOWN) <= COUNTDOWN_SLACK, (course, course_lock)
-    assert course_lock.frame < first.frame and lock.handler == COURSE_LOCK, (course_lock, first, lock)
+    assert course_lock.frame < first.frame and lock.handler == _weather()["wxsel"], (course_lock, first, lock)
     assert abs(lock.frame - first.frame - COUNTDOWN) <= COUNTDOWN_SLACK, (first, lock)
-    assert load.frame - lock.frame == LOCK_TO_LOAD, (lock, load)
+    wlock = _weather_lock(game, lock.frame)
+    assert wlock and wlock.flag == 0 and load.frame - wlock.frame == LOCK_TO_LOAD, (wlock, load)
     race = [l for l in game if l.frame > load.frame and 0x12 <= l.mode <= 0x14]
     assert race and all(l.flag == 0 for l in race), race[:3]
     assert all(l.flag == 0 for l in game if l.frame <= load.frame), [l for l in game if l.flag and l.frame <= load.frame][:3]
@@ -230,15 +241,18 @@ def test_the_operator_fixed_course_never_shows_the_screen(tmp_path_factory, roms
 # --- Task 2: the screen as behaviour ----------------------------------------------------------------------------------------
 ALPINE, SURFERS_ROAD = 3, 9
 SURFERS_ROAD_POINTS = 441       # its road points (test_reverse_build.COURSES): the normal race starts on the last, the reverse on 0
-COURSE_LOCK = 0xFC277C          # the course select's lock handler; the direction lock hands the entity back to it
-LOCKED = 0xFC27BE               # the handler after a lock (start, dirdone)
+COURSE_LOCK = 0xFC277C          # the course select's lock handler; the weather lock (weather stage 1) hands the entity back to it
+LOCKED = 0xFC27BE               # the handler after a lock (start, dirdone; wxdone after the weather lock)
 LOCK_TO_LOAD = 198              # video frames from a lock (the handler becoming COURSE_LOCK) to mode 0x11 (recon §1.1)
+WEATHER_LOCKED = 4              # DIR_PHASE after the weather lock (weather.screen.LOCKED)
 COUNTDOWN = 575                 # video frames from the screen's first frame (the timer 0x140) to its timer lock (recon §5 `proto_p2`)
 COUNTDOWN_SLACK = 2
 # video frames from the course select's first frame (the handler 0xfc26c5, the timer 0x27e) to the game's own timer lock at 0x20,
 # one timer step per logic frame (recon §1.1): a course lock with no gas edge (Task 1's second game, nobody answering)
 SELECT_COUNTDOWN = 2 * (0x27E - 0x20)
-ANSWER_LOCK, ANSWER_LOAD = 1402, 1600   # autoplay's answer: the second press's edge at 1402, as the course press's before the screen
+# autoplay's answer (weather stage 1): the direction pressed at 1300, its lock on 1302; the weather (DRY) pressed at 1400, its lock on
+# 1402, the course press's frame before the screens; the race on 1600
+ANSWER_LOCK, WEATHER_LOCK, ANSWER_LOAD = 1302, 1402, 1600
 _SCREEN: dict[str, tuple] = {}
 _WD: dict[str, object] = {}     # label -> the run's work directory (Task 3: its dumps and snapshots)
 
@@ -247,16 +261,16 @@ def _angle(a):
     return (a + 0x8000) % 0x10000 - 0x8000
 
 
-def _screen(tmp_path_factory, romset_zip, saturn_cue, label, entry, reverse=False, env=None):
-    """(dirscreen_log lines, start_log's (load, player, cars)) of 45 s of `entry` with the game's own inputs, made once per
-    session per label; `{wd}` in an env value is the run's work directory (kept in _WD[label])."""
+def _screen(tmp_path_factory, romset_zip, saturn_cue, label, entry, reverse=False, env=None, seconds=45):
+    """(dirscreen_log lines, start_log's (load, player, cars)) of `seconds` (45) of `entry` with the game's own inputs, made once
+    per session per label; `{wd}` in an env value is the run's work directory (kept in _WD[label])."""
     if label not in _SCREEN:
         out, _ = _seven(romset_zip, saturn_cue)
         base = tmp_path_factory.mktemp(label)
         wd = base / f"entry{entry}"
         logs = {"VR_DIR_LOG": str(wd / "dir.txt"), "VR_DIRECTION_RAM": f"{DIRECTION_RAM:x}", "VR_START_LOG": str(wd / "start.txt"),
                 "VR_SNAPS": ""}
-        _drive_entry(base, out, romset_zip, entry, None, seconds=45, autopilot=False, reverse=reverse,
+        _drive_entry(base, out, romset_zip, entry, None, seconds=seconds, autopilot=False, reverse=reverse,
                      extra_env={**logs, **{k: str(v).replace("{wd}", str(wd)) for k, v in (env or {}).items()}})
         _SCREEN[label] = (parse_dir_log(wd / "dir.txt"), parse_start_log(wd / "start.txt"))
         _WD[label] = wd
@@ -275,15 +289,29 @@ def _first(lines, test):
 
 def _screen_handlers():
     """The select entity's handler while the COURSE DIRECTION screen is open: `dirsel`, or for an original (Phase 33's fix
-    waves) `origpic`'s `osel`, which draws its two-layer picture and otherwise runs `dirsel`."""
+    waves) `origpic`'s `osel`, which draws its two-layer picture and otherwise runs `dirsel`; with the weather screen (weather
+    stage 1) `wxdir`, which runs one of them and then the grey-out."""
     from vrtools.arcade.origpic import origpic_layout
     from vrtools.arcade.tencourse import origpic_address
     lay = directory_layout()
-    return {lay["dirsel"], origpic_layout(origpic_address(), lay)["osel"]}
+    return {lay["dirsel"], origpic_layout(origpic_address(), lay)["osel"], _weather()["wxdir"]}
+
+
+def _weather():
+    """The weather screen's routine addresses (weather.screen.code_layout at the layout's code block)."""
+    from vrtools.arcade.weather import layout, screen
+    return screen.code_layout(layout.block("screen code").start, directory_layout(), screen.Inputs.placeholder())
+
+
+def _weather_lock(lines, after):
+    """The weather lock's line after frame `after` (the direction lock): the handler back to the game's lock handler, with DIR_PHASE
+    WEATHER_LOCKED where the log has it (race_end.lua's lines do not: after a direction lock the next one is the weather lock)."""
+    return _first(lines, lambda l: l.frame > after and l.handler == COURSE_LOCK and getattr(l, "phase", WEATHER_LOCKED) == WEATHER_LOCKED)
 
 
 def _phases(lines):
-    """(the screen's first line, its lock's line (the handler leaving `dirsel`), the first mode-0x11 line)."""
+    """(the screen's first line, its lock's line (the handler leaving `dirsel`: weather stage 1, for `wxsel`), the first mode-0x11
+    line)."""
     dirsel = _screen_handlers()
     first = _first(lines, lambda l: l.handler in dirsel)
     lock = first and _first(lines, lambda l: l.frame > first.frame and l.handler not in dirsel)
@@ -339,10 +367,11 @@ def test_wheel_straight_and_a_second_press_race_normally(tmp_path_factory, romse
 def test_the_countdown_decides(tmp_path_factory, romset_zip, saturn_cue):
     """Review Focus 2 (plan D6): Surfers Road is chosen with the wheel right of the threshold. The gas pressed at 1400 locks the
     course, then is lifted on the screen and never pressed again; with the wheel left where it chose the course the countdown
-    locks the screen COUNTDOWN frames after its first frame with NORMAL; with the wheel at 128, then 200, with REVERSE."""
+    locks the screen COUNTDOWN frames after its first frame with NORMAL; with the wheel at 128, then 200, with REVERSE. (Weather
+    stage 1: COURSE WEATHER follows, left to its countdown too: 60-s runs to reach the race.)"""
     seen = {}
     for label, steps in (("count_none", ((1410, 0, WHEEL_FOR_ENTRY[SURFERS_ROAD]),)), ("count_steer", ((1410, 0, 128), (1500, 0, 200)))):
-        lines, _ = _screen(tmp_path_factory, romset_zip, saturn_cue, label, SURFERS_ROAD, env=_drive(steps))
+        lines, _ = _screen(tmp_path_factory, romset_zip, saturn_cue, label, SURFERS_ROAD, env=_drive(steps), seconds=60)
         first, lock, load = _phases(lines)
         assert first and lock and load, (label, first, lock, load)
         seen[label] = (lock.frame - first.frame, _flags(lines))
@@ -355,8 +384,8 @@ def test_the_countdown_decides(tmp_path_factory, romset_zip, saturn_cue):
 def test_the_course_press_does_not_confirm(tmp_path_factory, romset_zip, saturn_cue):
     """Review Focus 1: the gas floored at 1400 and held (VR_DIR_ANSWER=0, nobody answers): the course press's edge locks the
     course, and the screen waits for its countdown (no lock before COUNTDOWN - COUNTDOWN_SLACK frames after its first frame,
-    no edge while it runs), then races in the normal direction."""
-    lines, _ = _screen(tmp_path_factory, romset_zip, saturn_cue, "held9", SURFERS_ROAD, env={"VR_DIR_ANSWER": "0"})
+    no edge while it runs), then races in the normal direction (weather stage 1: after COURSE WEATHER's countdown, a 60-s run)."""
+    lines, _ = _screen(tmp_path_factory, romset_zip, saturn_cue, "held9", SURFERS_ROAD, env={"VR_DIR_ANSWER": "0"}, seconds=60)
     first, lock, load = _phases(lines)
     assert first and lock and load, (first, lock, load)
     print("HELD screen", first.frame, "lock", lock.frame, "load", load.frame)
@@ -371,12 +400,14 @@ def test_the_course_press_does_not_confirm(tmp_path_factory, romset_zip, saturn_
 def test_an_original_shows_the_screen(tmp_path_factory, romset_zip, saturn_cue, entry, reverse):
     """Phase 33 (it replaces "an original never shows the screen": the three originals have a reverse variant now). The course
     lock of an original opens the COURSE DIRECTION screen as a converted course's does (the handler `dirsel`, or an original's `osel`: `_screen_handlers`), the direction
-    lock hands the entity back to the game's lock handler and mode 0x11 comes LOCK_TO_LOAD frames after it, and the flag is the
+    lock hands the entity to `wxsel` (weather stage 1: the hold, then COURSE WEATHER), the weather lock back to the game's lock
+    handler and mode 0x11 comes LOCK_TO_LOAD frames after that, and the flag is the
     answer: 0 on the screen's last frame and through the race with NORMAL, 1 with REVERSE."""
     lines, _ = _screen(tmp_path_factory, romset_zip, saturn_cue, f"orig{entry}{'r' if reverse else 'n'}", entry, reverse=reverse)
     first, lock, load = _phases(lines)
-    assert first and lock and load and lock.handler == COURSE_LOCK, (first, lock, load)
-    assert load.frame - lock.frame == LOCK_TO_LOAD, (lock, load)
+    wlock = first and lock and _weather_lock(lines, lock.frame)
+    assert first and lock and wlock and load and lock.handler == _weather()["wxsel"], (first, lock, wlock, load)
+    assert load.frame - wlock.frame == LOCK_TO_LOAD, (wlock, load)
     assert _flags(lines) == (int(reverse), {int(reverse)})
 
 
@@ -400,15 +431,18 @@ def test_the_transmission_survives_the_screen(tmp_path_factory, romset_zip, satu
 
 
 def test_the_lock_to_load_timing_is_the_games(tmp_path_factory, romset_zip, saturn_cue):
-    """The direction lock hands the entity to the game's lock handler, so it reaches mode 0x11 in the course lock's LOCK_TO_LOAD
-    frames (0xfc277c's timer 0x20 on the next logic frame, state 1, state 6). autoplay.lua's answer locks on frame ANSWER_LOCK,
-    the course select's lock frame before the screen, so the race loads on ANSWER_LOAD as it did (plan D14)."""
+    """Weather stage 1: the direction lock (ANSWER_LOCK, autoplay's answer) hands the entity to `wxsel` (DIR_PHASE 2); the weather
+    lock hands it to the game's lock handler, so the race reaches mode 0x11 in the course lock's LOCK_TO_LOAD frames after it
+    (0xfc277c's timer 0x20 on the next logic frame, state 1, state 6), the handler then the game's 0xfc27be. autoplay.lua's weather
+    answer locks on WEATHER_LOCK, the course select's lock frame before the screens, so the race loads on ANSWER_LOAD as it did
+    (plan D14)."""
     lines, _ = _screen(tmp_path_factory, romset_zip, saturn_cue, f"reverse{SURFERS_ROAD}", SURFERS_ROAD, reverse=True)
     first, lock, load = _phases(lines)
-    assert lock.handler == COURSE_LOCK and lock.phase == 2, lock
-    assert _first(lines, lambda l: l.frame > lock.frame and l.handler != COURSE_LOCK).handler == LOCKED
-    assert load.frame - lock.frame == LOCK_TO_LOAD, (lock, load)
-    assert (lock.frame, load.frame) == (ANSWER_LOCK, ANSWER_LOAD), (lock, load)
+    assert lock.handler == _weather()["wxsel"] and lock.phase == 2 and lock.frame == ANSWER_LOCK, lock
+    wlock = _weather_lock(lines, lock.frame)
+    assert wlock and _first(lines, lambda l: l.frame > wlock.frame and l.handler != COURSE_LOCK).handler == LOCKED
+    assert load.frame - wlock.frame == LOCK_TO_LOAD, (wlock, load)
+    assert (wlock.frame, load.frame) == (WEATHER_LOCK, ANSWER_LOAD), (wlock, load)
 
 
 # --- Task 3: the screen drawn ---------------------------------------------------------------------------------------------
@@ -419,11 +453,12 @@ def test_the_lock_to_load_timing_is_the_games(tmp_path_factory, romset_zip, satu
 # 1300) over eight frames each: the frame blinks four frames on, four off while choosing.
 DIRSEL_FIRST = 1207
 TWENTIETH = DIRSEL_FIRST + 19
-LATE = 1390                                 # a dump just before the answer's lock (1402): the countdown has been reprinted ~90 times
-SNAPS = {0: range(1250, 1258), 1: range(1370, 1378)}       # per choice (NORMAL, REVERSE) eight consecutive snapshot frames
-# Task 4: after autoplay's lock (ANSWER_LOCK) eight more consecutive snapshots, and a dump 60 frames on (the race loads at 1600)
-LOCKED_SNAPS = range(ANSWER_LOCK + 38, ANSWER_LOCK + 46)
-LOCKED_DUMP = ANSWER_LOCK + 60
+LATE = 1298                                 # a dump just before the answer's lock (1302): the countdown has been reprinted ~45 times
+SNAPS = {0: range(1250, 1258), 1: range(1288, 1296)}       # per choice (NORMAL, REVERSE from 1260) eight consecutive snapshot frames
+# Task 4: after autoplay's direction lock (ANSWER_LOCK) eight more consecutive snapshots, and a dump, in the hold (weather stage 1:
+# 16 logic frames of the lock look, to 1336, before COURSE WEATHER; the race loads at 1600)
+LOCKED_SNAPS = range(ANSWER_LOCK + 8, ANSWER_LOCK + 16)
+LOCKED_DUMP = ANSWER_LOCK + 18
 CHECKER_MAP = 0x1E0C18                      # the map layer 2's checker 0xfc358e blits (dirscreen.CHECKER; recon §2.2)
 BLANK = 0x8020
 GAME_MARK = {(2, 59)}                       # a layer-0 cell (0xa780) the game draws on every screen, from the attract on; it is back
@@ -580,7 +615,8 @@ def _countdown(setting_zero):
 def test_the_screen_shows_the_picked_course_twice(tmp_path_factory, romset_zip, saturn_cue, entry):
     """At the screen's 20th frame: layer 2 holds the chosen entry's picture twice, at PICTURE_CELLS[0] with slot 0's tile words
     and at PICTURE_CELLS[1] with slot 2's (0x8000 | SLOT_CHAR + the picture map's index, in the map's order), slot 0's and slot
-    2's character blocks hold the record's characters and their palettes its normal set, and every other visible layer-2 cell is
+    2's character blocks hold the record's characters, slot 0's palettes (NORMAL, shown) its normal set and slot 2's its grey set
+    (weather stage 1: the side not shown greys while choosing; before, both were in the normal set), and every other visible layer-2 cell is
     the checker (bit 15 clear, its map's characters: no slot overlay left). Layer 0 holds the four maps, the title and the
     labels (the shown choice's yellow, Task 4) where Step 2 puts them, Task 5's caption and arrows, the countdown's cells, and nothing else (every other visible cell the blank 0x8020: no cell of
     the course select, its pictures, BEGINNER / MEDIUM / EXPERT, AUTOMATIC row and bottom bar, rows 23-28 and 43-46)."""
@@ -603,7 +639,7 @@ def test_the_screen_shows_the_picked_course_twice(tmp_path_factory, romset_zip, 
         for p in range(3):
             at = 32 * (SLOT_CHAR[slot] + 128 * p)
             assert char[at:at + 32 * n[p]] == chars[32 * sum(n[:p]):32 * sum(n[:p + 1])], (entry, slot, p)
-        assert pal[SLOT_PAL[slot] - 0x900000:][:96] == read(rec.normal_addr, 96), (entry, slot)
+        assert pal[SLOT_PAL[slot] - 0x900000:][:96] == read(rec.normal_addr if slot == 0 else rec.grey_addr, 96), (entry, slot)
     chars = _checker_chars(out)
     checker = [(r, c) for r in range(48) for c in range(62) if (r, c) not in pictures and _cell(tile, 2, r, c) not in chars]
     assert not checker, [(rc, hex(_cell(tile, 2, *rc))) for rc in checker[:8]]
@@ -715,7 +751,8 @@ def test_the_screen_is_sound_with_the_other_select_setting(tmp_path_factory, rom
         wrong = [(rc, hex(_cell(tile, 0, *rc)), hex(w)) for rc, w in want.items() if _cell(tile, 0, *rc) != w]
         assert not wrong, (frame, wrong[:8])
     first, lock, load = _phases(lines)
-    assert first and lock and load and load.frame - lock.frame == LOCK_TO_LOAD, (first, lock, load)
+    wlock = first and lock and _weather_lock(lines, lock.frame)
+    assert first and lock and wlock and load and load.frame - wlock.frame == LOCK_TO_LOAD, (first, lock, wlock, load)
     assert _flags(lines) == (0, {0})
 
 
@@ -752,12 +789,13 @@ def _locked(tmp_path_factory, romset_zip, saturn_cue, entry, reverse):
     lines, wd = _drawn(tmp_path_factory, romset_zip, saturn_cue, entry, label=label, reverse=reverse)
     first, lock, load = _phases(lines)
     assert lock and load and lock.frame == ANSWER_LOCK and lock.flag == int(reverse) and load.frame == ANSWER_LOAD, (lock, load)
+    assert _weather_lock(lines, lock.frame).frame == WEATHER_LOCK
     return lines, wd, lock, load
 
 
 @pytest.mark.parametrize("entry,reverse", LOCK_RUNS)
 def test_the_lock_keeps_the_chosen_picture_in_colour(tmp_path_factory, romset_zip, saturn_cue, entry, reverse):
-    """LOCKED_DUMP frames (60) after the direction lock: palette RAM's 48 words of the chosen side's slot (slot 0 NORMAL, slot 2
+    """LOCKED_DUMP frames (18, in the hold: weather stage 1) after the direction lock: palette RAM's 48 words of the chosen side's slot (slot 0 NORMAL, slot 2
     REVERSE) are the picture record's `chosen` set, the other side's its `grey` set (the two differ), on Alpine REVERSE and on
     Surfers Road both ways. (In place of the converted-entry case of test_race_build's `test_start_greys_the_other_courses`,
     retired in Task 2: a converted course's START look is the direction screen's.)"""
@@ -777,15 +815,18 @@ def test_the_lock_keeps_the_chosen_picture_in_colour(tmp_path_factory, romset_zi
 
 
 @pytest.mark.parametrize("entry,reverse", LOCK_RUNS)
-def test_the_frame_is_steady_after_the_lock(tmp_path_factory, romset_zip, saturn_cue, entry, reverse):
-    """The cursor frame blinks while choosing and is steady after the lock (the game's cursor code, the handler 0xfc27be): the
+def test_the_frame_stays_round_the_choice_through_the_hold(tmp_path_factory, romset_zip, saturn_cue, entry, reverse):
+    """(Weather stage 1: was test_the_frame_is_steady_after_the_lock. On main the direction lock gave the entity the game's
+    0xfc27be, under which the cursor code draws the frame steady; now `wxsel` holds the lock look 16 logic frames, the cursor code
+    still blinking the frame, before COURSE WEATHER; the frame is steady after the weather lock, tests/test_weather_screen.py.) The
     pixels that blink in the eight snapshots of SNAPS[choice] (_blinking) take two looks there, on (the frame, the yellower) and
-    off; in the eight consecutive LOCKED_SNAPS after the lock every one of those pixels is as in the on look."""
+    off; in the eight consecutive LOCKED_SNAPS of the hold the frame blinks in the same place: the same box of blinking pixels, and
+    its on look's yellow frame pixels shown on some of them, off on others."""
     import numpy as np
     lines, wd, lock, load = _locked(tmp_path_factory, romset_zip, saturn_cue, entry, reverse)
     choice = int(reverse)
     assert {l.shown for l in lines if min(SNAPS[choice]) - 2 <= l.frame <= max(SNAPS[choice])} == {choice}
-    assert lock.frame < min(LOCKED_SNAPS) and max(LOCKED_SNAPS) < load.frame
+    assert lock.frame < min(LOCKED_SNAPS) and max(LOCKED_SNAPS) < _weather_lock(lines, lock.frame).frame
     before, after = _snaps(wd, SNAPS[choice]), _snaps(wd, LOCKED_SNAPS)
     mask = _blinking(before)
     assert mask.sum() > 200, mask.sum()
@@ -795,12 +836,16 @@ def test_the_frame_is_steady_after_the_lock(tmp_path_factory, romset_zip, saturn
     assert len(looks) == 2, len(looks)                        # on and off, nothing else blinks above the panels
     yellow = lambda px: (px[:, 0] + px[:, 1] - 2 * px[:, 2]).mean()
     on = max(looks.values(), key=yellow)
-    frame = on[(on[:, 0] - on[:, 2] > 60) & (on[:, 1] - on[:, 2] > 60)]       # the on look is the yellow frame: most of its
-    assert len(frame) > 0.6 * len(on), (len(frame), len(on))                  # pixels have red and green well above blue
-    assert frame[:, 0].mean() > 200 and frame[:, 1].mean() > 160 and frame[:, 2].mean() < 100, frame.mean(0)
-    print("STEADY", entry, reverse, int(mask.sum()), [int((img[mask] == on).all(1).sum()) for img in before],
-          [int((img[mask] == on).all(1).sum()) for img in after])
-    assert all((img[mask] == on).all() for img in after), [int((img[mask] != on).any(1).sum()) for img in after]
+    frame = (on[:, 0] - on[:, 2] > 60) & (on[:, 1] - on[:, 2] > 60)            # the on look is the yellow frame: most of its
+    assert frame.sum() > 0.6 * len(on), (int(frame.sum()), len(on))           # pixels have red and green well above blue
+    yellow_px = on[frame]
+    assert yellow_px[:, 0].mean() > 200 and yellow_px[:, 1].mean() > 160 and yellow_px[:, 2].mean() < 100, yellow_px.mean(0)
+    box = lambda m: (np.nonzero(m)[1].min(), np.nonzero(m)[0].min(), np.nonzero(m)[1].max(), np.nonzero(m)[0].max())
+    held = _blinking(after)
+    print("HOLD", entry, reverse, box(mask), box(held), [int((img[mask][frame] == on[frame]).all(1).sum()) for img in after])
+    assert box(held) == box(mask), (box(held), box(mask))
+    shown = [bool((img[mask][frame] == on[frame]).all()) for img in after]
+    assert any(shown) and not all(shown), shown
 
 
 @pytest.mark.parametrize("entry,reverse", LOCK_RUNS + [(0, True), (1, False), (2, True)])
@@ -830,8 +875,8 @@ def test_the_arrows_show_each_direction(tmp_path_factory, romset_zip, saturn_cue
     characters in that arrow's block (clockwise 0x3480, anticlockwise 0x3500), and at ARROW_CELLS[1] the other arrow's, in the
     other block; character RAM at 0x3480 and 0x3500 holds the built set's block characters of the clockwise and anticlockwise
     arrows; the palette of the NORMAL side's block (0x69 for 0x3480, 0x6a for 0x3500) is the block's white set and the other's
-    the red set (plan D8). LOCKED_DUMP frames (60) after the lock the three middle-slot palettes 0x69-0x6b are as before it
-    (`dirdone` never writes them: the arrows and the caption keep their colours)."""
+    the red set (plan D8). LOCKED_DUMP frames (18, in the hold) after the lock the three middle-slot palettes 0x69-0x6b are as before it
+    (`dirdone` never writes them, nor weather stage 1's lock look on a converted course: the arrows and the caption keep their colours)."""
     from vrtools.arcade.dirgfx import BLOCKS
     from vrtools.arcade.dirscreen import ARROW_CELLS
     from vrtools.arcade.tencourse import interior_on_the_left
@@ -932,7 +977,9 @@ def test_the_course_select_after_a_reverse_race_is_clean(tmp_path_factory, romse
 
 # --- Task 7: no screen after the lock shows the middle slot's blocks ---------------------------------------------------------
 # Since Task 5 the middle slot's character blocks (0x3480..0x35ff, palettes 0x69-0x6b) hold the arrows and the caption from the
-# direction screen on, where the game left the chosen course's picture. slot_log.lua scans every second video frame (one scan per logic frame; a cell shown on one odd video frame only would be
+# direction screen on, where the game left the chosen course's picture; since weather stage 1, from COURSE WEATHER on, its caption
+# and its badge (weather.screen.BADGE_BLOCKS, CAPTION_BLOCK), and the locked screen is the weather screen's (slot_log.lua takes its
+# characters at the weather lock). slot_log.lua scans every second video frame (one scan per logic frame; a cell shown on one odd video frame only would be
 # missed) the visible cells of
 # the four tile layers (by their scroll words, as MAME draws them): the cells that name a character of those blocks, and those of
 # them whose character still holds the locked screen's (non-blank) data; it dumps tile RAM and the blocks' characters 2, 60 and
@@ -1000,17 +1047,29 @@ def _middle_cells(tile):
     return out
 
 
+def _slot_parts():
+    """Weather stage 1: what COURSE WEATHER writes into the middle slot on a converted course, the last screen before the race:
+    [(its characters, their block, its map as tile words)]: the badge (block 0x3480) and the SELECT WEATHER caption (0x3580)."""
+    from vrtools.arcade import dirgfx
+    from vrtools.arcade.weather import screen
+    bm, bchars, _ = screen.badge_tiles()
+    cm, cchars = dirgfx._tiles(screen.caption_bitmap(), empty_shared=True)
+    return [(b"".join(bchars), screen.BADGE_BLOCKS[0], _map_words(dirgfx.map_blob(bm, screen.BADGE_BLOCKS[0]))),
+            (b"".join(cchars), screen.CAPTION_BLOCK, _map_words(dirgfx.map_blob(cm, screen.CAPTION_BLOCK)))]
+
+
 def _screen_chars(out):
-    """{character: its 32 bytes} of what the direction screen writes into the middle slot (the built set's block): the clockwise
-    arrow's from 0x3480, the anticlockwise one's from 0x3500, the caption's from 0x3580; blank characters (all colour 0) left out."""
+    """{character: its 32 bytes} of what the screens leave in the middle slot at the race load: the direction screen's arrows (the
+    clockwise one's from 0x3480, the anticlockwise one's from 0x3500) and caption (from 0x3580), then over them (weather stage 1)
+    COURSE WEATHER's badge (from 0x3480) and caption (from 0x3580), so the arrows' characters past the badge's and all of the
+    anticlockwise arrow's survive; blank characters (all colour 0) left out."""
     from vrtools.arcade.dirgfx import BLOCKS
-    blk, want = _block(out), {}
-    for part, block in (("cw_chars", BLOCKS[0]), ("ccw_chars", BLOCKS[1]), ("caption_chars", BLOCKS[2])):
-        for k in range(len(blk[part]) // 32):
-            data = blk[part][32 * k:32 * k + 32]
-            if any(data):
-                want[block + k] = data
-    return want
+    blk, have = _block(out), {}
+    parts = [(blk["cw_chars"], BLOCKS[0]), (blk["ccw_chars"], BLOCKS[1]), (blk["caption_chars"], BLOCKS[2])]
+    for chars, block in parts + [(chars, block) for chars, block, _ in _slot_parts()]:
+        for k in range(len(chars) // 32):
+            have[block + k] = chars[32 * k:32 * k + 32]
+    return {ch: data for ch, data in have.items() if any(data)}
 
 
 def _showing(cells, mid, screen):
@@ -1029,31 +1088,30 @@ def _slot_at(lines, frame):
 def test_no_screen_after_the_lock_shows_the_middle_slot(tmp_path_factory, romset_zip, saturn_cue, label):
     """Task 5's review: from the race load (the mode byte 0x501138 at 0x11) to the next game's select upload (0x0f), or the run's
     end, no visible cell of a drawn tile layer shows the direction screen's characters (a cell naming a character of the middle
-    slot's blocks that still holds the arrows' or the caption's data): on no scan (slot_log.lua's, every second video frame, against the
-    locked screen's characters) and in no dump (this module's own reading of the scroll words, against the built set's block).
+    slot's blocks that still holds the arrows' or the caption's data; weather stage 1: COURSE WEATHER's badge and caption, the last screen to write the slot): on no scan
+    (slot_log.lua's, every second video frame, against the locked screen's characters) and in no dump (this module's own reading
+    of the scroll words, against the built set's pieces).
     The run reaches the race, the goal, the results, the race-end ranking page and the attract, the normal run its name entry too,
     the reverse run the second game's select; each of those modes has a dump. Positive controls: on the locked screen
     (SLOT_LOCKED_DUMP) character RAM holds the built set's arrows and caption in those blocks, and the scan and this module's
-    reading of that frame's dump find the same cells naming them on layer 0 and showing them, as many as the built arrow and
+    reading of that frame's dump find the same cells naming them on layer 0 and showing them, as many as the built badge and
     caption maps' non-empty cells and none on another layer."""
-    from vrtools.arcade.dirgfx import BLOCKS
     run = _run(tmp_path_factory, romset_zip, saturn_cue, label)
     out, _ = _seven(romset_zip, saturn_cue)
     ref, lines, dumps = _parse_slot(_SLOTS[label] / "slot.txt")
     assert lines and ref is not None and ref < run.load, (ref, run.load)
     screen = _screen_chars(out)
-    # the locked screen: the middle slot's blocks hold the arrows and the caption, on screen on layer 0
-    blk = _block(out)
+    # the locked screen: the middle slot's blocks hold the weather screen's badge and caption, on screen on layer 0
     tile = (_DUMPS[label] / f"{SLOT_LOCKED_DUMP}_{METROPOLIS}_tile.bin").read_bytes()
     char = (_DUMPS[label] / f"{SLOT_LOCKED_DUMP}_{METROPOLIS}_char.bin").read_bytes()
-    for part, block in (("cw_chars", BLOCKS[0]), ("ccw_chars", BLOCKS[1]), ("caption_chars", BLOCKS[2])):
-        assert _ram_block(char, block, len(blk[part]) // 32) == blk[part], part
+    for chars, block, _ in _slot_parts():
+        assert _ram_block(char, block, len(chars) // 32) == chars, hex(block)
     cells = _middle_cells(tile)
     showing = _showing(cells, char[32 * MIDDLE[0]:32 * (MIDDLE[-1] + 1)], screen)
     count = lambda cs: tuple(-1 if c is None else len(c) for c in cs)
     scanned = _slot_at(lines, SLOT_LOCKED_DUMP)
-    on_screen = sum(1 for k in ("cw_map", "ccw_map", "caption_map") for w in _map_words(blk[k]).values() if w != BLANK)
-    assert count(showing) == (on_screen, 0, 0, 0), (count(showing), on_screen)      # the two arrows' and the caption's non-empty cells
+    on_screen = sum(1 for _, _, words in _slot_parts() for w in words.values() if w != BLANK)
+    assert count(showing) == (on_screen, 0, 0, 0), (count(showing), on_screen)      # the badge's and the caption's non-empty cells
     assert scanned.mode == SELECT and scanned.named == count(cells), (scanned, count(cells))
     assert scanned.shows == tuple(max(n, 0) for n in count(showing)), (scanned, count(showing))
     print(label, "locked screen: cells naming / showing the middle slot per layer", count(cells), count(showing), "scan", scanned)

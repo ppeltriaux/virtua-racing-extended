@@ -43,6 +43,7 @@ docs/formats/model1-course-tables.md §13.
 """
 from __future__ import annotations
 
+import dataclasses
 import math
 import struct
 from dataclasses import dataclass, replace
@@ -713,7 +714,7 @@ def install_directory(rs: RomSet, d: Directory, code_base: int = CODE_FREE[0], c
     assert code_base + len(image) == lay["end"]
     if len(image) > CODE_FREE[1]:
         raise PatchError("directory and routines exceed the free program ROM")
-    out = RomSet(rs.program, rs.boot, rs.data, rs.polygons, rs.copro_data, rs.tgp_program)
+    out = dataclasses.replace(rs)
     off = code_base - V60_PROGRAM
     if any(x != 0xFF for x in rs.program[off:off + len(image)]):
         raise PatchError(f"program ROM at {code_base:#x} is not free")

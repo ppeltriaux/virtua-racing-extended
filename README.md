@@ -1,26 +1,26 @@
-# Virtua Racing Extended v0.3
+# Virtua Racing Extended v0.4
 
 Virtua Racing Extended is the 1992 Sega Model 1 arcade Virtua Racing with ten courses: its own three
 (Big Forest, Bay Bridge, Acropolis) and the seven the 1995 Saturn port added (Alpine, Amazon Falls,
 Diablo Canyon, Metropolis, Pacific Coast, Surfers Oval, Surfers Road). The seven are converted from
 the Saturn disc into the arcade game's own data formats and race on the arcade's engine in MAME: its
 fifteen opponents, its time limits and checkpoints, its render rate. The three original courses keep
-their own course data byte for byte; since v0.3 they can also be raced in reverse (see "What's new in
-v0.3"). The project page, with videos and screenshots:
+their own course data byte for byte; since v0.3 they can also be raced in reverse. Since v0.4 every
+course can be raced in the rain (see "What's new in v0.4"). The project page, with videos and screenshots:
 https://continuearcade.com/virtua-racing-extended/
 
 This repository is a patch: one command builds the game on your machine from your own copies of the
 arcade game and of the Saturn port. It holds none of either (see "What is in the patch").
 
-> **v0.3 is an early release, not a finished one.** All ten courses load and race, with opponents,
-> pit lanes, walls, checkpoints, the in-race map and a best-time table per course, and all ten can be
-> raced in reverse, but the tuning and the finish are still being worked on: see "Known issues in v0.3"
-> and "Planned".
+> **v0.4 is an early release, not a finished one.** All ten courses load and race, with opponents,
+> pit lanes, walls, checkpoints, the in-race map and a best-time table per course, all ten can be
+> raced in reverse and in the rain, but the tuning and the finish are still being worked on: see
+> "Known issues in v0.4" and "Planned".
 
 ## What you need
 
 - **Your own copy of the arcade game:** MAME 0.289's `vr` ROM set, `vr.zip` with all 38 files (the
-  25 the build reads are checked by size and CRC against MAME 0.289's list; the other 13 must be
+  28 the build reads are checked by size and CRC against MAME 0.289's list; the other 10 must be
   present), with `model1io.zip` and `m1comm.zip` beside it. MAME has one Virtua Racing arcade set for
   every region: the region is an operator setting in the game's test menu (COUNTRY), so there is no
   regional arcade version to choose.
@@ -87,6 +87,10 @@ went straight to the race. Each course keeps its four best reverse times, apart 
 the attract mode after the course's own table (the converted courses since v0.2.1, the three original courses since
 v0.3). In v0.2 a reverse race recorded no best time.
 
+**Weather (new in v0.4):** after COURSE DIRECTION a COURSE WEATHER screen offers DRY on the left and RAIN on the right. It
+starts on DRY; turn the wheel right for RAIN and press the gas to start. Doing nothing races DRY, which is the game as
+before. A RAIN race saves no best time. Lightning flashes the picture: see the photosensitivity note in "What's new in v0.4".
+
 **Best times:** each course keeps its own ranking table in the game's battery-backed RAM. On the first
 boot of the patched set the game finds its RAM laid out for three tables and initialises it for ten,
 so best times saved by the original set are reset once. Keep a copy of MAME's `nvram/vr` folder if
@@ -96,10 +100,32 @@ you want them.
 (`pace`), its checkpoint time extensions (`time_factor`) and sets its race length (`laps`, 1 to 7);
 repeat `--tune` per course. The defaults are 5 laps and the values the build was tested with.
 
+## What's new in v0.4
+
+Each item says how it was tested. Upgrading from v0.3 keeps every best time already saved: the tables are unchanged.
+
+- **COURSE WEATHER:** after COURSE DIRECTION a second screen offers DRY or RAIN (steer to choose, press to lock, or let its
+  countdown choose DRY). DRY is the game as before. RAIN races in a storm: solid 3D rain and splashes, an overcast grade and a grey
+  sky, no rain under the tunnels and roofs, lightning with re-strikes, a sky flash and a brief white-out, a rain bed and thunder,
+  and a wetter handling (wheelspin, slides, brake lock; the opponents a little slower). A RAIN race saves no best time. On all
+  ten courses, in both directions.
+- **Tested:** all twenty races (ten courses, both directions) in the rain with the test autopilot in MAME 0.289: the game keeps
+  the arcade's rate and never shows a stale picture, and the rain changes nothing of the race but the handling. A DRY race and
+  the attract mode were compared with the game built without the weather: the same on every logic pass, in the pictures and in
+  what the sound board plays. Driven by hand in MAME: Big Forest, Metropolis, Alpine and Bay Bridge (in reverse) in the rain,
+  and a DRY race. The other courses in the rain were tested with the autopilot only.
+- **Photosensitivity:** lightning flashes the sky and, on a strike's first stroke, whitens the whole picture for one frame. The game
+  never shows more than three full-screen flash onsets in any second (tested on all ten courses). Choose DRY to race without them.
+- **All the storm's audio is generated** by the project's code at build time (no recording, no third-party audio).
+- **The build now reads 28 of the set's 38 files** (three more: the sound program and both sample ROMs) and patches them too, so
+  MAME's checksum warning also names the sound ROMs: that is expected.
+- **`--no-weather`** builds the set without the COURSE WEATHER screen: the game exactly as v0.3, for anyone who wants it without
+  the storm.
+
 ## What's new in v0.3
 
 Each item says how it was tested. The release build itself was tested in MAME with the test autopilot and has not
-been played by hand (see "Known issues in v0.3"). Upgrading from v0.2 or v0.2.1 keeps every best time already saved.
+been played by hand (see "Known issues in v0.4"). Upgrading from v0.2 or v0.2.1 keeps every best time already saved.
 
 - **The table you just raced comes first:** after a race you finish, the attract mode's first ranking page now shows
   the best-time table of the course and direction you just raced (normal or reverse, with or without a new best time),
@@ -140,7 +166,7 @@ The trees, the far buildings and the palms were tested in MAME with the test aut
 
 ## What's new in v0.2.1
 
-Built and tested with the test autopilot in MAME; not yet played by hand (see "Known issues in v0.3").
+Built and tested with the test autopilot in MAME; not yet played by hand (see "Known issues in v0.4").
 
 - **Best times for reverse races:** each of the seven converted courses keeps its four best reverse times, apart from
   its normal table. A reverse race that finishes at or under the fourth time asks for your name, as a normal race does,
@@ -210,9 +236,15 @@ Built and tested with the test autopilot in MAME; not yet played by hand (see "K
 
 The game the patch builds changes on those four courses only. v0.1.1 changed the tests only.
 
-## Known issues in v0.3
+## Known issues in v0.4
 
-- **Not yet played by hand:** the v0.3 build as released. The reverse best times (the seven converted courses' since
+- **Weather (new in v0.4):** at the exit of a tunnel a few stray drops can show at the opening's edge (Alpine in both
+  directions, Bay Bridge and Metropolis's long tunnel in reverse). On Metropolis the buildings still hide much of the lightning
+  bolt on about half the strikes (the sky flash and the thunder still come). The rain's look, sound and handling were tuned by play on four
+  courses (see "What's new in v0.4"), not on all ten.
+- **Linked play (two cabinets):** not supported yet. A linked game cannot race a converted course, and has no COURSE WEATHER
+  screen. The patch is for one cabinet.
+- **Not yet played by hand:** the reverse best times (the seven converted courses' since
   v0.2.1, the three original courses' new in v0.3) and the table-you-just-raced page were tested with the test autopilot
   in one-lap races; a full five-lap reverse race to a record and a typed name were not run.
 - **The three original courses in reverse (new in v0.3):** on Bay Bridge the opponents all share one racing line in
@@ -249,6 +281,7 @@ The game the patch builds changes on those four courses only. v0.1.1 changed the
 
 - **The Saturn port's other releases:** the **US** and **Japanese** discs (they lay their files out
   differently from the European one). The arcade side needs nothing: its one ROM set covers every region.
+- The course direction and the weather in linked play, chosen by both players as the course is.
 - The Saturn's music on each converted course.
 - The remaining wall spots, and the difficulty per course from playtesting.
 - Diablo Canyon's colours.
@@ -259,7 +292,8 @@ The game the patch builds changes on those four courses only. v0.1.1 changed the
 - the converter (`vrtools/`, Python): it reads the Saturn course files from your disc and writes the
   arcade's road, collision, scenery, opponents' lines, race tables, select panels, map and backdrop
   for each new course into free space of your ROM set, then patches the program to offer ten courses and
-  adds "Extended" to the attract logo;
+  adds "Extended" to the attract logo; since v0.4 it also writes the weather: its code for the main CPU and the sound
+  board, its 3D objects, and the rain and thunder sounds, which it generates;
 - the MAME Lua scripts the tests drive the game with (`vrtools/mame/lua/`);
 - the tests (`tests/`): most need your ROM set and disc (`VR_ROMDIR`, `VR_SATURN_CUE`, see
   `local.env.example`) and skip without them; the race tests need MAME 0.289;

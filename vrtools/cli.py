@@ -46,7 +46,7 @@ def _disc_track(cue: Path) -> Path | None:
 
 
 def _other_files(path: Path) -> tuple[list[str], list[str]]:
-    """(missing, mismatched) among the 13 files MAME needs that the build does not read."""
+    """(missing, mismatched) among the 10 files MAME needs that the build does not read."""
     with zipfile.ZipFile(path) as z:
         infos = {Path(i.filename).name: i for i in z.infolist()}
     missing = [n for n in OTHER_FILES if n not in infos]
@@ -160,11 +160,12 @@ def apply_tune(plans: list[CoursePlan], tune: dict[str, dict[str, float | int]])
 
 
 def build(roms: Path, saturn: Path, out: Path, tune: dict[str, dict[str, float | int]] | None = None,
-          smoke: bool = False, seconds: int = SMOKE_SECONDS) -> int:
+          smoke: bool = False, seconds: int = SMOKE_SECONDS, weather: bool = True, weather_tunes=None) -> int:
     """Check the inputs, convert the seven courses into the user's set, write out/vr.zip (the input set's extra
     members copied through), copy the two extra zips, write out/build-report.txt. 0 when done; 1 when the inputs
     fail the check (its lines printed); 2 when a course does not fit (PatchError names it); 3 when the smoke test
-    fails."""
+    fails. `weather` False (--no-weather): the set without the COURSE WEATHER screen, as before the weather feature.
+    `weather_tunes` (a weather.tune.Tunes; the design's defaults when None: the command line sets none): the weather's tunes."""
     report = check_inputs(roms, saturn, out)
     if not report.ok:
         print("\n".join(report.lines))
@@ -175,7 +176,7 @@ def build(roms: Path, saturn: Path, out: Path, tune: dict[str, dict[str, float |
     before = tgp_budget(rs)
     try:
         patched, converted = build_all(rs, saturn, plans)
-        patched = ten_course_set(patched, converted)
+        patched = ten_course_set(patched, converted, weather=weather, weather_tunes=weather_tunes)
     except PatchError as e:
         print(f"build failed: {e}")
         return 2
@@ -246,6 +247,8 @@ def _parser() -> argparse.ArgumentParser:
             s.add_argument("--tune", action="append", default=[], metavar="COURSE:KEY=VALUE,...",
                            help='per-course knobs, e.g. "AMAZON FALLS:pace=0.9,laps=4" (keys: laps 1..7, time_factor, pace)')
             s.add_argument("--smoke", action="store_true", help="after the build, drive the first converted course in MAME (headless, 60 emulated seconds) to prove the set loads and renders")
+            s.add_argument("--no-weather", action="store_true",
+                           help="build without the COURSE WEATHER screen (the set as before the weather feature, for comparisons)")
             s.add_argument("--seconds", type=int, default=SMOKE_SECONDS,
                            help=f"length of the smoke test in emulated seconds (default {SMOKE_SECONDS}, at least {SMOKE_MIN_SECONDS}: the race starts about 28 s in)")
     return p
@@ -270,7 +273,7 @@ def main(argv: list[str] | None = None) -> int:
         parser.error(str(e))
     if args.seconds < SMOKE_MIN_SECONDS:
         parser.error(f"--seconds {args.seconds}: at least {SMOKE_MIN_SECONDS} (the race starts about 28 s in; 0 would run MAME without end)")
-    return build(roms, saturn, out, tune, smoke=args.smoke, seconds=args.seconds)
+    return build(roms, saturn, out, tune, smoke=args.smoke, seconds=args.seconds, weather=not args.no_weather)
 
 
 if __name__ == "__main__":

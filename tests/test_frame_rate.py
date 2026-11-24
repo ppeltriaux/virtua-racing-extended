@@ -14,19 +14,23 @@ The course load's own pass (the game builds the course in one pass of four vblan
 The reference, main's tested set (out/p27play1): with the game's budget 28-29, 0 and at most 14.5 ms on every course (the recon's
 14 runs); with the budget out of the way (every list drawn) 28-29, 0 and at most 14.6 ms in races, 18.0 ms in the attract
 (docs/spike/2026-11-phase28-draw-budget-findings.md §5).
+Phase 79: none of the three sees a stale display list (the rain spike's finding, out/p48/look/NOTE.txt): a pass whose work runs
+past DEADLINE_MS (MAME's screen update after the wait) leaves the next pass rewriting the list just submitted, and every second
+render shows the other, frozen list. The same three tests assert that no pass of their stretch wrote the list of the pass before
+(`_stale`, stale_list.lua) and record the worst busy time against DEADLINE_MS in rate_summary.txt.
 
 Each run: the session's ten-course set, the autopilot from the boot through the start with the full field and RATE_SECONDS in all
 (about two laps), the race clock held (VR_HOLD_CLOCK, frame_rate.lua's harness switch) so the race does not time out. Besides the
-20 races (Phase 33: the three originals in reverse too), the worst frames known (findings §13): Big Forest on road line 4 for WORST_SECONDS (the highest need measured, 9 771
-records), a lap through the pit lane on Big Forest and on Metropolis (a pit stop) and, in reverse, on Big Forest and on Acropolis, and the attract cycle for ATTRACT_SECONDS with
+20 races (Phase 33: the three originals in reverse too), the worst frames known (findings §13): Big Forest on road line 4 for WORST_SECONDS (9 704 records
+in this run, booted on the session's battery RAM; the highest need known there, 9 886, is a line it does not sample), a lap through the pit lane on Big Forest and on Metropolis (a pit stop) and, in reverse, on Big Forest and on Acropolis, and the attract cycle for ATTRACT_SECONDS with
 no input (the highest V60 busy time measured, 17 982 us). All runs of the module are made in parallel (three MAME processes) at
 the first test that needs one; a replay waits for the run whose inputs it replays."""
 
 import shutil
 import threading
-from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -37,13 +41,16 @@ from vrtools.arcade.romset import V60_BOOT, RomSet
 from vrtools.arcade.select import WHEEL_FOR_ENTRY
 from vrtools.arcade.tencourse import COURSES as PLANS
 from vrtools.convert.reverse import reverse_points
-from vrtools.mame.framerate import (FRAME_US, RATE_BOUNDS, FrameSample, arcade_rate_misses, parse_frame_log, parse_pass_log,
-                                    scene_loads, worst_busy)
+from vrtools.mame.framerate import (DEADLINE_MS, FRAME_US, RATE_BOUNDS, FrameSample, arcade_rate_misses, parse_frame_log,
+                                    parse_pass_log, scene_loads, worst_busy)
 from vrtools.mame.pitpaths import normal_pit_path, pit_lane
-from vrtools.mame.runner import LUA_DIR, PIT_HANDLER, parse_pit_log, parse_race_log, parse_rate, run_mame, write_centreline
+from vrtools.mame.runner import (LUA_DIR, PIT_HANDLER, parse_pit_log, parse_race_log, parse_rate, parse_stale_log, run_mame,
+                                 write_centreline)
 
 RATE_SECONDS = 150
 SAME_SECONDS = 120
+POKE_FRAME, POKE_ADDR = 2500, 0x400D00 + 0x280 * 3 + 0x1E    # J4's planted difference: car 3's x written 0.0 at that frame's end (its
+                                                              # speed, +0x14, written 0 changed nothing: the game sets it each pass)
 COURSES = [(e, False) for e in range(10)] + [(e, True) for e in range(10)]      # Phase 33: the three originals in reverse too
 # Where the game's 5 500 cut lists (the recon's runs, §3): the originals' runs are the standing test's; the converted courses run
 # again on the recon's autopilot lines (road line 0, Metropolis the AI lines' mean), which reach those frames: Diablo Canyon's start
@@ -53,7 +60,8 @@ CUT_BEFORE = [(0, False), (1, False), (2, False), (5, False), (5, True), (6, Fal
 RECON_LINE = {5: "line0", 6: "ai_mean", 7: "line0"}
 SAME_RACE = (0, 2, 6)                                  # Big Forest, Acropolis and Metropolis
 JOBS = 3
-WORST_SECONDS = 300                                    # Big Forest line 4: its need of 9 771 came at frame 13 187 (findings §3.1)
+WORST_SECONDS = 300                                    # Big Forest line 4: 9 771 at frame 13 187 on no battery RAM until Phase 35
+                                                       # (findings §3.1); 9 704 at frame 4 832 on the session's battery RAM
 ATTRACT_SECONDS = 300
 # The worst frames known (the review's I1): Big Forest on road line 4; a lap through the pit lane on an original (Big Forest) and on
 # a converted course (Metropolis), each with a pit stop in the run.
@@ -66,11 +74,20 @@ WORST_IDS = ["big_forest_line4", "big_forest_pit", "metropolis_pit", "big_forest
              "acropolis_reverse_pit"]
 # Review I1: the least margin under FRAME_BUDGET each worst run must keep (every run: 0, no list skipped). Big Forest in reverse
 # on line 1 measured 10 172 of 10 500 (328 under) in stages 1 and 2 and in the fix wave; a floor of 300 fails the test when
-# anything added to the reverse view eats a tenth of it. The others' measured margins: line 4 729, the reverse pit lap 448.
-MARGIN_FLOOR = {"big_forest_reverse_line1": 300, "big_forest_reverse_pit": 400, "big_forest_line4": 650}
+# anything added to the reverse view eats a tenth of it. The reverse pit lap measures 448.
+# Big Forest line 4: the need at its heavy stretch depends on the autopilot's exact line, and that line moves with any change of
+# timing (the autopilot steers from samples grouped by MAME's frame end): on builds whose game is identical under the same inputs
+# it measured 9 771 (no battery RAM, to Phase 35), 9 886 (no battery RAM after Phase 35's first-boot work), 9 704 (the session's
+# battery RAM, Phase 79) and 9 791 (weather stage 2's set: its DRY switch test adds about 2 us a pass; fed the switch-off set's
+# recorded inputs it needs 9 704, every pass identical); a RAIN race's line reached 10 302. A floor tighter than that spread is noise
+# (Phase 79's 716, nine tenths of 796, was): 400, the run failing when line 4 needs more than 10 100, about 200 over the highest need
+# a DRY line has shown (the session lead's ruling, weather stage 2's pre-review round).
+MARGIN_FLOOR = {"big_forest_reverse_line1": 300, "big_forest_reverse_pit": 400, "big_forest_line4": 400}
 # Big Forest's pit lap (the measurement's scratch path P0, findings §2): road line 0 with the pit lane's x (-226, beside the start
 # line, where line 0 runs at -193) from road point 334 round to 29, blended in over the 12 points before and out over the 7 after.
 BF_PIT_X, BF_LANE, BF_IN, BF_OUT = -226.0, (334, 29), 12, 7
+LOADS_BEFORE_RACE = 2                                  # Phase 79: a race run's passes of two vblanks or more before its stretch
+                                                       # on main's set (the boot's first attract scene at frame 275, the course load)
 FINISH_STILL = 120                                     # frames of a still race clock after the green that mark the finish
 
 
@@ -155,6 +172,79 @@ def test_frame_rate_lua_writes_what_the_parser_reads(tmp_path):
     assert parse_pass_log(q) == ["W 1 2 0 " + "0 0 0 0 0 " * 16]
 
 
+def test_a_stale_display_list_is_caught(tmp_path):
+    """stale_list.lua's L line (the frame a pass's wait was left in, the game's display-list pointer 0x5017f4 there: the end of the
+    list that pass wrote) is what `parse_stale_log` reads. A pass that wrote the same list (0x600000 or 0x610000) as the pass
+    before it is a stale picture and is reported, by its frame; a clean log reports none; pointers outside the two lists (the
+    boot's) are no list; a log with no list at all is an error (a run that measured nothing passes nothing)."""
+    clean = tmp_path / "clean.txt"
+    clean.write_text("L 3 0\nL 5 0\nL 1607 610e8c\nL 1609\nX 1\nL 1611 6012a0\nL 1613 611000\nL 1615 600010\nEND\n")
+    assert parse_stale_log(clean) == []
+    stale = tmp_path / "stale.txt"
+    stale.write_text("L 1607 610e8c\nL 1609 6012a0\nL 1611 6025e8\nL 1613 611000\nL 1615 6004f0\nL 1617 600010\nEND\n")
+    assert parse_stale_log(stale) == [1611, 1617]
+    empty = tmp_path / "empty.txt"
+    empty.write_text("L 3 0\nEND\n")
+    with pytest.raises(ValueError):
+        parse_stale_log(empty)
+    broken = tmp_path / "broken.txt"                                  # no list between two passes on the same list: not stale
+    broken.write_text("L 1607 610e8c\nL 1609 0\nL 1611 6125e8\nL 1613 600010\nEND\n")
+    assert parse_stale_log(broken) == []
+
+
+def test_the_display_list_deadline():
+    assert DEADLINE_MS == 18.9                                        # MAME's screen update after the wait (out/p48/look/NOTE.txt)
+
+
+def _synthetic_run(wd, passes, start, end=None):
+    """A run of `passes` ((frame, list 0x60 or 0x61, busy us)): its stale_list.txt and frames, as `_stale` reads them."""
+    wd.mkdir(exist_ok=True)
+    (wd / "stale_list.txt").write_text("".join(f"L {f} {lst:x}0100\n" for f, lst, _ in passes) + "END\n")
+    return SimpleNamespace(wd=wd, start=start, end=end, frames=[FrameSample(f, b, 0, 4000, 0, 10_500, 3600) for f, _, b in passes])
+
+
+def test_stale_skips_only_the_passes_after_the_excused_loads(tmp_path):
+    """`_stale`: the stale passes of the run's stretch (all of the run in the attract), less the one pass right after each load the
+    rate logic excuses, if it is stale. A pass of four vblanks or more leaves the next pass in its list on main's set (frame_rate.lua's
+    F lines and the L lines are written at the same wait exits, so a pass's frame is the same in both). The loads: in a race run, the
+    passes of FRAME_US or more before its stretch, at most LOADS_BEFORE_RACE (main's set: the boot's first attract scene, frame 275,
+    and the course load, the pass before `start`), a third one fails naming its frame; in the attract, those of the scene loads the
+    attract test excuses (`excused`, main's) that are long passes in this run too. A load whose next pass is clean is no error; a
+    long pass anywhere else, or one of main's loads that is short in this run, excuses nothing: the stale pass after it is
+    reported (a long pass in the stretch is also a rate miss)."""
+    P = [(275, 0x60, 52_400), (277, 0x60, 12_000), (279, 0x61, 10_000), (281, 0x60, 10_000),
+         (1605, 0x61, 48_000), (1607, 0x61, 11_800),                     # the course load, then its skipped pass
+         (1609, 0x60, 12_000), (1611, 0x61, 12_000),
+         (1613, 0x60, FRAME_US + 1000), (1615, 0x60, 12_000),            # a long pass mid-race: the stale pass after it is REPORTED
+         (1617, 0x61, 20_000), (1619, 0x61, 12_000), (1621, 0x60, 12_000)]   # a late pass (past the deadline, under two vblanks)
+    assert _stale(_synthetic_run(tmp_path / "race", P, start=1606)) == [1615, 1619]
+    assert _stale(_synthetic_run(tmp_path / "race", P, start=1606, end=1617)) == [1615]
+    assert _stale(_synthetic_run(tmp_path / "attract", P, start=None), excused={275, 1605, 1613}) == [1619]
+    assert LOADS_BEFORE_RACE == 2
+    no_skip = [(f, 0x60 if f == 1605 else lst, b) for f, lst, b in P]                # the course load left no stale pass: fine
+    assert _stale(_synthetic_run(tmp_path / "no_skip", no_skip, start=1606)) == [1615, 1619]
+    third = [(f, lst, FRAME_US if f == 279 else b) for f, lst, b in P]               # a third long pass before the race
+    with pytest.raises(AssertionError, match="279"):
+        _stale(_synthetic_run(tmp_path / "third", third, start=1606))
+    stale, text = _stale_result(_synthetic_run(tmp_path / "third", third, start=1606))  # the tests' form: never raises, so the
+    assert stale is None and "279" in text                                            # summary line and the rate misses still come
+    assert _stale_result(_synthetic_run(tmp_path / "race", P, start=1606)) == ([1615, 1619], "[1615, 1619]")
+    assert _stale(_synthetic_run(tmp_path / "attract2", P, start=None), excused={275, 1605, 2259}) == [1615, 1619]   # 2259: none here
+    short = [(f, lst, 12_000 if f == 1613 else b) for f, lst, b in P]                # main's load 1613 is short in this run ...
+    assert _stale(_synthetic_run(tmp_path / "short", short, start=None), excused={275, 1605, 1613}) == [1615, 1619]  # ... 1615 reported
+
+
+def test_stale_list_lua_writes_what_the_parser_reads():
+    """stale_list.lua writes "L <frame> <0x5017f4 hex>" at each exit of the two-vblank wait (the write of 0 to 0x500501 from
+    0xfe1400..0xfe140e, frame_rate.lua's own exit, so the frames match its F lines); autoplay.lua and attract_snaps.lua load it
+    with VR_STALE_LOG."""
+    text = (LUA_DIR / "stale_list.lua").read_text()
+    assert 'out:write(string.format("L %d %x\\n", frame, prog:read_u32(0x5017f4)))' in text
+    assert "pc >= 0xfe1400 and pc <= 0xfe140e" in text and 'out:write("END\\n")' in text
+    load = 'if os.getenv("VR_STALE_LOG") and lua_dir then dofile(lua_dir .. "/stale_list.lua") end'
+    assert load in (LUA_DIR / "autoplay.lua").read_text() and load in (LUA_DIR / "attract_snaps.lua").read_text()
+
+
 def test_input_tape_lua_records_and_replays_the_autopilots_inputs():
     """input_tape.lua (autoplay.lua loads it after autopilot.lua with VR_INPUT_LOG or VR_INPUT_REPLAY) wraps the autopilot's wheel
     and pedal: it writes "I <frame> <wheel or -> <throttle>" for every call, and with a tape it returns the tape's values instead,
@@ -185,6 +275,17 @@ def test_only_the_selected_tests_runs_are_made():
     assert selected_keys([]) == set()
 
 
+def test_the_worst_known_frames_boot_on_the_sessions_battery_ram():
+    """Phase 79 review: the worst-frame runs (WORST, with their margin floors) and the same-race runs boot on the battery RAM a
+    30 s boot of the session's set made (`RateSession.nvram`), not on none. On no battery RAM the boot's first-boot work (Phase
+    35's tables, `revinit`) moves where MAME's frame ends fall inside a pass; the autopilot steers from samples grouped by frame
+    end, so the car's line moved (Big Forest line 4 from frame 3 314: 9 886 records at road point 263 against 9 771, the game's
+    drawing pass for pass the same on the same inputs). The standing races keep booting on none."""
+    assert all(boots_on_saved_battery(k) for k in WORST)
+    assert boots_on_saved_battery(("same", 0, False, "main")) and boots_on_saved_battery(("same", 2, False, "new"))
+    assert not any(boots_on_saved_battery(k) for k in [("rate", e, r) for e, r in COURSES] + [("cut", 5, False), ("attract", -1, False, "new")])
+
+
 # ---- the runs ----
 
 def selected_keys(items) -> set:
@@ -203,7 +304,16 @@ def selected_keys(items) -> set:
             keys.update(("attract", -1, False, s) for s in ("new", "main"))
         elif name == "test_the_game_is_the_same_pass_for_pass":
             keys.update(("same", p["entry"], False, s) for s in ("main", "new"))
+        elif name == "test_the_pass_comparison_sees_a_planted_difference":
+            keys.update(("same", 2, False, s) for s in ("main", "poked"))
     return keys
+
+
+def boots_on_saved_battery(key) -> bool:
+    """The runs that boot on the session's battery RAM (`RateSession.nvram`) instead of none: the same-race pairs, and (Phase 79
+    review) the worst-frame runs, whose margin floors held the car's line fixed and which a change to the boot's first-boot work
+    moved (test_the_worst_known_frames_boot_on_the_sessions_battery_ram)."""
+    return key[0] == "same" or tuple(key) in WORST
 
 
 def _unbudgeted(rs: RomSet) -> RomSet:
@@ -317,7 +427,8 @@ class RateSession:
         kind, entry, reverse = key[:3]
         wd = self.base / "runs" / f"{kind}_{entry}{'r' if reverse else ''}{'_' + key[3] if len(key) > 3 else ''}"
         wd.mkdir(parents=True, exist_ok=True)
-        rate_logs = {"VR_FRAME_LOG": str(wd / "frames.txt"), "VR_RATE_LOG": str(wd / "rate.txt")}
+        rate_logs = {"VR_FRAME_LOG": str(wd / "frames.txt"), "VR_RATE_LOG": str(wd / "rate.txt"),
+                     "VR_STALE_LOG": str(wd / "stale_list.txt")}           # Phase 79: the list each pass wrote
         if kind == "attract":                                  # no input: the attract cycle (its demo races and the scenes between)
             env = {"VR_SNAP_FROM": "999999", **rate_logs}
             run_mame(LUA_DIR / "attract_snaps.lua", ATTRACT_SECONDS, wd, self.build if key[3] == "new" else self.main, env=env,
@@ -331,22 +442,27 @@ class RateSession:
             if kind == "pit":
                 env["VR_PIT_LOG"] = str(wd / "pit.txt")
             seconds = WORST_SECONDS if len(key) > 3 and key[3].startswith("line") else RATE_SECONDS
+            if boots_on_saved_battery(key):
+                shutil.copytree(self.nvram(), wd / "nvram")
             run_mame(LUA_DIR / "autoplay.lua", seconds, wd, self.build, env=env, timeout=3600)
             return Run(wd, finish=kind != "pit")
         # "same": a normal race on the shared battery RAM, every game log; main's set records the autopilot's inputs, the set
         # replays them frame for frame (input_tape.lua) and writes what it fed
         shutil.copytree(self.nvram(), wd / "nvram")
         env = self._env(wd, entry, reverse)
-        env.update({"VR_FIELD_LOG": str(wd / "field.txt"), "VR_FIELD_FROM": "1600", "VR_FIELD_TO": "999999", "VR_FIELD_EVERY": "1",
-                    "VR_PIT_LOG": str(wd / "pit.txt"), "VR_PASS_LOG": str(wd / "pass.txt"), "VR_FRAME_LOG": str(wd / "frames.txt"),
-                    "VR_INPUT_LOG": str(wd / "tape.txt")})
-        if key[3] == "new":
+        env.update({"VR_PIT_LOG": str(wd / "pit.txt"), "VR_PASS_LOG": str(wd / "pass.txt"), "VR_PASS_FIELDS": "1",
+                    "VR_FRAME_LOG": str(wd / "frames.txt"), "VR_INPUT_LOG": str(wd / "tape.txt")})
+        if key[3] in ("new", "poked"):
             env["VR_INPUT_REPLAY"] = str(self.run("same", entry, reverse, "main").wd / "tape.txt")
-        run_mame(LUA_DIR / "autoplay.lua", SAME_SECONDS, wd, self.build if key[3] == "new" else self.main, env=env, timeout=3600)
+        if key[3] == "poked":                          # the join's round 2, J4: a game made to differ (one car's x poked)
+            env.update({"VR_EXTRA_LUA": str(LUA_DIR / "storm_poke.lua"), "VR_STORM_POKE": f"{POKE_FRAME}:{POKE_ADDR:x}:0",
+                        "VR_POKE_LOG": str(wd / "poke.txt")})
+        run_mame(LUA_DIR / "autoplay.lua", SAME_SECONDS, wd, self.main if key[3] == "main" else self.build, env=env, timeout=3600)
         return Run(wd)
 
     def nvram(self) -> Path:
-        """The battery RAM both sets' compared races start from: the set's after a 30 s boot to the attract (no input)."""
+        """The battery RAM both sets' compared races and the worst-frame runs start from (`boots_on_saved_battery`): the set's
+        after a 30 s boot to the attract (no input)."""
         wd = self.base / "runs" / "nvram_boot"
         if not (wd / "nvram").is_dir():
             run_mame(LUA_DIR / "attract_snaps.lua", 30, wd, self.build, env={"VR_SNAP_FROM": "999999"}, timeout=900)
@@ -376,7 +492,7 @@ class RateSession:
     def prefetch(self, names=None, only=None):
         """Make the runs the tests `names` read; with `only` (Phase 31: `selected_keys` of the collected items), those of them only."""
         keys = [k for k in self.keys(names) if only is None or k in only]
-        if any(k[0] == "same" for k in keys):
+        if any(boots_on_saved_battery(k) for k in keys):           # made once, before the parallel runs
             self.nvram()
 
         def make(k):
@@ -421,7 +537,39 @@ def _name(entry, reverse):
     return f"entry {entry}{' reverse' if reverse else ''}"
 
 
-def _summary(rate_runs, name, r, w):
+def _stale(run, excused=None) -> list[int]:
+    """The frames of the run's passes that wrote the same display list as the pass before (stale_list.lua, `parse_stale_log`):
+    in the run's stretch [start, end) when it has a race, else over the whole run (the attract), less the pass right after each
+    load the rate logic excuses, if it is stale (a load leaves the next pass in its list on main's set; one whose next pass is
+    clean is no error). The loads are long passes (FRAME_US or more) of this run: a race run's before its stretch, at most
+    LOADS_BEFORE_RACE (the boot's first attract scene and the course load, the pass before `start`; AssertionError naming the
+    frames when there are more); in the attract, those of `excused` (main's scene loads, as its test excuses them) that are long
+    passes in this run too. A stale pass after any other pass is reported. The gap this closes is the pass under two vblanks but
+    past DEADLINE_MS, which the rate measure passes."""
+    stale = parse_stale_log(run.wd / "stale_list.txt")
+    long = {f.frame for f in run.frames if f.busy_us >= FRAME_US}
+    if excused is None:
+        loads = sorted(f for f in long if f < run.start)
+        assert len(loads) <= LOADS_BEFORE_RACE, (run.wd.name, "passes of two vblanks or more before the race", loads)
+    else:
+        loads = sorted(long & set(excused))
+    after = {a.frame: b.frame for a, b in zip(run.frames, run.frames[1:])}
+    skipped = {after[f] for f in loads if f in after}
+    return [f for f in stale if f not in skipped
+            and (run.start is None or (run.start <= f and (run.end is None or f < run.end)))]
+
+
+def _stale_result(run, excused=None) -> tuple[list[int] | None, str]:
+    """`_stale` computed once for a test: (its frames, the text for the summary line). When its guard fails or the log measured
+    nothing, (None, that message): the summary line is still written and the test asserts it together with the rate misses."""
+    try:
+        frames = _stale(run, excused)
+    except (AssertionError, ValueError) as e:
+        return None, f"stale-list check failed: {e}"
+    return frames, str(frames)
+
+
+def _summary(rate_runs, name, r, w, stale_text):
     stretch = r.stretch()
     rf = r.green if r.green is not None else r.start
     with open(rate_runs.base / "rate_summary.txt", "a") as out:
@@ -429,7 +577,8 @@ def _summary(rate_runs, name, r, w):
                   f"rate {min(n for f, n in r.rate if f - 57 >= rf)}-{max(n for f, n in r.rate if f - 57 >= rf)}, "
                   f"0x501148 {stretch[0].overrun}->{stretch[-1].overrun}, worst busy {w.busy_us} us at frame {w.frame}, "
                   f"records peak {max(f.records for f in stretch)}, need max {max(f.need for f in stretch)}, "
-                  f"budget {sorted({f.budget for f in stretch})}, frames with a skipped list {sum(1 for f in stretch if f.skipped)}\n")
+                  f"budget {sorted({f.budget for f in stretch})}, frames with a skipped list {sum(1 for f in stretch if f.skipped)}, "
+                  f"worst busy {w.busy_us / 1000:.2f} ms against the {DEADLINE_MS} ms deadline, stale lists {stale_text}\n")
 
 
 @pytest.mark.parametrize("entry,reverse", COURSES, ids=[_name(e, r).replace(" ", "_") for e, r in COURSES])
@@ -442,8 +591,9 @@ def test_every_course_holds_the_arcade_rate(rate_runs, record_property, entry, r
     misses = arcade_rate_misses(r.frames, r.rate, r.start, r.end, rate_from=r.green)
     w = worst_busy(r.frames, r.start, r.end)
     record_property("worst_busy_us", w.busy_us)
-    _summary(rate_runs, _name(entry, reverse), r, w)
-    assert misses == [], (_name(entry, reverse), misses[:10])
+    stale, stale_text = _stale_result(r)                            # Phase 79
+    _summary(rate_runs, _name(entry, reverse), r, w, stale_text)
+    assert misses == [] and stale == [], (_name(entry, reverse), misses[:10], "stale display lists", stale_text, w.busy_us)
     assert len(r.stretch()) > 2500                                  # about 90 s of race measured
 
 
@@ -468,7 +618,8 @@ def test_the_worst_known_frames_hold_the_arcade_rate(rate_runs, record_property,
     """The same three measures where the margin is thinnest (findings §13): Big Forest on road line 4 for WORST_SECONDS (its
     heavy stretch, road points 258-283, every lap; the run must reach frames needing more than 9 000 records), and a lap through
     the pit lane on Big Forest and on Metropolis, and in reverse on Big Forest and on Acropolis (the run must hold a pit stop:
-    the player's pit handler for 300 frames or more after the green, inside the stretch)."""
+    the player's pit handler for 300 frames or more after the green, inside the stretch). Phase 79 review: they boot on the
+    session's battery RAM (`boots_on_saved_battery`)."""
     name = WORST_IDS[WORST.index(key)]
     r = rate_runs.run(*key)
     assert r.load and r.green and r.start, (name, r.load, r.green)
@@ -476,8 +627,9 @@ def test_the_worst_known_frames_hold_the_arcade_rate(rate_runs, record_property,
     misses = arcade_rate_misses(r.frames, r.rate, r.start, r.end, rate_from=r.green)
     w = worst_busy(r.frames, r.start, r.end)
     record_property("worst_busy_us", w.busy_us)
-    _summary(rate_runs, name, r, w)
-    assert misses == [], (name, misses[:10])
+    stale, stale_text = _stale_result(r)                            # Phase 79
+    _summary(rate_runs, name, r, w, stale_text)
+    assert misses == [] and stale == [], (name, misses[:10], "stale display lists", stale_text, w.busy_us)
     assert len(stretch) > 2500, (name, len(stretch))
     need = max(f.need for f in stretch)                             # review I1: the margin itself, asserted
     skipped = [f for f in stretch if f.skipped]
@@ -504,13 +656,15 @@ def test_the_attract_holds_the_arcade_rate(rate_runs, record_property):
     misses = arcade_rate_misses(new.frames, new.rate, start, excused=loads)
     w = worst_busy(new.frames, start, excused=loads)
     record_property("worst_busy_us", w.busy_us)
+    stale, stale_text = _stale_result(new, loads)                   # Phase 79
     with open(rate_runs.base / "rate_summary.txt", "a") as out:
         out.write(f"attract: logic frames {len(new.frames)} (from {start}), scene loads {len(loads)} (main's), new's passes of two "
                   f"vblanks or more {len(scene_loads(new.frames))}, rate {min(n for f, n in new.rate if f - 57 >= start)}-"
                   f"{max(n for f, n in new.rate if f - 57 >= start)}, 0x501148 {new.frames[0].overrun}->{new.frames[-1].overrun}, "
                   f"worst busy outside the loads {w.busy_us} us at frame {w.frame}, records peak {max(f.records for f in new.frames)}, "
-                  f"need max {max(f.need for f in new.frames)}, frames with a skipped list {sum(1 for f in new.frames if f.skipped)}\n")
-    assert misses == [], misses[:10]
+                  f"need max {max(f.need for f in new.frames)}, frames with a skipped list {sum(1 for f in new.frames if f.skipped)}, "
+                  f"worst busy {w.busy_us / 1000:.2f} ms against the {DEADLINE_MS} ms deadline, stale lists {stale_text}\n")
+    assert misses == [] and stale == [], (misses[:10], "stale display lists", stale_text, w.busy_us)
     assert len(new.frames) > 5000
 
 
@@ -533,34 +687,38 @@ def test_no_list_is_skipped_where_the_games_budget_cut(rate_runs, entry, reverse
 def test_the_game_is_the_same_pass_for_pass(rate_runs, entry):
     """A normal race of SAME_SECONDS on the same battery RAM, on main's set (the same conversions, the game's budget) with the
     autopilot, then on the set fed exactly the wheel and pedal the autopilot gave on main's, frame for frame (input_tape.lua): the
-    game's state at the end of every logic pass (pass_state.lua: the clock and all 16 cars' x, z, road point, speed and lap, and the
-    frame each pass ends in) is identical over the whole run, main's run skipped lists and the set's none.
+    game's state at the end of every logic pass (pass_state.lua with VR_PASS_FIELDS: the clock and all 16 cars' x, z, road point,
+    speed and lap, line cursor, target, lap-position quad, working performance, rank and ranking neighbours, and the frame each pass
+    ends in) is identical over the whole run, main's run skipped lists and the set's none.
     The same inputs are needed: the autopilot steers from the player's TGP calls grouped by MAME's frame end, and a set whose passes
-    take another time can see a position one frame earlier or later and steer otherwise, after which the races part (findings §13:
-    with the autopilot on both sets, Big Forest's and Acropolis's standing races part at frames 4 730 and 3 354, the first
-    difference a wheel value with every pass identical before it). The frame-end logs (field, race, collision, pit) are not always
-    identical even on the same inputs: MAME's frame end falls about 1.5 ms into a pass, and a pass that follows a longer one starts
-    a fraction of a microsecond later and its V60-TGP handshakes stretch that to some 15 us, enough for a sample to fall on the
-    other side of an update (findings §6). Bounded here: every value that differs in the field log is one the other set shows for
-    the same car within 4 frames."""
+    take another time can see a position one frame earlier or later and steer otherwise, after which the races part (findings §13).
+    The join's round 2, J4 (the session lead's ruling): the cars' fields are compared at pass ends, where the game's state is defined,
+    no longer from a frame-end log: MAME's frame end falls inside a pass, so a set whose passes take other times (the wet handling's
+    dry paths, about 42 us a pass) can sample a car in the middle of its update while the game is the same (Acropolis, frame 3510,
+    the player's x and z half updated). test_the_pass_comparison_sees_a_planted_difference shows the comparison fails on a game that
+    differs."""
     old, new = rate_runs.run("same", entry, False, "main"), rate_runs.run("same", entry, False, "new")
     ta, tb = (new.wd / "tape.txt").read_text().splitlines(), (old.wd / "tape.txt").read_text().splitlines()
     assert len(ta) > 3000 and ta == tb, (entry, "the replay did not feed main's inputs", len(ta), len(tb))
     assert sum(1 for f in old.frames if f.skipped) > 0, (entry, "main's run skipped no list: it is not main's set")
     assert sum(1 for f in new.frames if f.skipped) == 0, (entry, "the set skipped a list")
-    a, b = parse_pass_log(new.wd / "pass.txt"), parse_pass_log(old.wd / "pass.txt")
+    first, a, b = pass_difference(new, old)
     assert len(a) > 3000 and len(a) == len(b), (entry, len(a), len(b))
-    first = next((i for i, (x, y) in enumerate(zip(a, b)) if x != y), None)
-    assert first is None, (entry, first, a[first][:120], b[first][:120])
-    fa = [l.split() for l in (new.wd / "field.txt").read_text().splitlines()]
-    fb = [l.split() for l in (old.wd / "field.txt").read_text().splitlines()]
-    assert len(fa) == len(fb) > 1000
-    by_car = defaultdict(dict)
-    for t in fb:
-        by_car[t[1]][int(t[0])] = t
-    for x, y in zip(fa, fb):
-        if x != y:
-            f, car = int(x[0]), x[1]
-            for k, (u, v) in enumerate(zip(x, y)):
-                if u != v:
-                    assert any(by_car[car].get(f + d, [None] * 13)[k] == u for d in range(-4, 5) if d), (entry, x, y, k)
+    assert first is None, (entry, first, a[first][:160], b[first][:160])
+
+
+def pass_difference(new, old):
+    """(the first pass whose state differs or None, the two pass logs) of two same-race runs (pass_state.lua with VR_PASS_FIELDS:
+    every car's fields at every pass end)."""
+    a, b = parse_pass_log(new.wd / "pass.txt"), parse_pass_log(old.wd / "pass.txt")
+    assert a and len(a[0].split()) == 4 + 16 * 12, ("the pass log lacks the cars' fields (VR_PASS_FIELDS)", len(a[0].split()) if a else 0)
+    return next((i for i, (x, y) in enumerate(zip(a, b)) if x != y), None), a, b
+
+
+def test_the_pass_comparison_sees_a_planted_difference(rate_runs):
+    """J4's control: the same replayed race (Acropolis) on the set with one car's x written 0.0 at the end of frame POKE_FRAME
+    (storm_poke.lua): `pass_difference` finds the game differing from main's from that frame on."""
+    old, poked = rate_runs.run("same", 2, False, "main"), rate_runs.run("same", 2, False, "poked")
+    assert (poked.wd / "poke.txt").read_text().split()[:2] == ["POKE", str(POKE_FRAME)]
+    first, a, b = pass_difference(poked, old)
+    assert first is not None and POKE_FRAME <= int(a[first].split()[2]) <= POKE_FRAME + 2, (first, a[first][:80] if first else None)

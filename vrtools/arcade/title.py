@@ -14,6 +14,7 @@ right and down, about half Racing's height, right-aligned with "Racing" (x 428) 
 """
 from __future__ import annotations
 
+import dataclasses
 import struct
 
 import numpy as np
@@ -154,7 +155,7 @@ def install_title(rs: RomSet) -> RomSet:
                 chars.append(char_bytes(t.tolist()))
             tiles[k] = index[t.tobytes()]
 
-    out = RomSet(rs.program, rs.boot, rs.data, rs.polygons, rs.copro_data, rs.tgp_program)
+    out = dataclasses.replace(rs)
     blob = struct.pack("<I", len(chars)) + b"".join(chars)
     at = _free_bank0_run(out, len(blob))
     write_data(out, at, blob)

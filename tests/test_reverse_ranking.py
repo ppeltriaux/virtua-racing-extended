@@ -467,6 +467,30 @@ def test_a_reverse_race_records_in_its_own_table(rank_runs, entry):
     assert struct.unpack_from("<I", run.battery, slot - 0x400000)[0] == table
 
 
+def _weather_screen(pc: int) -> bool:
+    """A mode-line handler inside the COURSE WEATHER screen's code (weather stage 1, layout block "screen code"): a set with the
+    weather feature runs that screen between COURSE DIRECTION and the course's own handler, which main's sets do not have."""
+    from vrtools.arcade.weather.layout import block
+    b = block("screen code")
+    return b.start <= pc < b.start + b.size
+
+
+def _mode_frames(r, limit: int | None = None) -> list:
+    """The mode log as compared with main's (frame, mode, state, flag, record, the handler where it is a boot ROM address), less
+    the lines on which only the handler moved from one place in the COURSE WEATHER screen's code to another (the join's round 2,
+    J5: the screen's handler takes the place of main's select handler in mode 0x10 state 1, from 1204 to 1402 on the runs here,
+    and adds a line at its own second step, 1302; every other line keeps main's frames)."""
+    out, prev = [], None
+    for l in r.lines:
+        if limit is not None and l.frame > limit:
+            break
+        same = prev is not None and (l.mode, l.state, l.flag, l.record) == (prev.mode, prev.state, prev.flag, prev.record)
+        if not (same and _weather_screen(l.handler) and _weather_screen(prev.handler)):
+            out.append((l.frame, l.mode, l.state, l.flag, l.record, _boot_pc(l.handler)))
+        prev = l
+    return out
+
+
 def _boot_pc(pc: int):
     """A PC kept for the comparison with main only in the boot ROM: the project's routines in the program ROM moved (Task 1)."""
     return pc if pc >= V60_BOOT else None
@@ -488,8 +512,8 @@ def test_a_normal_race_writes_as_on_main(rank_runs, entry):
     log = [w for w in run.writes if mine(w)]
     assert log and log == [w for w in main.writes if mine(w)], (len(log), len([w for w in main.writes if mine(w)]))
     assert _after_finish(_race(run, 0)) == RECORD == _after_finish(_race(main, 0))
-    frames = lambda r: [(l.frame, l.mode, l.state, l.flag, l.record, _boot_pc(l.handler)) for l in r.lines]
-    assert run.loads == main.loads and frames(run) == frames(main)
+    assert [l for l in run.lines if _weather_screen(l.handler)] and not [l for l in main.lines if _weather_screen(l.handler)]
+    assert run.loads == main.loads and _mode_frames(run) == _mode_frames(main)
     outside = {a for _, _, a, _ in _bytes(main.writes)} - TABLES - set(BOOKKEEPING)
     assert outside <= MAIN_OUTSIDE and set(range(0x40F000, 0x40F008)) | {RANKING_INDEX, SHOWN_ID} <= outside, sorted(map(hex, outside))
     cells = lambda w: LAST_OFFSET_CELL <= w[2] <= ROWS_CELL
@@ -1031,6 +1055,16 @@ def _spans(run: BootRun) -> list[dict]:
     return out
 
 
+def settled_rows(run: BootRun, upto: int) -> tuple[list[int], list]:
+    """(the frames of the B lines before `upto`, the rows of those that stand for more than one frame). The join's round 2, J5: a B
+    line is the rows at MAME's frame end, logged when they change; the game draws a page's rows over the passes of one frame, so the
+    frame a step starts on (one frame, then the step's rows stand) can end in the middle of the drawing, and a set whose passes take
+    other times logs another half-drawn row there (the attract's page 2 at 4646: one tile of row 1 not yet written, the same from 4647)."""
+    rows = [(f, r) for f, r in run.rows if f < upto]
+    frames = [f for f, _ in rows] + [upto]
+    return frames[:-1], [(f, r) for (f, r), g in zip(rows, frames[1:]) if g - f > 1]
+
+
 def test_the_attract_shows_every_member_of_each_group(boot_runs):
     """The attract after a fresh boot (design §5 proof 5), ATTRACT_SECONDS: every member of each group comes, in its group's order,
     one member a page of its data index; each page shows its id's table. A normal page: four screens of six rows (first entries
@@ -1515,8 +1549,7 @@ def test_a_race_writes_as_on_main_but_its_group_s_counter(jump_runs):
     jump = [w for w in race.writes if w[1] in pcs]
     assert [(w[0], w[2], w[4]) for w in jump] == [(_insert_frame(race), ATTRACT_COUNTERS, 0xFF00)], jump
     assert [key(w) for w in race.writes if w[0] < attract and w not in jump] == [key(w) for w in main.writes if w[0] < attract]
-    frames = lambda r: [(l.frame, l.mode, l.state, l.flag, l.record, _boot_pc(l.handler)) for l in r.lines if l.frame <= limit]
-    assert race.loads == main.loads and frames(race) == frames(main)
+    assert race.loads == main.loads and _mode_frames(race, limit) == _mode_frames(main, limit)
     after = lambda r: [w for w in r.writes if attract <= w[0] < limit]
     assert [(w[0], w[2], w[4]) for w in after(race)] == [(w[0], w[2], w[4]) for w in after(main)]
     differ = {(w[2], w[4]) for w, m in zip(after(race), after(main)) if w[3] != m[3]}
@@ -1526,7 +1559,9 @@ def test_a_race_writes_as_on_main_but_its_group_s_counter(jump_runs):
 def test_with_no_game_the_attract_is_main_s_frame_for_frame(boot_runs):
     """With no game played (a fresh boot, ATTRACT_SECONDS of attract: every member of each group), this set's attract is main's
     (P27_SET) until the first page of an original's reverse table (Phase 35: a page main does not have): up to that page's setter
-    call the same modes on the same frames, the same pages (frames, shown ids, data indices, tables, screens), titles and rows,
+    call the same modes on the same frames, the same pages (frames, shown ids, data indices, tables, screens), titles, and rows logged
+    on the same frames, equal wherever they stand for more than a frame (`settled_rows`: the join's round 2, J5, the frame a step
+    starts on can end in the middle of the game's drawing of the rows),
     and the same battery writes (frame, address, data, mask, and the PC where it is in the boot ROM; the originals' reverse block,
     which `originit` makes at the boot, aside). After it the pages come later than main's, so they are compared group by group:
     the pages of each data index, the originals' reverse pages left out, are main's pages of that data index in main's order,
@@ -1538,7 +1573,8 @@ def test_with_no_game_the_attract_is_main_s_frame_for_frame(boot_runs):
     upto = lambda rows: [r for r in rows if r[0] < new]
     assert upto(run.lines) == upto(main.lines)
     assert upto(run.pages) == upto(main.pages)
-    assert upto(run.titles) == upto(main.titles) and upto(run.rows) == upto(main.rows)
+    assert upto(run.titles) == upto(main.titles)
+    assert settled_rows(run, new) == settled_rows(main, new)       # the rows on the same frames; standing rows equal (J5)
     key = lambda w: (w[0], _boot_pc(w[1]), w[2], w[3], w[4])
     assert [key(w) for w in upto(run.writes) if w[2] not in ORIG_BLOCK and w[2] + 1 not in ORIG_BLOCK] == [key(w) for w in upto(main.writes)]
     page = lambda p: (p["id"], p["table"], p["firsts"], p["end"] - p["start"], p["titles"][-1], p["rows"][-1])

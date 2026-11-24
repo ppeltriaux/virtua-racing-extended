@@ -5,7 +5,10 @@
 -- pass counts the passes from 1; frame the MAME frame (from 1 at the first frame end) in which the pass ended. A frame-end log
 -- samples the game inside a pass (MAME's frame end falls about 1.5 ms after the wait's exit, Phase 28 findings §6), so two sets
 -- whose passes take different times can log different values there while the game is the same; this log cannot.
--- Env: VR_PASS_LOG (path). The last line is "END".
+-- With VR_PASS_FIELDS=1 (the join's round 2, J4: tests/test_frame_rate.py compares at pass ends what fieldtrace.lua samples at
+-- frame ends), after each car's five fields also: <line cursor +0xe1> <target +0x1b1> <lap-position quad +0x30> (u16, hex)
+-- <working performance +0x48> (the f32's bits, hex) <rank +0x123> <the ranking neighbours +0x198, +0x19c> (u8 / u32, hex).
+-- Env: VR_PASS_LOG (path), VR_PASS_FIELDS. The last line is "END".
 local path = os.getenv("VR_PASS_LOG")
 if path then
   local out = assert(io.open(path, "w"))
@@ -13,6 +16,7 @@ if path then
   local prog = cpu.spaces["program"]
   local pcst = cpu.state["PC"]
   local frame, pass, in_wait = 0, 0, true
+  local fields = os.getenv("VR_PASS_FIELDS") == "1"
   emu.register_frame_done(function() frame = frame + 1 end)
   _G.vr_pass_state_taps = {
     prog:install_read_tap(0x500500, 0x500501, "vr_ps_wait", function(offset, data, mask)
@@ -26,6 +30,10 @@ if path then
           local b = 0x400d00 + 0x280 * car
           t[#t + 1] = string.format("%08x %08x %d %d %d", prog:read_u32(b + 0x1e), prog:read_u32(b + 0x26), prog:read_u16(b + 0xa6),
             prog:read_u32(b + 0x14), prog:read_u8(b + 0x1b5))
+          if fields then
+            t[#t + 1] = string.format("%x %x %x %08x %x %x %x", prog:read_u16(b + 0xe1), prog:read_u16(b + 0x1b1), prog:read_u16(b + 0x30),
+              prog:read_u32(b + 0x48), prog:read_u8(b + 0x123), prog:read_u32(b + 0x198), prog:read_u32(b + 0x19c))
+          end
         end
         out:write(table.concat(t, " ") .. "\n")
         if pass % 50 == 0 then out:flush() end

@@ -17,6 +17,13 @@
 -- its frames > DIR_PRESS) is such a reason: the early press would lock whatever entry the sweep is passing, so on that run the
 -- screen is not answered (the gas floored at 1400 locks the course as before the screen existed; a screen that opens is left to
 -- its countdown) and one line on stderr says so.
+-- Weather stage 1: on a set with the COURSE WEATHER screen (its first routine's word, VR_WEATHER_WORD, at VR_WEATHER_SELECT: the
+-- runner passes both from vrtools.arcade.weather) an answered direction screen is followed by a hold and the weather screen, and
+-- the answer moves so that the race still loads on the frame it did: the wheel to 200 (REVERSE) from W_STEER, the direction
+-- pressed at W_PRESS (its lock two frames later), the pedal lifted and the wheel back to 128 at W_LIFT (on the weather screen's
+-- DRY side, which arms it), with VR_RAIN=1 to 200 (RAIN) from W_RAIN, and the gas floored at 1400 as before is the weather's press:
+-- the weather locks on 1402, where the direction locked on a set without it. VR_RAIN=1 on a run whose weather screen will not be
+-- answered is an error (it would race dry).
 local course = tonumber(os.getenv("VR_COURSE") or "0")
 local manual = os.getenv("VR_MANUAL") == "1"
 local lua_dir = os.getenv("VR_LUA_DIR")
@@ -35,6 +42,10 @@ local dir_force = os.getenv("VR_DIRECTION_FORCE") == "1"
 -- load, so that a re-latch of the transmission on the screen would show (the course select latched it at the early press).
 local start_off = os.getenv("VR_DIR_START_OFF") == "1"
 local answering = false
+local W_STEER, W_PRESS, W_LIFT, W_RAIN = 1260, 1300, 1310, 1360
+local weather_at, weather_word = tonumber(os.getenv("VR_WEATHER_SELECT") or "", 16), tonumber(os.getenv("VR_WEATHER_WORD") or "", 16)
+local rain = os.getenv("VR_RAIN") == "1"
+local weather = false
 
 -- One tap on the V60 -> TGP FIFO (0xd80010 low half, 0xd80012 high half). Other scripts register listeners
 -- with vr_on_fifo_word(fn) and get (word, frame): a second tap on the same range does not fire.
@@ -58,6 +69,9 @@ if os.getenv("VR_DLIST_LOG") and lua_dir then dofile(lua_dir .. "/dlist_log.lua"
 if os.getenv("VR_TRACE_LOG") and lua_dir then dofile(lua_dir .. "/memtrace.lua") end
 if os.getenv("VR_RATE_LOG") and lua_dir then dofile(lua_dir .. "/renderrate.lua") end
 if (os.getenv("VR_FRAME_LOG") or os.getenv("VR_HOLD_CLOCK")) and lua_dir then dofile(lua_dir .. "/frame_rate.lua") end   -- Phase 28
+if os.getenv("VR_STALE_LOG") and lua_dir then dofile(lua_dir .. "/stale_list.lua") end   -- Phase 79: the list each pass wrote
+if os.getenv("VR_STORM_LOG") and lua_dir then dofile(lua_dir .. "/storm_log.lua") end   -- weather stage 2: the storm, pass by pass
+if os.getenv("VR_LIGHT_LOG") and lua_dir then dofile(lua_dir .. "/lightning_log.lua") end   -- weather stage 4: the lightning
 if os.getenv("VR_PASS_LOG") and lua_dir then dofile(lua_dir .. "/pass_state.lua") end                                   -- Phase 28
 if os.getenv("VR_COLLISION_LOG") and lua_dir then dofile(lua_dir .. "/collision_log.lua") end
 if os.getenv("VR_AUTOPILOT") and lua_dir then dofile(lua_dir .. "/autopilot.lua") end
@@ -137,6 +151,7 @@ emu.register_frame_done(function()
     elseif mem:read_u32(dir_table + 4 * entry) == 0 then why = string.format("entry %d's word in the reverse table (%x) is 0", entry, dir_table)
     end
     answering = why == nil
+    weather = answering and weather_at ~= nil and weather_word ~= nil and mem:read_u32(weather_at) == weather_word
     -- VR_DIRECTION=1 asks for a reverse race: on a converted entry of a set with the screen, not answering would race normal
     -- (with a sweep still moving the entry read here is the one it is passing, not the one it will choose: any entry counts)
     if why and dir_reverse and not dir_force and (sweep_late or (entry >= 3 and entry <= 9)) then
@@ -150,6 +165,12 @@ emu.register_frame_done(function()
       io.stderr:write(string.format("autoplay.lua: the COURSE DIRECTION screen is not answered: %s; the gas floored at 1400 locks the course and a screen that opens is left to its countdown\n", why))
       io.stderr:flush()
     end
+    if rain and not weather then
+      io.stderr:write(string.format("autoplay.lua: VR_RAIN=1 but the COURSE WEATHER screen will not be answered on entry %d at frame %d: %s\n", entry, frame,
+        why or "the set has no weather screen (VR_WEATHER_SELECT / VR_WEATHER_WORD)"))
+      io.stderr:flush()
+      os.exit(3)
+    end
   end
   if frame >= wheel_from and not race_start then                                   -- held from VR_WHEEL_FROM: the filtered wheel value needs ~50 frames, START can then confirm the choice
     local v = wheel_pos
@@ -157,11 +178,15 @@ emu.register_frame_done(function()
       local t = math.min(1, (frame - wheel_from) / sweep.frames)
       v = math.floor(sweep.from + (sweep.to - sweep.from) * t + 0.5)
     end
-    if answering and frame >= DIR_LIFT and frame < DIR_RETURN then v = (dir_reverse and frame >= DIR_STEER) and 200 or 128 end
+    if answering and frame >= DIR_LIFT and frame < DIR_RETURN then
+      if not weather then v = (dir_reverse and frame >= DIR_STEER) and 200 or 128
+      elseif frame < W_LIFT then v = (dir_reverse and frame >= W_STEER) and 200 or 128
+      else v = (rain and frame >= W_RAIN) and 200 or 128 end
+    end
     wheel:set_value(v)
   end
   if answering and frame >= DIR_PRESS and frame < 1400 then                        -- the early course press, then the lift
-    accel:set_value(frame < DIR_LIFT and 255 or 0)
+    accel:set_value((frame < DIR_LIFT or (weather and frame >= W_PRESS and frame < W_LIFT)) and 255 or 0)
     if manual then start:set_value((start_off and frame >= DIR_LIFT) and 0 or 1) end
   end
   if race_start and frame == race_start + 1 then wheel:set_value(128) end

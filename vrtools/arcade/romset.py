@@ -21,20 +21,27 @@ POLY_PAIRS = (("mpr-14890.26", "mpr-14891.27"), ("mpr-14892.28", "mpr-14893.29")
 COPRO_LANES = ("mpr-14898.39", "mpr-14899.40", "mpr-14900.41", "mpr-14901.42")      # 2 MB, byte lanes
 TGP_PROGRAM = "315-5573.bin"
 
-# The 13 files of MAME 0.289's `vr` set this tool never reads (TGP tables, other data, the 315-5571/2 PALs, the sound
-# CPU and PCM ROMs, the I/O board EEPROM): MAME refuses to run without them, so `vrtools check` reports them too.
+# Weather stage 6: the sound board's program (68000, loaded word-swapped: ROM_LOAD16_WORD_SWAP) and the sample ROMs of its two
+# MultiPCM chips, read and written since the storm's sounds are patched into them (weather/sound.py).
+SOUND_PROGRAM, SOUND_PCM1, SOUND_PCM2 = "epr-14870a.7", "mpr-14873.32", "mpr-14876.4"
+SOUND_FILES: dict[str, tuple[int, int]] = {
+    SOUND_PROGRAM: (0x20000, 0x919D9B75), SOUND_PCM1: (0x200000, 0xB1965190), SOUND_PCM2: (0x200000, 0xBA6B2327),
+}
+
+# The 10 files of MAME 0.289's `vr` set this tool never reads (TGP tables, other data, the 315-5571/2 PALs, the I/O board
+# EEPROM): MAME refuses to run without them, so `vrtools check` reports them too. (13 before weather stage 6: the sound
+# board's three moved to SOUND_FILES.)
 OTHER_FILES: dict[str, tuple[int, int]] = {
     "opr14742.bin": (0x20000, 0x446A1085), "opr14743.bin": (0x20000, 0xE8953554),
     "opr-14744.58": (0x20000, 0x730EA9E0), "opr-14745.59": (0x20000, 0x4C934D96),
     "opr-14746.62": (0x20000, 0x2A266CBD), "opr-14747.63": (0x20000, 0xA4AD5E19),
     "opr14748.bin": (0x20000, 0x4A532CB8),
     "315-5571.bin": (0x2000, 0x1233DB2A), "315-5572.bin": (0x2000, 0x66785906),
-    "epr-14870a.7": (0x20000, 0x919D9B75), "mpr-14873.32": (0x200000, 0xB1965190), "mpr-14876.4": (0x200000, 0xBA6B2327),
     "93c45.bin": (0x80, 0x65AAC303),
 }
 
 REQUIRED_FILES = (*PROGRAM_PAIR, *BOOT_PAIR, *(f for p in DATA_PAIRS for f in p),
-                  *(f for p in POLY_PAIRS for f in p), *COPRO_LANES, TGP_PROGRAM)
+                  *(f for p in POLY_PAIRS for f in p), *COPRO_LANES, TGP_PROGRAM, *SOUND_FILES)
 
 # Expected (size, crc32) per file, from MAME 0.289 `-listxml vr`.
 EXPECTED: dict[str, tuple[int, int]] = {
@@ -51,6 +58,7 @@ EXPECTED: dict[str, tuple[int, int]] = {
     "mpr-14898.39": (0x80000, 0x61DA2BB6), "mpr-14899.40": (0x80000, 0x2CD58BEE),
     "mpr-14900.41": (0x80000, 0xAA7C017D), "mpr-14901.42": (0x80000, 0x175B7A9A),
     "315-5573.bin": (0x2000, 0x3335A19B),
+    **SOUND_FILES,
 }
 
 V60_PROGRAM = 0x200000
@@ -66,6 +74,13 @@ def _lanes2(a: bytes, b: bytes) -> bytes:
     out = bytearray(len(a) + len(b))
     out[0::2] = a
     out[1::2] = b
+    return bytes(out)
+
+
+def _swap16(b: bytes) -> bytes:
+    """The bytes of each 16-bit word swapped (the sound program's file against the 68000's view; its own inverse)."""
+    out = bytearray(b)
+    out[0::2], out[1::2] = b[1::2], b[0::2]
     return bytes(out)
 
 
@@ -87,6 +102,11 @@ class RomSet:
     polygons: bytes
     copro_data: bytes
     tgp_program: bytes
+    # Weather stage 6: the sound board's members (None in a set made without them: `to_files` leaves them out and `to_zip` copies
+    # the source's). Writers copy a set with dataclasses.replace, which keeps them.
+    sound_program: bytes | None = None          # epr-14870a.7 as the 68000 sees it (big-endian words; the file is word-swapped)
+    sound_pcm1: bytes | None = None             # mpr-14873.32, MultiPCM chip 1's sample ROM
+    sound_pcm2: bytes | None = None             # mpr-14876.4, chip 2's
 
     @classmethod
     def from_files(cls, files: dict[str, bytes]) -> "RomSet":
@@ -108,6 +128,9 @@ class RomSet:
             polygons=b"".join(_words32(files[a], files[b]) for a, b in POLY_PAIRS),
             copro_data=bytes(copro),
             tgp_program=files[TGP_PROGRAM],
+            sound_program=_swap16(files[SOUND_PROGRAM]),
+            sound_pcm1=files[SOUND_PCM1],
+            sound_pcm2=files[SOUND_PCM2],
         )
 
     @classmethod
@@ -164,6 +187,9 @@ class RomSet:
         for i, name in enumerate(COPRO_LANES):
             files[name] = self.copro_data[i::4]
         files[TGP_PROGRAM] = self.tgp_program
+        for name, blob in ((SOUND_PROGRAM, self.sound_program), (SOUND_PCM1, self.sound_pcm1), (SOUND_PCM2, self.sound_pcm2)):
+            if blob is not None:
+                files[name] = _swap16(blob) if name == SOUND_PROGRAM else blob
         return files
 
     def to_zip(self, path: Path, source: Path | None = None) -> None:

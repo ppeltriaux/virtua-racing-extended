@@ -104,14 +104,23 @@ def test_the_originals_reverse_ids_and_their_place_in_the_attract(romset_zip, sa
 
 
 def test_the_race_end_s_record_site_is_the_game_s_again(romset_zip, saturn_cue):
-    """Phase 33's `rankgate3` is gone: on the session's set the race end's sixteen bytes at 0xfc40ce are the arcade's own, and
-    the originals' block holds `hudorig` alone."""
+    """Phase 33's `rankgate3` is gone: on the session's set without the weather screen the race end's sixteen bytes at 0xfc40ce
+    are the arcade's own, and the originals' block holds `hudorig` alone. (Weather stage 1: with the weather screen they call
+    `wxgate`, no record in a RAIN race and the site's own test otherwise; tests/test_weather_screen.py's record tests.)"""
     from vrtools.arcade.origrev import RANK_PATTERN, RANK_SITE, ROUTINES
     from vrtools.arcade.romset import RomSet
+    from vrtools.arcade.v60asm import Block
+    from vrtools.arcade.weather import layout, screen
+    from vrtools.arcade.directory import directory_layout
     from tests.test_tgp_build import _seven
-    out = _seven(romset_zip, saturn_cue)[0]
+    from tests.test_weather_dry import _seven_dry
+    out = _seven_dry(romset_zip, saturn_cue)[0]
     assert ROUTINES == ("hudorig",)
     assert out.boot[RANK_SITE - V60_BOOT:RANK_SITE - V60_BOOT + 16] == RomSet.from_zip(romset_zip).boot[RANK_SITE - V60_BOOT:RANK_SITE - V60_BOOT + 16] == RANK_PATTERN
+    wet = _seven(romset_zip, saturn_cue)[0]
+    b = Block(RANK_SITE)
+    b.emit("jsr abs", screen.code_layout(layout.block("screen code").start, directory_layout(), screen.Inputs.placeholder())["wxgate"])
+    assert wet.boot[RANK_SITE - V60_BOOT:RANK_SITE - V60_BOOT + 16].startswith(b.bytes())
 
 
 # ---- synthetic battery RAM ----

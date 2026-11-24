@@ -246,13 +246,20 @@ def test_the_direction_screens_block_tops_the_colour_run(romset_zip):
 
 def test_the_ten_course_set_keeps_polygon_rom_free(romset_zip, saturn_cue):
     """Phase 18: with the Saturn's terrain, road paint and structures on all seven courses the polygon ROM keeps
-    POLY_FLOOR_BYTES free; only small distant terrain is thinned, never half of a course's terrain."""
+    POLY_FLOOR_BYTES free; only small distant terrain is thinned, never half of a course's terrain. Weather Task 7 (the whole
+    suite): POLY_FLOOR_BYTES is the room the courses' own installers keep (the lettering, the far copies: tencourse refuses to go
+    under it) BEFORE the weather, which then takes 145 696 bytes of it for its three object blocks (its layout's "polygon" blocks):
+    a weather build leaves 8 952 bytes, held by test_weather_carrier.py::test_the_polygon_roms_room_after_the_weather
+    (POLY_FREE_FLOOR). So the floor is checked here with the weather's blocks counted back, and future scenery needs room freed
+    first."""
     from vrtools.arcade.tencourse import POLY_FLOOR_BYTES, load_saturn_course, poly_budget, ten_course_set
     from vrtools.convert.geometry import course_quads
     rs = RomSet.from_zip(romset_zip)
     out, conv = build_all(rs, saturn_cue)
     out = ten_course_set(out, conv)
-    assert poly_budget(out) >= POLY_FLOOR_BYTES
+    from vrtools.arcade.weather import layout as weather_layout
+    weather = sum(b.size for b in weather_layout.blocks() if b.space == "polygon")
+    assert weather == 145_696 and poly_budget(out) + weather >= POLY_FLOOR_BYTES, (poly_budget(out), weather)
     for plan, c in zip(COURSES, conv):
         sat = load_saturn_course(saturn_cue, plan.path)
         terrain = len(course_quads(sat, (1,)))
@@ -373,7 +380,7 @@ def test_stand_in_entries_show_their_course_picture(romset_zip, saturn_cue):
     from vrtools.arcade.tencourse import ten_course_set
     rs = RomSet.from_zip(romset_zip)
     out, conv = build_all(rs, saturn_cue, plans=[COURSES[0]])
-    out = ten_course_set(out, conv)
+    out = ten_course_set(out, conv, weather=False)      # a one-course set (its stand-ins' pictures fill the weather screen's room)
     _, recs, read = _records(out)
     render = lambda r: render_record(read, r)
     first = render(recs[3])

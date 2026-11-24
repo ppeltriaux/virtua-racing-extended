@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import pytest
 
 from vrtools.arcade.dlist import parse_log
@@ -287,3 +289,219 @@ def test_vr_mame_jobs_that_is_not_a_positive_integer_is_an_error(tmp_path, monke
     monkeypatch.setenv("VR_MAME_JOBS", value)
     with pytest.raises(MameError, match="VR_MAME_JOBS must be a positive integer"):
         run_mame(LUA_DIR / "autoplay.lua", 1, tmp_path, tmp_path)
+
+
+# --- the harness against the outside (weather stage 1, round 2) ---------------------------------------------------------------
+PROVIDERS = ("-keyboardprovider", "-mouseprovider", "-lightgunprovider", "-joystickprovider")
+
+
+def _fake_runs(monkeypatch, results):
+    """subprocess.run replaced: each call takes the next of `results` (a return code, or an exception to raise), records the command,
+    the work directory's files at the call, and writes a marker file and a numbered snapshot into the work directory as MAME would."""
+    import subprocess
+    calls = []
+
+    def fake(cmd, cwd, env, capture_output, text, timeout):
+        r = results[len(calls)]
+        calls.append({"cmd": cmd, "files": sorted(p.relative_to(cwd).as_posix() for p in Path(cwd).rglob("*") if p.is_file())})
+        snap = Path(cwd) / "snap" / "vr"
+        snap.mkdir(parents=True, exist_ok=True)
+        (snap / f"{len(list(snap.iterdir())):04d}.png").write_bytes(b"x")
+        (Path(cwd) / "log.txt").write_text(f"attempt {len(calls)}\n")
+        if isinstance(r, BaseException):
+            raise r
+        return subprocess.CompletedProcess(cmd, r, "Average speed: 100%" if r == 0 else "", "")
+    monkeypatch.setattr(subprocess, "run", fake)
+    return calls
+
+
+def test_every_mame_run_has_no_real_input_devices(tmp_path, monkeypatch):
+    """Round 2 (H1): real devices (the owner's keyboard, mouse buttons mapped to keys, a joystick) must not reach a test run, so the
+    command run_mame starts (and mame_command, which the replay test's command is built with too) sets each of MAME's four input
+    providers to `none`, once."""
+    from vrtools.mame.runner import mame_command
+    calls = _fake_runs(monkeypatch, [0])
+    run_mame(LUA_DIR / "autoplay.lua", 1, tmp_path, tmp_path)
+    for cmd in (calls[0]["cmd"], mame_command(tmp_path, 5, tmp_path / "s.lua", tmp_path, ["-playback", "x.inp"])):
+        for p in PROVIDERS:
+            assert cmd.count(p) == 1 and cmd[cmd.index(p) + 1] == "none", (p, cmd)
+        assert cmd[cmd.index("-video") + 1] == "none" and "-window" in cmd
+
+
+POSIX_KILL = pytest.mark.skipif(not hasattr(__import__("signal"), "SIGKILL"),
+                                reason="POSIX only: a status of -9 means SIGKILL only where the signal module has SIGKILL (not Windows)")
+POSIX_PIDS = pytest.mark.skipif(__import__("os").name == "nt",
+                                reason="POSIX only: the sweep tells dead processes by os.kill(pid, 0); on Windows it removes nothing")
+
+
+@POSIX_KILL
+def test_a_run_killed_from_outside_is_run_once_more(tmp_path, monkeypatch):
+    """Round 2 (H2): MAME ended by SIGKILL (-9) that the runner's own timeout did not send is run once more, from the work directory
+    as it was before the first attempt (what the first attempt wrote is gone: one snapshot, the second attempt's log), with a
+    MameKilledWarning naming the work directory; the second attempt's result is returned."""
+    from vrtools.mame.runner import MameKilledWarning
+    (tmp_path / "nvram").mkdir()
+    (tmp_path / "nvram" / "vr").write_bytes(b"battery")                 # a caller's own file, there before the run
+    calls = _fake_runs(monkeypatch, [-9, 0])
+    with pytest.warns(MameKilledWarning, match=str(tmp_path)):
+        proc = run_mame(LUA_DIR / "autoplay.lua", 1, tmp_path, tmp_path)
+    assert proc.returncode == 0 and len(calls) == 2
+    assert calls[1]["files"] == calls[0]["files"] == ["nvram/vr"]
+    assert sorted(p.name for p in (tmp_path / "snap" / "vr").iterdir()) == ["0000.png"]
+    assert (tmp_path / "log.txt").read_text() == "attempt 2\n" and (tmp_path / "nvram" / "vr").read_bytes() == b"battery"
+
+
+@POSIX_KILL
+def test_a_run_killed_twice_fails(tmp_path, monkeypatch):
+    from vrtools.mame.runner import MameKilledWarning
+    calls = _fake_runs(monkeypatch, [-9, -9, 0])
+    with pytest.warns(MameKilledWarning), pytest.raises(MameError, match="mame exited -9"):
+        run_mame(LUA_DIR / "autoplay.lua", 1, tmp_path, tmp_path)
+    assert len(calls) == 2
+
+
+@pytest.mark.parametrize("code", [-11, -6, 1])
+def test_a_crash_is_not_run_again(tmp_path, monkeypatch, code):
+    """Round 2 (H2): any other exit status (MAME's own crash, an abort, an error) fails at once."""
+    import warnings
+    calls = _fake_runs(monkeypatch, [code, 0])
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        with pytest.raises(MameError, match=f"mame exited {code}"):
+            run_mame(LUA_DIR / "autoplay.lua", 1, tmp_path, tmp_path)
+    assert len(calls) == 1
+
+
+def test_the_runners_own_timeout_is_not_run_again(tmp_path, monkeypatch):
+    """Round 2 (H2): the runner's own timeout (subprocess.run kills MAME and raises TimeoutExpired) fails at once, with its own
+    message."""
+    import subprocess
+    import warnings
+    calls = _fake_runs(monkeypatch, [subprocess.TimeoutExpired(["mame"], 5), 0])
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        with pytest.raises(MameError, match="did not end within 5 s"):
+            run_mame(LUA_DIR / "autoplay.lua", 1, tmp_path, tmp_path, timeout=5)
+    assert len(calls) == 1
+
+
+# --- the safety copy of the work directory (weather Task 6J, the join's third fix) ----------------------------------------------
+def _snapshots(d: Path) -> list[str]:
+    return sorted(p.name for p in d.iterdir() if ".snap-" in p.name)
+
+
+def test_the_safety_copy_lies_beside_the_work_directory_and_goes(tmp_path, monkeypatch):
+    """The copy a retry starts from (round 2's H2) is made beside the work directory, on its volume, not in the system temp folder
+    (the startup disk filled on 19 Nov 2026): during the run it is the work directory's sibling holding the caller's files; it is
+    gone after a run that succeeds, after one that fails and after the runner's own timeout; nothing is left in tempfile's folder."""
+    import subprocess
+    import tempfile
+    work = tmp_path / "runs" / "w1"
+    work.mkdir(parents=True)
+    (work / "nvram").mkdir()
+    (work / "nvram" / "vr").write_bytes(b"battery")
+    seen = []
+    systmp = Path(tempfile.gettempdir())
+    before_sys = set(systmp.iterdir())
+    calls = _fake_runs(monkeypatch, [0, 1, subprocess.TimeoutExpired(["mame"], 5)])
+    real = subprocess.run
+
+    def spy(cmd, cwd, **kw):
+        snaps = [p for p in Path(cwd).parent.iterdir() if ".snap-" in p.name]
+        seen.append([(p.name, sorted(q.relative_to(p).as_posix() for q in p.rglob("*") if q.is_file())) for p in snaps])
+        return real(cmd, cwd=cwd, **kw)
+    monkeypatch.setattr(subprocess, "run", spy)
+    run_mame(LUA_DIR / "autoplay.lua", 1, work, tmp_path)
+    with pytest.raises(MameError, match="mame exited 1"):
+        run_mame(LUA_DIR / "autoplay.lua", 1, work, tmp_path)
+    with pytest.raises(MameError, match="did not end within 5 s"):
+        run_mame(LUA_DIR / "autoplay.lua", 1, work, tmp_path, timeout=5)
+    assert len(calls) == 3 and len(seen) == 3
+    for s in seen:
+        assert len(s) == 1 and s[0][0].startswith(".w1.snap-") and "nvram/vr" in s[0][1], s
+    assert _snapshots(work.parent) == []
+    assert not [p for p in set(systmp.iterdir()) - before_sys if (p / "workdir").exists()]
+
+
+@POSIX_PIDS
+def test_stale_safety_copies_are_swept(tmp_path, monkeypatch):
+    """A session killed in the middle of a run leaves its copy: the first run beside a directory sweeps the copies of processes that
+    no longer live (and only those: a live process's copy, this one's own, is kept); `sweep_snapshots` does the same for a tree."""
+    import os
+    from vrtools.mame import runner
+    work = tmp_path / "w2"
+    work.mkdir()
+    dead = 2 ** 22 + 12345                               # above any pid the system hands out
+    for name in (f".w9.snap-{dead}-0", f".w2.snap-{dead}-3", f".w2.snap-{os.getpid()}-999"):
+        (tmp_path / name).mkdir()
+        (tmp_path / name / "x").write_bytes(b"x")
+    monkeypatch.setattr(runner, "_SWEPT", set())
+    _fake_runs(monkeypatch, [0])
+    run_mame(LUA_DIR / "autoplay.lua", 1, work, tmp_path)
+    assert _snapshots(tmp_path) == [f".w2.snap-{os.getpid()}-999"]
+    deep = tmp_path / "a" / "b"
+    deep.mkdir(parents=True)
+    (deep / f".w.snap-{dead}-1").mkdir()
+    assert runner.sweep_snapshots(tmp_path) == 1 and _snapshots(deep) == []
+
+
+# --- Windows (the final review's W1): no SIGKILL, no os.kill(pid, 0) probe ----------------------------------------------------
+def test_without_sigkill_the_runner_still_runs(tmp_path, monkeypatch):
+    """Where the signal module has no SIGKILL (Windows), run_mame on the faked MAME returns normally, a crash is still a MameError
+    (and a -9 is one too: nothing is told apart as "killed from outside", nothing is run again)."""
+    import signal
+    monkeypatch.delattr(signal, "SIGKILL", raising=False)
+    calls = _fake_runs(monkeypatch, [0, 1, -9, 0])
+    assert run_mame(LUA_DIR / "autoplay.lua", 1, tmp_path, tmp_path).returncode == 0
+    with pytest.raises(MameError, match="mame exited 1"):
+        run_mame(LUA_DIR / "autoplay.lua", 1, tmp_path, tmp_path)
+    with pytest.raises(MameError, match="mame exited -9"):
+        run_mame(LUA_DIR / "autoplay.lua", 1, tmp_path, tmp_path)
+    assert len(calls) == 3
+
+
+def test_on_windows_the_sweep_keeps_every_copy(tmp_path, monkeypatch):
+    """On Windows (os.name "nt", runner._WINDOWS) the sweep cannot tell a dead process from a live one: it removes nothing and does
+    not raise. The module flag is patched, not os.name for the whole process (the re-review)."""
+    from vrtools.mame import runner
+    dead = 2 ** 22 + 12345
+    (tmp_path / f".w.snap-{dead}-0").mkdir()
+    monkeypatch.setattr(runner, "_WINDOWS", True)
+    assert runner._alive(dead) is True
+    assert runner.sweep_snapshots(tmp_path) == 0 and _snapshots(tmp_path) == [f".w.snap-{dead}-0"]
+
+
+def test_the_smoke_test_reports_without_sigkill(tmp_path, monkeypatch):
+    """`vrtools build --smoke` (cli.run_smoke) ends with its own result, not a traceback, where there is no SIGKILL: a MAME crash is
+    (False, "smoke test failed: ..."), a run that loads nothing is (False, "... did not load ...")."""
+    import shutil
+    import signal
+    from vrtools.cli import run_smoke
+    monkeypatch.delattr(signal, "SIGKILL", raising=False)
+    monkeypatch.setattr(shutil, "which", lambda name: "/fake/mame")
+    _fake_runs(monkeypatch, [1, 0])
+    ok, line = run_smoke(tmp_path, seconds=1)
+    assert not ok and line.startswith("smoke test failed: mame exited 1")
+    ok, line = run_smoke(tmp_path, seconds=1)
+    assert not ok and "did not load" in line
+
+
+# --- the reference sets (the final review's W2) ---------------------------------------------------------------------------------
+def test_a_missing_reference_set_skips_or_fails(tmp_path, monkeypatch):
+    """tests/reference_sets.py: a reference set that is not named, or names a directory without vr.zip, skips with a reason naming
+    the variable and how the set is built; with VR_REQUIRE_REFERENCE_SETS=1 it fails instead; one that holds vr.zip is returned."""
+    from _pytest.outcomes import Failed, Skipped
+    from tests.reference_sets import REFERENCE_SETS, reference_set
+    assert set(REFERENCE_SETS) == {"VR_PRE_WEATHER_SET", "VR_RELEASED_SET", "VR_P75_SET", "VR_MAIN_SET"}
+    monkeypatch.delenv("VR_REQUIRE_REFERENCE_SETS", raising=False)
+    monkeypatch.delenv("VR_P75_SET", raising=False)
+    with pytest.raises(Skipped, match=r"VR_P75_SET is not set: .*LOCAL ONLY"):
+        reference_set("VR_P75_SET")
+    monkeypatch.setenv("VR_P75_SET", str(tmp_path))
+    with pytest.raises(Skipped, match="holds no vr.zip"):
+        reference_set("VR_P75_SET")
+    monkeypatch.setenv("VR_REQUIRE_REFERENCE_SETS", "1")
+    with pytest.raises(Failed, match="VR_REQUIRE_REFERENCE_SETS=1"):
+        reference_set("VR_P75_SET")
+    (tmp_path / "vr.zip").write_bytes(b"x")
+    assert reference_set("VR_P75_SET") == tmp_path

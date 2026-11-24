@@ -10,6 +10,11 @@ second); "holding the arcade's rate" means every logic frame keeps that two-vbla
   checks that pictures keep coming; it does not see every single lost picture: the windows do not overlap and alternate 28 and
   29 (57 is odd), so one lost picture in a 29-window reads 28 and passes (about half the positions); the counter catches it.
 `arcade_rate_misses` lists every breach of the three in a stretch of a run; tests/test_frame_rate.py asserts it is empty.
+None of the three sees a stale display list (found by the rain spike, out/p48/look/NOTE.txt): after its wait the game picks the
+list to write next from bit 6 of 0x680000 (read at 0xff96f7), which MAME updates only at its screen update, DEADLINE_MS after the
+wait's exit; a pass whose work runs past that leaves the bit at the old list, and the next pass rewrites the list just submitted
+(every second render shows the other, frozen list). stale_list.lua logs the list each pass wrote and `runner.parse_stale_log`
+reports the passes that wrote the same list as the pass before.
 """
 from __future__ import annotations
 
@@ -19,6 +24,17 @@ from typing import NamedTuple
 RATE_BOUNDS = (28, 29)                 # switches per 57 frames: one per two frames, 28.5 on average
 RATE_WINDOW = 57                       # renderrate.lua's window, in screen frames
 FRAME_US = 34_770                      # two vblanks at 57.52 Hz, in microseconds
+DEADLINE_MS = 18.9                     # MAME's screen update after the wait's exit (the vblank IRQ at 17.38 ms, the update 1.5 ms
+                                       # later): V60 work past it leaves a stale display list (out/p48/look/NOTE.txt)
+RAIN_BUSY_MAX_MS = 17.9                # weather (spec section 6 as amended; the join, the session lead's ruling of 19 Nov 2026): every
+                                       # pass of a RAIN race at most this, 1.0 ms under DEADLINE_MS. The bound of the storm's guard: the
+                                       # game's vblank handler moves the count 0x500501 17.383-17.387 ms into the pass, 17.486 ms on some
+                                       # passes (1 of 49 in three heavy 60-s runs); then the storm's unit in flight (at most
+                                       # carrier.UNIT_MAX_US, 0.2 ms); then the tail from the guard's trip to the pass's end (at most
+                                       # carrier.TAIL_US, 160 us since the join's round 2: 149 measured, forced in the first module with
+                                       # the sound's trigger sending two words): 17.486 + 0.200 + 0.160 = 17.846, rounded up (round 1:
+                                       # TAIL_US 190, 17.876; the session lead's ruling keeps 17.9 this round). Stage 2 had 17.8 (one
+                                       # module, a 31 us tail: 17.72). Worst pass measured on the joined build: the findings' "Join" section
 
 
 class FrameSample(NamedTuple):

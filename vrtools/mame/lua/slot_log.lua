@@ -15,7 +15,8 @@
 --
 -- The locked screen's characters: the middle slot's 384 characters (character RAM 0x7e9000..0x7ebfff) as they are at the first
 -- frame end of the direction lock (DIR_PHASE, VR_DIRECTION_RAM + 1 (0x502295), = 2 in mode 0x10): the arrows, the caption and what the course select's
--- middle picture left after them. A cell shows the locked screen's characters when it names one of them that is not blank (not
+-- middle picture left after them. Weather stage 1: taken again at the first frame end of the weather lock (DIR_PHASE 4 in mode
+-- 0x10), when there is one: the COURSE WEATHER screen's caption and badge, the last screen to write the slot before the race. A cell shows the locked screen's characters when it names one of them that is not blank (not
 -- all colour 0) and whose 32 bytes are still those.
 --
 -- Every second frame end (a logic frame) the visible cells of the four layers are scanned. Lines:
@@ -43,7 +44,7 @@ local PHASE = flag_at + 1
 local LO, HI = 0x3480, 0x35ff
 local MID, MID_END = 0x780000 + 32 * LO, 0x780000 + 32 * (HI + 1) - 1
 local BLANK = string.rep("\0", 32)
-local frame, last, prev_mode, loaded, due, ref = 0, "", nil, false, {}, nil
+local frame, last, prev_mode, loaded, due, ref, ref_phase = 0, "", nil, false, {}, nil, nil
 
 local function span(origin, pixels)            -- the cells (0..63) a window of `pixels` from pixel `origin` covers, wrapping at 512
   local cells, seen = {}, {}
@@ -100,8 +101,9 @@ emu.register_frame_done(function()
   frame = frame + 1
   local mode = mem:read_u8(0x501138)
   if mode == 0x11 then loaded = true end
-  if not ref and mode == 0x10 and mem:read_u8(PHASE) == 2 then
-    ref = mem:read_range(MID, MID_END, 8)
+  local phase = mem:read_u8(PHASE)
+  if mode == 0x10 and ((not ref and phase == 2) or (ref_phase == 2 and phase == 4)) then
+    ref, ref_phase = mem:read_range(MID, MID_END, 8), phase
     out:write(string.format("R %d\n", frame))
   end
   if loaded and dir and prev_mode ~= nil and mode ~= prev_mode then

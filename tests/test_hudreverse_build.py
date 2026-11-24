@@ -49,9 +49,8 @@ RACE_MODES = (0x11, 0x12, 0x13, 0x14, 0x19, 0x1A)
 SESSION_SECONDS = 300                   # two one-lap games (tests/test_reverse_ranking.py's)
 PIT_SECONDS = 150
 REVERSE_PIT_SECONDS, REVERSE_AHEAD = 180, 15       # tests/test_pit_build.py's reverse stop (autopilot.lua's VR_AUTOPILOT_AHEAD)
-MAIN_SET = Path(os.environ.get("VR_MAIN_SET") or Path(__file__).resolve().parents[1] / "out" / "p35play1")
-                                        # a build of main without Phase 32 (add9799: Phases 29 and 31 merged), made by `python -m
-                                        # vrtools build` from main's tree; git-ignored. VR_MAIN_SET names it from another worktree
+# MAIN_SET: the reference set VR_MAIN_SET (tests/reference_sets.py, W2; no default): a build of main without Phase 32 (add9799:
+# Phases 29 and 31 merged), made by `python -m vrtools build` from main's tree; git-ignored
 TILE_FRAMES = (8, 60, 300, 400, 700, 1200, 1800, 2200)    # after the race load
 SAME_SECONDS = 120
 
@@ -289,9 +288,8 @@ def test_a_coin_during_a_reverse_race_leaves_the_word(tmp_path_factory, romset_z
 
 
 def _main_set():
-    if not (MAIN_SET / "vr.zip").is_file():
-        pytest.skip(f"main's set is not at {MAIN_SET}")
-    return MAIN_SET
+    from tests.reference_sets import reference_set
+    return reference_set("VR_MAIN_SET")
 
 
 @pytest.mark.parametrize("entry", (0, 1, 2, DIABLO_CANYON))

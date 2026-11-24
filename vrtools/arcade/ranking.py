@@ -64,6 +64,7 @@ EXPERT, BEGINNER: ORIG_NAME_STRINGS) in the name's place. Phase 33's `rankgate3`
 """
 from __future__ import annotations
 
+import dataclasses
 import struct
 
 from vrtools.arcade.codepatch import patch_span
@@ -674,7 +675,7 @@ def install_ranking(rs: RomSet, d, base: int) -> RomSet:
     off = base - V60_PROGRAM
     if any(x != 0xFF for x in rs.program[off:off + len(img)]):
         raise PatchError(f"program ROM at {base:#x} is not free")
-    out = RomSet(rs.program, rs.boot, rs.data, rs.polygons, rs.copro_data, rs.tgp_program)
+    out = dataclasses.replace(rs)
     prog = bytearray(rs.program); prog[off:off + len(img)] = img
     object.__setattr__(out, "program", bytes(prog))
     patch_ranking_sites(out, ranking_layout(base))

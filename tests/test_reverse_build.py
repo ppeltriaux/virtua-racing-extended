@@ -180,6 +180,7 @@ def test_the_ten_course_set_writes_a_missing_direction_block(romset_zip, saturn_
     """Stage 3 (Task 6, carry-over from Task 5's review): `dirdraw` runs its draw list from the block, and `ten_course_set` makes
     sure it is there: on build_all's result with the block's span erased, the set it makes is the session's set byte for byte
     (the block written); with a foreign byte in the span it refuses, naming the span."""
+    from dataclasses import replace
     from vrtools.arcade.dirgfx import block_image
     from vrtools.arcade.patch import PatchError
     from vrtools.arcade.tencourse import dirscreen_block
@@ -188,13 +189,13 @@ def test_the_ten_course_set_writes_a_missing_direction_block(romset_zip, saturn_
     assert out.program[lo - V60_PROGRAM:hi - V60_PROGRAM] == block_image(lo)[0]          # build_all wrote it
     prog = bytearray(out.program)
     prog[lo - V60_PROGRAM:hi - V60_PROGRAM] = b"\xff" * (hi - lo)
-    bare = RomSet(bytes(prog), out.boot, out.data, out.polygons, out.copro_data, out.tgp_program)
+    bare = replace(out, program=bytes(prog))           # every member kept (the weather's sound board needs the sound members)
     made = ten_course_set(bare, conv)
     assert made.program[lo - V60_PROGRAM:hi - V60_PROGRAM] == block_image(lo)[0]
     assert made.program == _seven(romset_zip, saturn_cue)[0].program
     prog[lo - V60_PROGRAM + 1] = 0x00
     with pytest.raises(PatchError, match=f"{lo:#x}"):
-        ten_course_set(RomSet(bytes(prog), out.boot, out.data, out.polygons, out.copro_data, out.tgp_program), conv)
+        ten_course_set(replace(out, program=bytes(prog)), conv)
 
 
 def test_the_lap_sense_is_the_centrelines_on_every_entry(romset_zip, saturn_cue):
@@ -493,6 +494,55 @@ def _direction_race(tmp_path, romset_zip, saturn_cue, entry, reverse):
     return _RACES[entry, reverse]
 
 
+_TAPED: dict = {}
+
+
+def _taped_direction_race(tmp_path, romset_zip, saturn_cue, entry, reverse):
+    """Weather Task 7: (the reference run's workdir, this set's workdir, Converted) of 150 s of `entry` in one direction, first on
+    the set before the weather (`reference_set("VR_PRE_WEATHER_SET")`, main's v0.3 game) under the autopilot, its inputs recorded
+    (input_tape.lua), then on this tree's set fed those inputs frame for frame, both with the same loggers and the pass state with
+    the cars' fields (pass_state.lua, VR_PASS_FIELDS). Run once per session per (entry, reverse). The untaped autopilot steers from
+    frame-end samples, so a set whose passes take other times steers otherwise (the J5 rule of the join's round 2)."""
+    from tests.reference_sets import reference_set
+    from tests.test_race_build import _drive_line
+    from vrtools.arcade.course import DIRECTION_RAM
+    from vrtools.arcade.select import WHEEL_FOR_ENTRY
+    from vrtools.mame.runner import DUMP_STEP, run_mame, write_centreline
+    ref = reference_set("VR_PRE_WEATHER_SET")
+    if (entry, reverse) not in _TAPED:
+        out, conv = _seven(romset_zip, saturn_cue)
+        c = conv[entry - 3]
+        base = tmp_path / ("taped_reverse" if reverse else "taped_normal")
+        frames = ",".join(str(f) for f in range(1600, int(150 * 57.5), DUMP_STEP))
+
+        def env(wd):
+            line = _drive_line(c)
+            e = {"VR_RACE_LOG": str(wd / "race.txt"), "VR_RACE_CARS_TO": str(CARS_TO), "VR_EDGES_LOG": str(wd / "edges.txt"),
+                 "VR_TRACE_READ": WARNING_READS, "VR_TRACE_TO": "999999", "VR_TRACE_LOG": str(wd / "trace.log"),
+                 "VR_TRACE_DUMP": frames, "VR_TRACE_FROM": "0", "VR_PASS_LOG": str(wd / "pass.txt"), "VR_PASS_FIELDS": "1",
+                 "VR_INPUT_LOG": str(wd / "tape.txt"), "VR_COURSE": "0", "VR_WHEEL": str(WHEEL_FOR_ENTRY[entry]),
+                 "VR_COLLISION_LOG": str(wd / "c.txt"),
+                 "VR_AUTOPILOT": str(write_centreline(wd / "centreline.csv", reverse_points(line) if reverse else line))}
+            if reverse:
+                e["VR_DIRECTION"] = "1"
+                if decode_directory(out)[entry].reverse is None:
+                    e.update({"VR_DIRECTION_FORCE": "1", "VR_DIRECTION_RAM": f"{DIRECTION_RAM:x}"})
+            return e
+        wr = base / "ref" / f"entry{entry}"
+        wr.mkdir(parents=True, exist_ok=True)
+        run_mame(LUA_DIR / "autoplay.lua", 150, wr, ref, env=env(wr))
+        from tests.test_tgp_build import _build
+        if "build" not in _TAPED:                                   # this tree's set, built once for every taped race
+            (tmp_path / "taped_set").mkdir(parents=True, exist_ok=True)
+            _TAPED["build"] = _build(tmp_path / "taped_set", romset_zip, out)
+        build = _TAPED["build"]
+        wd = base / "set" / f"entry{entry}"
+        wd.mkdir(parents=True, exist_ok=True)
+        run_mame(LUA_DIR / "autoplay.lua", 150, wd, build, env={**env(wd), "VR_INPUT_REPLAY": str(wr / "tape.txt")})
+        _TAPED[entry, reverse] = (wr, wd, c)
+    return _TAPED[entry, reverse]
+
+
 def _reverse_race(tmp_path, romset_zip, saturn_cue, entry):
     """(workdir, Converted, race_report) of the reverse race of `entry`, run once per session."""
     return _direction_race(tmp_path, romset_zip, saturn_cue, entry, True)
@@ -762,17 +812,26 @@ def test_the_game_sees_the_quads_turned_round(tmp_path, romset_zip, saturn_cue, 
     attribute every car stores at +0xeb is its quad's direction in the course's TGP pool, turned half a turn in the reverse
     race and as authored in the normal one, on at least 99 % of the E lines inside the race. Uses the attribute's own
     snapshot (attr quad, attr): fresh on every store. The game's own wrong-way warning, which compares that direction with the
-    yaw, is never read during either race (its positive control is the next test)."""
+    yaw, is never read during either race (its positive control is the next test). Weather Task 7: both races run on this set fed
+    the inputs the autopilot gave on the set before the weather (`_taped_direction_race`), and the game's state is that set's
+    pass for pass (on Surfers Road reverse, untaped, the weather set's autopilot steered otherwise and the warning fired)."""
     from vrtools.arcade import tgp
     from vrtools.arcade.trace import parse_trace
+    from vrtools.mame.framerate import parse_pass_log
     out, conv = _seven(romset_zip, saturn_cue)
     slot = conv[entry - 3].entry.tgp_slot
     assert slot == decode_directory(out)[entry].tgp_slot
     w = tgp.words(out)
     _, pool = tgp.slot_table(out)[slot]
     quad = {}
-    for name, race, turn in (("normal", _normal_race, 0), ("reverse", _reverse_race, 0x8000)):
-        wd, c, _ = race(tmp_path, romset_zip, saturn_cue, entry)
+    for name, reverse, turn in (("normal", False, 0), ("reverse", True, 0x8000)):
+        wr, wd, c = _taped_direction_race(tmp_path, romset_zip, saturn_cue, entry, reverse)
+        ta, tb = (wr / "tape.txt").read_text(), (wd / "tape.txt").read_text()
+        assert len(ta.splitlines()) > 3000 and ta == tb, (name, "the replay did not feed the reference run's inputs")
+        pa, pb = parse_pass_log(wr / "pass.txt"), parse_pass_log(wd / "pass.txt")
+        first = next((k for k, (x, y) in enumerate(zip(pa, pb)) if x != y), None)
+        assert len(pa) > 3000 and len(pa) == len(pb) and first is None, (name, len(pa), len(pb), first,
+                                                                         first is not None and (pa[first][:120], pb[first][:120]))
         _, _, (start, end) = _player(wd)
         lines = [e for e in parse_edges(wd / "edges.txt") if start <= e.frame < end and e.attr_frame]
         for e in lines:

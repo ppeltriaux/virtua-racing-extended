@@ -7,6 +7,7 @@ free program ROM (`patch.write_tile_table`), and a directory entry (`arcade.dire
 """
 from __future__ import annotations
 
+import dataclasses
 import hashlib
 import math
 import re
@@ -845,7 +846,7 @@ def install_dirscreen_block(rs: RomSet) -> RomSet:
     lo, hi = dirscreen_block()
     image, _ = block_image(lo)
     assert len(image) == hi - lo
-    out = RomSet(rs.program, rs.boot, rs.data, rs.polygons, rs.copro_data, rs.tgp_program)
+    out = dataclasses.replace(rs)
     have = rs.program[lo - V60_PROGRAM:hi - V60_PROGRAM]
     if have == image:
         return out
@@ -1296,7 +1297,8 @@ def install_reverse(rs: RomSet, entry: CourseEntry10, rev: Reversed, at: int, ra
 
 
 def ten_course_set(rs: RomSet, converted: list[Converted], placeholder: Converted | None = None,
-                   panels: bool = True, reverse: bool = True, crew: bool = True, originals_reverse: bool = True) -> RomSet:
+                   panels: bool = True, reverse: bool = True, crew: bool = True, originals_reverse: bool = True,
+                   weather: bool = True, weather_tunes=None) -> RomSet:
     """The directory for the three originals followed by `converted` (in order); remaining entries up to ten
     repeat `placeholder` (or the last converted course) under the remaining Saturn names. With `panels`, every
     non-original entry gets a generated select panel (its course outline and name on the host's frame). With `reverse`
@@ -1312,7 +1314,10 @@ def ten_course_set(rs: RomSet, converted: list[Converted], placeholder: Converte
     records and race blobs after the converted courses' in the one annex (so the seven's records stay where they were and their
     race blobs move up by the three more maps records), their tables after the converted variants' in their banks, and the
     set gets the originals' reverse block (`origrev.install_origrev`: no best time recorded, the HUD's level word). False: the
-    set as before Phase 33."""
+    set as before Phase 33. Weather stage 1 (`weather`, with `panels`, `reverse` and `originals_reverse`: the screen chains through
+    the direction screen and the originals' picture block): the COURSE WEATHER screen (`weather.install_weather`), the last writer;
+    False gives the set as before the weather feature, byte for byte; `weather_tunes` (a weather.tune.Tunes, the defaults when None)
+    goes to it whole."""
     from dataclasses import replace
     entries = [c.entry for c in converted]
     outlines = [c.centreline for c in converted]
@@ -1362,6 +1367,8 @@ def ten_course_set(rs: RomSet, converted: list[Converted], placeholder: Converte
         install_checkpoint_lists(out, originals)                    # that they lie where they lie without it
         if panels:                                                  # fix wave (C1): an original's two-layer picture on the
             install_original_pictures(out, lay)                     # direction screen; last of all, on what is still erased
+            from vrtools.arcade.weather import install_weather      # weather stage 1: the COURSE WEATHER screen, after it
+            out = install_weather(out, converted, weather=weather, tunes=weather_tunes)
     return out
 
 
@@ -1384,7 +1391,7 @@ def install_pictures(rs: RomSet, names: list[str], bases: list) -> tuple[RomSet,
     """Phase 21: the seven entries' pictures (`bases` lettered with `names`, quantised), the originals' maps and the ten
     picture records, placed in free runs of bank 0 and the program ROM (outside the directory's code area). Returns the
     new RomSet and the ten record addresses (the three originals first)."""
-    out = RomSet(rs.program, rs.boot, rs.data, rs.polygons, rs.copro_data, rs.tgp_program)
+    out = dataclasses.replace(rs)
     masks = letters(rs)
     runs = [list(r) for r in free_runs(rs, picture_exclusions())]
 

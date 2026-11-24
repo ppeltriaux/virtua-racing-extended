@@ -13,6 +13,7 @@ whatever the template holds — is inherited.
 """
 from __future__ import annotations
 
+import dataclasses
 import struct
 
 from vrtools.arcade.course import (BANK_SIZE, WINDOW, BankHeader, PointerBlock, RoadPoint, Segment, course_table,
@@ -159,7 +160,7 @@ def install_bank(rs: RomSet, course_index: int, bank: bytes) -> RomSet:
     if len(bank) != BANK_SIZE:
         raise BankError(f"a bank is {BANK_SIZE} bytes, got {len(bank)}")
     e = course_table(rs)[course_index]
-    out = RomSet(rs.program, rs.boot, rs.data, rs.polygons, rs.copro_data, rs.tgp_program)
+    out = dataclasses.replace(rs)
     try:
         write_data(out, e.base, bank)
     except PatchError as exc:

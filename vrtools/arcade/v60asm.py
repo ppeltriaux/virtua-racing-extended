@@ -92,6 +92,29 @@ OPS = {"mov.w": (0x2D, 4), "mov.h": (0x1B, 2), "mov.b": (0x09, 1), "movz.bw": (0
 COND = {"be": 4, "bne": 5, "bnh": 6, "bh": 7, "br": 0xA, "blt": 0xC, "bge": 0xD, "ble": 0xE, "bgt": 0xF}   # bnh / bh: unsigned
 
 
+# Weather stage 2: the float group (opcode 0x5c, short floats; cvt in 0x5f), always two AM operands: the code byte is 0x80, the m
+# families in bits 6 / 5 and the operation in the low five bits. `cmpf.s src, dst` sets the flags of dst - src, as `cmp`.
+FOPS = {"cmpf.s": (0x5C, 0x00), "movf.s": (0x5C, 0x08), "negf.s": (0x5C, 0x09), "addf.s": (0x5C, 0x18), "subf.s": (0x5C, 0x19),
+        "mulf.s": (0x5C, 0x1A), "divf.s": (0x5C, 0x1B), "cvt.ws": (0x5F, 0x00), "cvt.sw": (0x5F, 0x01)}
+# The string moves (opcode 0x5a, format 7a: two `[reg]` operands each followed by its length, a register (0x80 | reg) or an
+# immediate 0..127): movcu.h copies min(length 1, length 2) halfwords upward; movcfu.h copies length 1 and fills the rest of length
+# 2 with R26's low half. Both leave R27 / R28 at the ends (MAME's opMOVSTRUH): a routine using them saves those two.
+STRING_OPS = {"movcu.h": 0x08, "movcfu.h": 0x0A}
+
+
+def float_bits(x: float) -> int:
+    """The single-precision bit pattern of `x` (a float immediate's operand)."""
+    return struct.unpack("<I", struct.pack("<f", x))[0]
+
+
+def _string_len(v) -> int:
+    if isinstance(v, str):
+        return 0x80 | _reg(v)
+    if not 0 <= v < 0x80:
+        raise AsmError(f"string length immediate {v} not in 0..127")
+    return v
+
+
 def branch(cond: str, own: int, target: int) -> bytes:
     """A conditional/unconditional branch at V60 address `own` to `target` (8-bit when it fits, else 16-bit)."""
     d = target - own
@@ -102,10 +125,41 @@ def branch(cond: str, own: int, target: int) -> bytes:
     raise AsmError(f"branch from {own:#x} to {target:#x} too far")
 
 
+def _float_op(form: str, mnem: str, operands: str, args) -> bytes:
+    """A FOPS instruction: operand kinds reg, abs, imm (a Python float is taken as its bit pattern), [reg], disp[reg], abs(reg)."""
+    op, sub = FOPS[mnem]
+    fargs = [float_bits(a) if isinstance(a, float) else a for a in args]
+    kinds = operands.split(",")
+    if len(kinds) != 2:
+        raise AsmError(f"unknown form {form!r}")
+
+    def take(kind: str) -> tuple[int, bytes]:
+        if kind == "reg":
+            return am_reg(fargs.pop(0))
+        if kind == "abs":
+            return am_abs(fargs.pop(0))
+        if kind == "imm":
+            return am_imm(fargs.pop(0), 4)
+        if kind == "[reg]":
+            return am_ind(fargs.pop(0))
+        if kind == "disp[reg]":
+            d, r = fargs.pop(0), fargs.pop(0)
+            return am_disp(d, r)
+        if kind == "abs(reg)":
+            a, r = fargs.pop(0), fargs.pop(0)
+            return am_abs_indexed(a, r)
+        raise AsmError(f"unknown operand kind {kind!r} in {form!r}")
+    (m1, b1), (m2, b2) = take(kinds[0]), take(kinds[1])
+    if fargs:
+        raise AsmError(f"too many operands for {form!r}")
+    return bytes([op, 0x80 | (m1 << 6) | (m2 << 5) | sub]) + b1 + b2
+
+
 def asm(form: str, *args) -> bytes:
     """Encode one instruction. `form` = "<mnemonic> <src>,<dst>" with operand kinds abs, reg, imm, [reg],
     disp[reg], abs(reg); plus "jsr abs", "jmp abs", "push reg", "pop reg", "pushm imm", "popm imm" (a register mask: bit n
-    is Rn), "rsr", "nop" and the branches ("be"… with (own, target))."""
+    is Rn), "rsr", "nop" and the branches ("be"… with (own, target)); weather stage 2: the FOPS float forms ("mulf.s abs,reg"…),
+    "movcu.h [reg],reg,[reg],reg" and "movcfu.h [reg],imm,[reg],reg"."""
     if form in COND:
         return branch(form, *args)
     if form == "rsr":
@@ -125,6 +179,13 @@ def asm(form: str, *args) -> bytes:
     if form == "popm imm":
         return _f3(0xE4, am_imm(args[0], 4))
     mnem, operands = form.split(" ", 1)
+    if mnem in STRING_OPS:
+        if operands not in ("[reg],reg,[reg],reg", "[reg],imm,[reg],reg"):
+            raise AsmError(f"unknown form {form!r}")
+        src, len1, dst, len2 = args
+        return bytes([0x5A, 0x80 | STRING_OPS[mnem], 0x60 | _reg(src), _string_len(len1), 0x60 | _reg(dst), _string_len(len2)])
+    if mnem in FOPS:
+        return _float_op(form, mnem, operands, args)
     if mnem not in OPS:
         raise AsmError(f"unknown form {form!r}")
     op, size1 = OPS[mnem]

@@ -6,7 +6,7 @@ import pytest
 
 from vrtools.arcade.patch import Allocator, PatchError, patch_course_tiles, write_colour_entries, write_polygons, write_tile_record
 from vrtools.arcade.polyrom import ObjectLayout
-from vrtools.arcade.romset import REQUIRED_FILES, RomSet, RomSetError
+from vrtools.arcade.romset import REQUIRED_FILES, SOUND_FILES, RomSet, RomSetError
 
 
 def _files(distinct=False):
@@ -18,6 +18,8 @@ def _files(distinct=False):
     for n in ("epr-14878a.4", "epr-14879a.5"):
         files[n] = bytes(0x20000)
     files["315-5573.bin"] = bytes(0x2000)
+    for n, (size, _) in SOUND_FILES.items():                                   # weather stage 6: read and written, sizes checked
+        files[n] = rng.randbytes(size) if distinct else bytes(size)
     return files
 
 

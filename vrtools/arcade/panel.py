@@ -14,6 +14,7 @@ docs/formats/model1-course-tables.md §13.
 """
 from __future__ import annotations
 
+import dataclasses
 import struct
 from dataclasses import dataclass, field
 
@@ -389,7 +390,7 @@ def install_panels(rs: RomSet, panels: list[Rendered]) -> tuple[RomSet, list[tup
     """Write the panels' characters, maps, a relocated select-upload list (old pairs + one per character run)
     and an extended palette block into bank 0's free tail; point the directory's phase-1 entry at them.
     Returns the new RomSet and each panel's (A, B) window addresses."""
-    out = RomSet(rs.program, rs.boot, rs.data, rs.polygons, rs.copro_data, rs.tgp_program)
+    out = dataclasses.replace(rs)
     start, room = BANK0_FREE
     if any(b != 0xFF for b in rs.data[start:start + room]):
         raise PatchError("bank 0's free tail is not free")

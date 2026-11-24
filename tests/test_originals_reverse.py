@@ -232,7 +232,9 @@ def test_each_checkpoint_gantry_has_a_list_with_its_lettering_behind_the_banner(
     object, texture word and size) followed by one more object, in polygon ROM that was erased, of 2 * LETTER_QUADS records:
     each letter quad of the frame mirrored left to right about the banner's centre and set as far behind the banner as it
     stands in front (`gantry.mirrored_letters`), one-sided, reading the colour entry the game's letters read. The game's own lists,
-    frames and colour entries are the stock ROM's, and the polygon ROM keeps POLY_LEFT_FLOOR free."""
+    frames and colour entries are the stock ROM's, and the polygon ROM keeps POLY_LEFT_FLOOR free of the lettering and every phase before
+    the weather (the join's round 2, J5: a floor set before the weather feature; the weather's polygon objects, its layout's "polygon"
+    blocks, 145 696 bytes in spike 70's place, are that feature's planned use, accounted in its own room table, and counted back here)."""
     from vrtools.arcade.gantry import (CHECKPOINT_DEPTH, CHECKPOINT_LIST_BYTES, CHECKPOINT_OBJECTS, CHECKPOINT_RECORD_BYTES, FRAMES, frame_quads,
                                        frame_records, gantry_parts, mirrored_letters)
     from vrtools.arcade.tencourse import POLY_FLOOR_BYTES, poly_budget
@@ -266,9 +268,11 @@ def test_each_checkpoint_gantry_has_a_list_with_its_lettering_behind_the_banner(
     a, b = np.frombuffer(plain.polygons, np.uint8), np.frombuffer(out.polygons, np.uint8)
     diff = np.flatnonzero(a != b)
     assert len(diff) and (a[diff] == 0xFF).all()                                      # polygon ROM: erased bytes only
-    left = poly_budget(out)
-    print("POLYGON ROM free", poly_budget(plain), "->", left)
-    assert left >= POLY_LEFT_FLOOR > POLY_FLOOR_BYTES
+    from vrtools.arcade.weather import layout as weather_layout
+    weather = sum(b.size for b in weather_layout.blocks() if b.space == "polygon")   # the weather's objects (stages 2-4): its own
+    left = poly_budget(out) + weather                                                # room table's use, placed after this floor
+    print("POLYGON ROM free", poly_budget(plain), "->", poly_budget(out), "+ the weather's", weather)
+    assert left >= POLY_LEFT_FLOOR > POLY_FLOOR_BYTES, (left, weather)
 
 
 def test_the_reverse_spawn_list_has_no_arrow_board_and_the_both_sided_start_gantry(romset_zip, saturn_cue):
@@ -379,9 +383,12 @@ def test_the_originals_variants_only_add_bytes(romset_zip, saturn_cue):
       `jsr dirlock`); nothing inside the directory image but the reverse table's three words and (Phase 35) the ranking
       image's attract groups and `raceend`'s positions (each original's reverse id in its group);
     - polygon ROM: the checkpoint gantries' lettering objects (stage 2), on bytes that were erased;
-    - TGP data and TGP program: nothing (one collision for both directions: 0 TGP words)."""
+    - TGP data and TGP program: nothing (one collision for both directions: 0 TGP words).
+    (Weather stage 1: the session's set without the weather screen, which needs the originals' variants and adds its own blocks:
+    tests/test_weather_dry.py::test_the_switch_changes_only_the_named_blocks.)"""
+    from tests.test_weather_dry import _seven_dry
     a, _ = _seven_plain(romset_zip, saturn_cue)
-    b, _ = _seven(romset_zip, saturn_cue)
+    b, _ = _seven_dry(romset_zip, saturn_cue)
     assert (a.copro_data, a.tgp_program) == (b.copro_data, b.tgp_program)
     pa, pb = np.frombuffer(a.polygons, np.uint8), np.frombuffer(b.polygons, np.uint8)
     assert (pa[np.flatnonzero(pa != pb)] == 0xFF).all()
@@ -527,16 +534,19 @@ def lane_lap(line0, entry):
 
 
 def _mame(tmp_path_factory, romset_zip, saturn_cue, label, entry, reverse, seconds=RACE_SECONDS, plain=False, line=None, env=None,
-          nvram=None):
-    """The work directory of one run of `entry` on the session's set (or the set without the originals' variants), made once."""
+          nvram=None, dry=False, setdir=None):
+    """The work directory of one run of `entry` on the session's set (or the set without the originals' variants; `dry`: the
+    session's set without the weather screen, tests.test_weather_dry._seven_dry; `setdir`: another set's directory, the session's
+    set's autopilot line), made once."""
     from tests.test_tgp_build import _build
     from vrtools.arcade.select import WHEEL_FOR_ENTRY
     from vrtools.convert.reverse import reverse_points
     from vrtools.mame.runner import DUMP_STEP, LUA_DIR, run_mame, write_centreline
     if label not in _RUNS:
-        out, _ = (_seven_plain if plain else _seven)(romset_zip, saturn_cue)
-        key = "build_plain" if plain else "build"
-        if key not in _RUNS:
+        from tests.test_weather_dry import _seven_dry
+        out, _ = (_seven_plain if plain else _seven_dry if dry else _seven)(romset_zip, saturn_cue)
+        key = "build_plain" if plain else "build_dry" if dry else "build"
+        if key not in _RUNS and setdir is None:
             _RUNS[key] = _build(tmp_path_factory.mktemp(key), romset_zip, out)
         wd = tmp_path_factory.mktemp(label) / "wd"
         if nvram is not None:
@@ -554,15 +564,21 @@ def _mame(tmp_path_factory, romset_zip, saturn_cue, label, entry, reverse, secon
             full["VR_DIRECTION"] = "1"
         full["VR_SOUND_LOG"] = str(wd / "sound.txt")                # (third review: Bay Bridge's tunnel in reverse)
         full.update({k: str(v).replace("{wd}", str(wd)) for k, v in (env or {}).items()})
-        run_mame(LUA_DIR / "autoplay.lua", seconds, wd, _RUNS[key], env=full, timeout=3600)
+        run_mame(LUA_DIR / "autoplay.lua", seconds, wd, setdir or _RUNS[key], env=full, timeout=3600)
         _RUNS[label] = wd
     return _RUNS[label]
 
 
-def _booted(tmp_path_factory, romset_zip, saturn_cue):
-    """The nvram directory of a 30-s attract boot of the session's set on no battery RAM, made once: the battery RAM every
-    later boot of this set finds (the S-RAM magic, REV4, ORG4 and every table in place)."""
+def _booted(tmp_path_factory, romset_zip, saturn_cue, setdir=None):
+    """The nvram directory of a 30-s attract boot of the session's set (or the set at `setdir`) on no battery RAM, made once: the
+    battery RAM every later boot of this set finds (the S-RAM magic, REV4, ORG4 and every table in place)."""
     from vrtools.mame.runner import LUA_DIR, run_mame
+    if setdir is not None:
+        if ("nvram", str(setdir)) not in _RUNS:
+            boot = tmp_path_factory.mktemp("nvram_boot_ref")
+            run_mame(LUA_DIR / "attract_snaps.lua", 30, boot, setdir, env={"VR_SNAP_FROM": "999999"}, timeout=900)
+            _RUNS[("nvram", str(setdir))] = boot / "nvram"
+        return _RUNS[("nvram", str(setdir))]
     if "nvram" not in _RUNS:
         from tests.test_tgp_build import _build
         out, _ = _seven(romset_zip, saturn_cue)
@@ -575,13 +591,33 @@ def _booted(tmp_path_factory, romset_zip, saturn_cue):
 
 
 def _race(tmp_path_factory, romset_zip, saturn_cue, entry, reverse):
-    """RACE_SECONDS of `entry` under the untaped autopilot, booted on `_booted`'s battery RAM (Phase 35 fix wave: on no battery
+    """RACE_SECONDS of `entry` under the autopilot, booted on `_booted`'s battery RAM (Phase 35 fix wave: on no battery
     RAM the boot's own initialisation, longer since Phase 35 by `originit`, moves where MAME's frame ends fall inside a pass;
     the autopilot samples the car there, so its steering, not the game, changed: Bay Bridge in reverse ran out of time on
     its second lap. On a battery RAM an earlier boot of the same set made, the boot initialises nothing, as on the set before;
-    findings §6)."""
+    findings §6). The join's round 2, J5: the same holds for any set whose passes take other times (the weather's dry paths):
+    Bay Bridge in reverse on the weather set, untaped, parts from v0.3's at pass 1042 (the player's x in its last bits, after
+    another wheel value) and gets 3 extensions against v0.3's 5, while fed v0.3's inputs it is v0.3's game pass for pass (5
+    extensions; out/p80j/j5bb.txt). So the race is driven by the inputs the autopilot gave on the set before the weather
+    (`_ref_tape`: VR_PRE_WEATHER_SET, the released v0.3, on its own battery RAM), replayed frame for frame (input_tape.lua);
+    without that set the race is not run: the test skips naming the variable (fails with VR_REQUIRE_REFERENCE_SETS=1), never
+    untaped (untaped, Bay Bridge reverse gets 3 extensions against the floor of 4: J5's measure)."""
+    tape = _ref_tape(tmp_path_factory, romset_zip, saturn_cue, entry, reverse)
+    env = {"VR_INPUT_REPLAY": str(tape), "VR_INPUT_LOG": "{wd}/tape.txt"}
     return _mame(tmp_path_factory, romset_zip, saturn_cue, f"race{entry}{'r' if reverse else 'n'}", entry, reverse,
-                 nvram=_booted(tmp_path_factory, romset_zip, saturn_cue))
+                 nvram=_booted(tmp_path_factory, romset_zip, saturn_cue), env=env)
+
+
+def _ref_tape(tmp_path_factory, romset_zip, saturn_cue, entry, reverse):
+    """The autopilot's inputs (input_tape.lua's log) on `_race`'s race on the set before the weather (test_weather_dry's
+    reference set VR_PRE_WEATHER_SET), booted on that set's own battery RAM; skipped (failed with VR_REQUIRE_REFERENCE_SETS=1)
+    when that set is not there."""
+    from tests.reference_sets import reference_set
+    PRE_WEATHER_SET = reference_set("VR_PRE_WEATHER_SET")
+    wd = _mame(tmp_path_factory, romset_zip, saturn_cue, f"refrace{entry}{'r' if reverse else 'n'}", entry, reverse,
+               nvram=_booted(tmp_path_factory, romset_zip, saturn_cue, PRE_WEATHER_SET), setdir=PRE_WEATHER_SET,
+               env={"VR_INPUT_LOG": "{wd}/tape.txt"})
+    return wd / "tape.txt"
 
 
 def _window(wd):
@@ -601,6 +637,9 @@ def test_an_original_races_in_reverse_on_its_variant(tmp_path_factory, romset_zi
     from vrtools.arcade.race import race_blob_layout
     from vrtools.mame.runner import parse_field, race_report
     wd = _race(tmp_path_factory, romset_zip, saturn_cue, entry, True)
+    tape = _ref_tape(tmp_path_factory, romset_zip, saturn_cue, entry, True)
+    if tape:                                                                  # fed exactly the reference run's inputs (J5)
+        assert (wd / "tape.txt").read_text() == tape.read_text() and len(tape.read_text().splitlines()) > 3000, NAMES[entry]
     out, _ = _seven(romset_zip, saturn_cue)
     rv = decode_directory(out)[entry].reverse.entry
     n = POINTS[entry]
@@ -891,7 +930,8 @@ def test_the_normal_game_is_the_set_before_pass_for_pass(tmp_path_factory, romse
 PICTURE_AT = {"select": lambda slot: (8, 32 + 152 * slot), "direction": lambda side: (32, 72 + 224 * side)}    # (y, x) on the screen
 FRAME_YELLOW = (255, 255, 0)            # the cursor frame (a polygon over the tiles): it covers a picture's outer pixels
 FRAME_BAND = 8                          # ... within this many pixels of the picture's edge
-SCREEN_SNAPS = (1100, 1300, 1500)       # the course select (no lock yet), the direction screen drawn (NORMAL shown), the lock look
+SCREEN_SNAPS = (1100, 1300, 1320)       # the course select (no lock yet), the direction screen drawn (the choice shown), the lock look
+                                        # (weather stage 1: autoplay locks the direction on 1302, the lock look held to 1336)
 
 
 def _rgb(words):
@@ -970,11 +1010,13 @@ def test_the_picture_block_and_the_lock_site(romset_zip, saturn_cue):
     """`olock`, `orows` and `osel` lie in their own block right below the originals' reverse block, with the six data
     addresses in the block's last 24 bytes; the boot ROM's LOCK_SITE calls `olock` where the set without the originals'
     variants calls `dirlock`; the draw pieces lie in the boot ROM's erased run (BOOT_FREE) or in erased bank 0, the lock
-    pieces (read on the lock's logic frame) all in the boot ROM, which no bank switch unmaps."""
+    pieces (read on the lock's logic frame) all in the boot ROM, which no bank switch unmaps. (Weather stage 1: on the set
+    without the weather screen, which rewrites `olock`'s two handler immediates: tests/test_weather_screen.py.)"""
     from vrtools.arcade import origpic
     from vrtools.arcade.dirscreen import LOCK_SITE
     from vrtools.arcade.tencourse import BOOT_FREE, origpic_address
-    out, _ = _seven(romset_zip, saturn_cue)
+    from tests.test_weather_dry import _seven_dry
+    out, _ = _seven_dry(romset_zip, saturn_cue)
     plain, _ = _seven_plain(romset_zip, saturn_cue)
     lay = directory_layout()
     base = origpic_address()
@@ -1054,8 +1096,9 @@ def _framed(*crops):
 def test_an_originals_picture_on_the_direction_screen_is_the_course_selects(tmp_path_factory, romset_zip, saturn_cue, entry, reverse):
     """Review C1, on the shipped set, screen pixels (MAME snapshots): the course select shows the original's picture as the
     stock ROM's two maps give it (B over A, the normal palettes); the direction screen, drawn, shows that picture on BOTH sides,
-    pixel for pixel, with the white arrow's pixels over the left and the red arrow's over the right; after the lock the chosen
-    side shows it in the game's chosen palettes and the other in the game's grey ones (the START tables), the arrows as they
+    pixel for pixel, with the white arrow's pixels over the left and the red arrow's over the right (weather stage 1: the side
+    shown in the normal look, the other in the grey look, A, B and the ring all grey; before, both in the normal look); after the
+    lock the chosen side shows it in the game's chosen palettes and the other in the game's grey ones (the START tables), the arrows as they
     were. Every pixel of the 128 x 168 picture is compared but those the yellow cursor frame covers at its edge. This is also
     the lock look of an original on the shipped set (tests/test_race_build.py's course-select lock look is dumped on the set
     without the originals' variants: with them an original's lock opens this screen)."""
@@ -1069,7 +1112,8 @@ def test_an_originals_picture_on_the_direction_screen_is_the_course_selects(tmp_
     assert len(snaps) >= len(SCREEN_SNAPS), snaps                                 # (autoplay.lua adds one after the race's start)
     sel, drawn, locked = (np.array(Image.open(p).convert("RGB")) for p in snaps[:len(SCREEN_SNAPS)])
     at = lambda frame: [l for l in lines if l.frame <= frame][-1]                # the log has a line where a field changed
-    assert at(SCREEN_SNAPS[1]).phase == 1 and at(SCREEN_SNAPS[1]).shown in (0, 1) and at(SCREEN_SNAPS[2]).phase == 2, (at(SCREEN_SNAPS[1]), at(SCREEN_SNAPS[2]))
+    from vrtools.arcade.weather.screen import HOLDING
+    assert at(SCREEN_SNAPS[1]).phase == 1 and at(SCREEN_SNAPS[1]).shown == int(reverse) and at(SCREEN_SNAPS[2]).phase == HOLDING, (at(SCREEN_SNAPS[1]), at(SCREEN_SNAPS[2]))
     assert at(SCREEN_SNAPS[2]).flag == int(reverse)
     ly = origpic.layers(RomSet.from_zip(romset_zip), entry)
     normal = origpic.expected_picture(ly)
@@ -1082,9 +1126,11 @@ def test_an_originals_picture_on_the_direction_screen_is_the_course_selects(tmp_
         arrow[8 * origpic.BOX[0]:8 * origpic.BOX[0] + 96, 8 * origpic.BOX[1]:8 * origpic.BOX[1] + 96] = dirgfx.arrow_bitmap(origpic.SIDE_CLOCKWISE[side]) != 0
         d = _crop(drawn, "direction", side)
         frame = _framed(s, d)
-        bad = (d != s).any(-1) & ~arrow & ~frame                                   # the course select's own pixels
-        assert not bad.any(), (NAMES[entry], side, "drawn against the course select", int(bad.sum()))
-        bad = (d != _rgb(origpic.expected_picture(ly, "normal", side))).any(-1) & ~frame
+        shown = side == int(reverse)
+        if shown:
+            bad = (d != s).any(-1) & ~arrow & ~frame                               # the course select's own pixels
+            assert not bad.any(), (NAMES[entry], side, "drawn against the course select", int(bad.sum()))
+        bad = (d != _rgb(origpic.expected_picture(ly, "normal" if shown else "grey", side))).any(-1) & ~frame
         assert not bad.any(), (NAMES[entry], side, "drawn", int(bad.sum()))
         look = "chosen" if side == int(reverse) else "grey"
         k = _crop(locked, "direction", side)
@@ -1157,10 +1203,11 @@ TRANSITION = range(1196, 1300)          # every video frame from before the cour
 LOCK_TO_LOAD = range(1196, 1612)        # ... and to the race load, for a converted course against the set without the variants
 
 
-def _snap_run(tmp_path_factory, romset_zip, saturn_cue, label, entry, reverse, frames, plain=False):
-    """The snapshots (RGB arrays, in `frames`' order) of a run of `entry` on the session's set or the set without the variants."""
+def _snap_run(tmp_path_factory, romset_zip, saturn_cue, label, entry, reverse, frames, plain=False, dry=False):
+    """The snapshots (RGB arrays, in `frames`' order) of a run of `entry` on the session's set (`dry`: without the weather screen)
+    or the set without the variants."""
     from PIL import Image
-    wd = _mame(tmp_path_factory, romset_zip, saturn_cue, label, entry, reverse, seconds=30, plain=plain,
+    wd = _mame(tmp_path_factory, romset_zip, saturn_cue, label, entry, reverse, seconds=30, plain=plain, dry=dry,
                env={"VR_SNAPS": ",".join(map(str, frames)), "VR_SNAPS_AFTER_START": ""})
     snaps = sorted(wd.rglob("*.png"))[:len(frames)]
     assert len(snaps) == len(frames), (label, len(snaps))
@@ -1174,7 +1221,8 @@ def test_no_frame_of_an_originals_lock_shows_a_half_drawn_picture(tmp_path_facto
     TRANSITION is read: up to the first frame in which a select slot's picture has changed, each of the three slots shows what
     it showed before the lock, pixel for pixel (but under the cursor frame); from that frame on, each direction picture's place shows either none of the
     picture (the place is what the screen shows there with no picture: the checker) or the whole picture of the stock ROM's
-    two maps; and both pictures are whole by the last frame."""
+    two maps (weather stage 1: in the normal look or the grey one, the side not shown greying while the direction is chosen, or
+    on the frame its palettes change each pixel in one of the two); and both pictures are whole by the last frame."""
     from vrtools.arcade import origpic
     frames = _snap_run(tmp_path_factory, romset_zip, saturn_cue, f"transition{entry}{'r' if reverse else ''}", entry, reverse, list(TRANSITION))
     # (the course lock is at frame 1202 whatever the answer; `reverse`: the wheel is turned for REVERSE from frame 1300, after
@@ -1182,6 +1230,7 @@ def test_no_frame_of_an_originals_lock_shows_a_half_drawn_picture(tmp_path_facto
     # test_an_originals_picture_on_the_direction_screen_is_the_course_selects.)
     ly = origpic.layers(RomSet.from_zip(romset_zip), entry)
     whole = _rgb(origpic.expected_picture(ly))
+    grey = _rgb(origpic.expected_picture(ly, "grey"))
     first = frames[0]
     slots = lambda im: [_crop(im, "select", k) for k in range(3)]
     inner = lambda im: [c[FRAME_BAND:-FRAME_BAND, FRAME_BAND:-FRAME_BAND] for c in slots(im)]
@@ -1203,7 +1252,7 @@ def test_no_frame_of_an_originals_lock_shows_a_half_drawn_picture(tmp_path_facto
             frame = _framed(c)
             if not ((c != empty[side]).any(-1) & ~frame).any():
                 row.append("none")
-            elif not ((c != whole).any(-1) & ~ring & ~frame).any():
+            elif not ((c != whole).any(-1) & (c != grey).any(-1) & ~ring & ~frame).any():
                 row.append("whole")
             else:
                 row.append("PART")
@@ -1216,8 +1265,10 @@ def test_no_frame_of_an_originals_lock_shows_a_half_drawn_picture(tmp_path_facto
 def test_a_converted_courses_lock_frames_are_the_set_befores(tmp_path_factory, romset_zip, saturn_cue):
     """Second review, minor 5: Diablo Canyon answered REVERSE, every video frame from before the course lock to the race load
     (LOCK_TO_LOAD, 416 frames), on the session's set and on the set without the originals' variants: the same pixels in every
-    frame. (`olock` in `dirlock`'s place costs a converted course no instruction more.)"""
-    new = _snap_run(tmp_path_factory, romset_zip, saturn_cue, "lockframes5", 5, True, list(LOCK_TO_LOAD))
+    frame. (`olock` in `dirlock`'s place costs a converted course no instruction more.) Weather stage 1: the session's set is
+    taken without the weather screen (`dry`), which changes these frames by design and is not what this compares; the weather
+    set's own frames: tests/test_weather_screen.py."""
+    new = _snap_run(tmp_path_factory, romset_zip, saturn_cue, "lockframes5", 5, True, list(LOCK_TO_LOAD), dry=True)
     old = _snap_run(tmp_path_factory, romset_zip, saturn_cue, "lockframes5_plain", 5, True, list(LOCK_TO_LOAD), plain=True)
     differ = [LOCK_TO_LOAD[i] for i, (a, b) in enumerate(zip(new, old)) if (a != b).any()]
     assert differ == [], differ[:10]

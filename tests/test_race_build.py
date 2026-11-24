@@ -90,7 +90,7 @@ def test_banking_ab_on_the_surfers_courses(tmp_path, romset_zip, saturn_cue, nam
         # built without them (its collision differs, and `plant` refuses a site inside it)
         arm = replace(plan, banking=banking) if banking == plan.banking else replace(plan, banking=banking, props=())
         out, conv = build_all(rs, saturn_cue, [arm])
-        out = ten_course_set(out, conv)
+        out = ten_course_set(out, conv, weather=False)      # a one-course set: the weather's cover is laid out for the seven
         samples = _drive_entry(tmp_path / f"b{int(banking)}", out, romset_zip, 3, conv[0], seconds=90)
         results[banking] = lap_progress(samples, lambda x, z: arc_of(conv[0].lap, x, z), conv[0].lap.length)
     print("BANKING A/B", name, results)
@@ -626,10 +626,8 @@ def test_pascals_diablo_drive_stays_on_the_drawn_road(tmp_path, romset_zip, satu
     wd = tmp_path / "replay"
     shutil.copytree(REC / "start" / "nvram", wd / "nvram")
     shutil.copytree(REC / "start" / "cfg", wd / "cfg")
-    cmd = ["mame", "vr", "-rompath", str(build), "-video", "none", "-sound", "none", "-window", "-nothrottle", "-str", "130",
-           "-skip_gameinfo", "-autoboot_script", str(LUA_DIR / "replay.lua"), "-snapshot_directory", str(wd / "snap"),
-           "-nvram_directory", str(wd / "nvram"), "-cfg_directory", str(wd / "cfg"), "-input_directory", str(REC / "inp"),
-           "-playback", "drive.inp"]
+    from vrtools.mame.runner import mame_command
+    cmd = mame_command(build, 130, LUA_DIR / "replay.lua", wd, ["-input_directory", str(REC / "inp"), "-playback", "drive.inp"])
     env = {**os.environ, "VR_LUA_DIR": str(LUA_DIR), "VR_COLLISION_LOG": str(wd / "c.txt"), "VR_ATTITUDE_LOG": str(wd / "a.txt"),
            "VR_ATTITUDE_CARS": "4", "VR_ATTITUDE_EVERY": "1", "VR_ATTITUDE_FROM": "1200", "VR_SNAP_EVERY": "100000"}
     subprocess.run(cmd, cwd=wd, env=env, capture_output=True, text=True, timeout=1800, check=True)

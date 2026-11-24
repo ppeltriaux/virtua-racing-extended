@@ -515,3 +515,188 @@ Status: **open** (still in the build), **fixed** (was a deviation, no longer), *
     the attract's first page is its reverse table (Phase 27b's rule).
   Not verified: any human drive; linked play; real hardware (a real board's battery content is unknown).
   `docs/spike/2026-11-phase35-reverse-times-findings.md`.
+- **The COURSE WEATHER screen** (by design; weather stage 1). Pascal, 17 Nov 2026: "When: an
+  addition weather selection screen like the reverse but for weather"; 18 Nov: "btw i think storm and rain shoudl be together (no
+  separation on the course selection)". After COURSE DIRECTION, on all ten courses, a second screen in its layout chooses DRY or
+  RAIN (the wheel at rest or left DRY, right RAIN; the gas or a 10-s countdown confirms; the countdown locks the choice shown,
+  DRY unless steered). The race loads with the game's lock-to-load timing after the weather lock: answered at once, about 74 video
+  frames (1.3 s) more before a race than on v0.3, 10 s more on a countdown. The arcade has no such screen. With it, COURSE
+  DIRECTION greys the picture not shown while choosing (Pascal: "i just notice a separate bug: selecting reverse or normal doesnt
+  grey out the one not selected (will need a fix)") and holds its lock look 16 logic frames (0.59 s) before the weather screen
+  opens; `weather=False` keeps v0.3's direction screen. A RAIN race shows RAIN in white under the course's name (left of
+  REVERSE in reverse), records no best time and asks for no name (Pascal: "Ok"); in this stage it is otherwise a dry race (the
+  storm comes in the later stages). The attract, linked play and the operator's fixed course are always dry. The word RAIN, the
+  badge, the steering zones and the 10-s countdown are the session lead's calls, not yet Pascal's decisions.
+  `docs/spike/2026-11-phase80-weather-findings.md`.
+- **The rain** (by design; weather stage 2). A RAIN race rains: 300 narrow solid 3D box drops in
+  60 clusters falling with a slight wind slant round the camera and staying with the world when the car turns, a splash where a
+  drop lands within 35 units, an overcast grade over the 3D picture and each course's backdrop greyed, from the countdown through
+  the goal and the results; DRY is v0.3's race. The arcade has no weather. As Pascal approved it in the prototypes ("the rain is
+  good"; "narrower drops"; of drops without splashes "it look like they're floating"). The design says: "An overcast grade over the
+  3D picture and a grey sky per course (each course's own backdrop palette greyed); the HUD, the start lights and the READY board
+  keep their colours." The build does as the prototype Pascal approved: the HUD (tile layers) keeps its colours exactly (palette
+  and tile RAM unchanged); the start gantry, its READY board and its lamps are 3D objects, so the grade greys them slightly while
+  their hue stays (spike 44: "the board's blue and the lamps' red keep their saturation"): measured on Metropolis's countdown, the
+  board's band 60/60/185 in DRY and 66/73/155 in RAIN, a lit lamp 226/0/0 and 183/33/40 (the session lead accepted this reading and
+  corrects the design's sentence). The rain is drawn
+  after the game's scenery and trimmed first when a frame is short of records (Big Forest's busiest frames) or of time.
+  Its time guard is the prototype's: the rain stops for the pass once the game's own vblank count has moved (17.38 ms into the
+  pass), so a RAIN pass stays under 17.9 ms since the join (1.0 ms under the picture deadline: the count's move by 17.486 ms, a
+  unit in flight of at most 0.2 ms, a tail of at most 160 us; 17.8 ms at this stage, with the rain alone; the prototype Pascal drove
+  ran passes of 17.84 to 18.06 ms without a stale picture); the storm never moves the interrupt table or writes the timer, and masks
+  interrupts only across its load's copy lists (the final review's W8: `weather/carrier.py`'s contract). Measured
+  in MAME 0.289 only. In this stage it also rains inside
+  tunnels (stage 3 adds cover). `docs/spike/2026-11-phase80-weather-findings.md` (stage 2).
+- **Cover** (by design; its known limitations below are open, still in the build; weather stage 3). In a RAIN race no drop and no splash under the arcade's
+  flagged tunnels and roofs (Metropolis's long tunnel and the roof by the pits with its pit lane, Alpine's tunnel, Bay Bridge's own
+  tunnel); approaching, the rain stops at the mouth; inside, rain is seen beyond the exit in the opening and the car drives out
+  into it. As Pascal approved it: "the long tunnel in metropolis is perfect", then of the roof by the pits "short tunnel is good".
+  Short unflagged roofs and bridges keep their rain (the session lead's proposal, not objected). The high view (VR4) puts the camera
+  above the pits roof: rain falls on the roof there. The arcade has no weather. Under the pits roof the exit's rain is sparser
+  (about 38 drops in view, the prototype's) and lies on the end opening's plane, as in the prototype Pascal approved (stage 3
+  findings: ROOF_U0). Measured in MAME 0.289 only. `docs/spike/2026-11-phase80-weather-findings.md` (stage 3).
+  - A deviation from the prototype's INTENT, kept on purpose (the session lead's ruling C1: the approved picture is the
+    reference): `cover.ROOF_U0 = 0.0`, the pits roof's curtain ON the end plane. Spike 68's code meant a depth along the sight
+    lines; the generator call before it overwrote that register, so every curtain cluster of the approved set lies on the plane
+    (measured on out/p68tunnels: u from 4e-42 to 6e-39 on every cluster). Pinned by
+    `test_the_pits_roof_curtain_lies_on_the_end_plane`; changing it is a change of look for the owner to see.
+  - Known limitations (the session lead's rulings C2, F5 and the pin ruling of 19 Nov), against the design's anti-goal "Rain that
+    draws over roofs or walls, or falls inside a tunnel (Pascal rejected three versions of the pits roof for it)." and its gate
+    "none over roof or walls". Every row but one is the approved prototype's own behaviour (four exits, spot s3, the approach and
+    the curtain), made visible by fix round 1's stricter measure; the exception is Bay Bridge's exit (normal), seen in this build
+    on one seed of eight and not on the prototype on the same eight seeds (fix round 2, R2-5: not called shared; the same
+    mechanism as the other exits). The tests pin each at 1.5 times this build's own maximum over three generator seeds on a taped
+    game (re-pin only with a named cause and the prototype comparison re-run); whether to improve on the prototype is the owner's
+    call.
+
+    | where | this build, three seeds (px / worst frame px) | the prototype, as nearly the same way | what a player sees |
+    |---|---|---|---|
+    | Alpine's exit | 1 490 / 84, 168 / 14, 139 / 8 | 520 / 64, 0, 1 182 / 50 (seeded the same on the same tape) | for a second or two before the exit, a few drops painted over the left wall at the opening's edge |
+    | Alpine's exit in reverse | 851 / 27, 1 048 / 59, 794 / 45 | 1 365 / 29 (one autopilot run, the old measure) | the same, a few drops at the opening's edge |
+    | Metropolis's long tunnel, reverse exit | 388 / 28, 594 / 61, 902 / 56 | 240 / 24, 596 / 61, 24 / 5 (seeded the same on the same tape) | drops over the roof's edge as the exit nears |
+    | Metropolis's long tunnel, normal exit | on the joined build, one seed of three: 0, 8 / 3 (frames 5240-5247 on 0x9e3779b9), 0; none on the cover alone (the join's round 2, J3: pinned, cause the join) | as before (seeded the same; the join changes neither the prototype nor the taped game) | a drop or two at the exit's edge for a few frames, on some laps only |
+    | Bay Bridge's exit in reverse | 13 / 3, 20 / 4, 40 / 6 | 541 / 74 (one autopilot run, the old measure, another path) | a drop or two over the roof's edge |
+    | Bay Bridge's exit | seen on one seed of eight: 123 / 32 on 0x2468ace1 (4fe3bec's code: the same), 0 on the other seven | not seen on the same eight seeds (0 on each): not shown to be shared (R2-5, wider sample) | a drop or two over the roof's top-left edge, on some laps only |
+    | the pits roof, spot s3 (stopped 4.6 units from its exit) | 0, 1 288, 2 250 px outside the opening, cells 32, 34, 32 of 36 (4fe3bec: 2 910 on the second seed) | 3 308, 4 530, 1 344 px, cells 34, 30, 34 (seeded the same) | a drop or two drawn over the divider beside the opening while stopped there |
+    | approaching the pits roof's exit in reverse | 0, 0, 2 rain objects inside (one splash, two passes; centres judged: the re-review counted 16-314 objects a run centred within 3 units outside a box below its top, whose drops can reach inside) | not measured (its mode-1 margin is the same, MG 1) | rarely, one splash ring on the road just inside the roof, seen from outside |
+    | the pits roof's curtain (`ROOF_U0`, above) | on the end opening's plane | the same (it is what was approved) | the roof's exit rain sits in the opening's plane, sparser than the long tunnel's |
+
+    The high view (VR4), which the prototype never handled (it hid the rain over every tunnel there and counted the camera under
+    cover; fix round 1, F6; fix round 2): the camera is above every flagged roof, so the cover counts it outside; the rain falls on
+    the roofs and is drawn over them; a cluster above a roof within its box has no landing (no splash) and is hidden once it falls
+    below the roof's top; nothing is drawn inside a tunnel below its roof (tested on the display records). In the three low views
+    a marched box hides what the prototype hides (every cluster within MG of it, at any height). The one known difference of the
+    low views: the "no landing" above a roof applies to the pits roof (ROOFED) in every view, so in the default views a cluster
+    above the pits roof inside its footprint no longer splashes; in the prototype its drops landed on the car's ground plane,
+    under the roof. What a player sees: approaching or passing the pits roof from outside, the drops still fall onto the roof
+    and vanish at its top, but no splash rings appear on the road beneath the roof (fewer splashes under the roof, which is what
+    the design wants).
+
+    The earlier statement "3 to 6 times the prototype on every exit, a difference of the port" was wrong: it mixed in second exits
+    where the autopilot's game had diverged; seeded the same, the two leak alike (stage 3 findings, pre-review round and fix round 1).
+
+- **Lightning** (by design; weather stage 4). In a RAIN race a strike comes every 20-40 s of
+  race at random: a 3D bolt of thin rods (a main channel and 2-4 branches, yellowish-white, warm pale yellow and darker gold faces,
+  a soft glow) struck 300-800 units from the car beside the course and fixed in the world, about 1 s long, re-striking: the bolt
+  alone, a sky flash with a one-frame white-out of the picture, the bolt, dark, one or two more strokes with a smaller sky flash, a
+  dim flicker. The arcade has no weather. As Pascal approved it in the prototypes: "could it be a 3d lughtning?", then "B" (beside
+  the course); "maybe it should bling in and out couple of time?"; the white-out on the first stroke only: "A"; of the strokes 45 %
+  thinner, "this is it, 45 is great keep it". Never more than three full-screen flash onsets in any second (a rule in the code,
+  whatever the pattern). Under cover no bolt and no white-out, the sky flash kept (the session lead's proposal, taken as accepted).
+  The interval is the session lead's call ("tunable; Pascal did not answer on the interval"). The strike is drawn before the rain
+  and trimmed by neither guard for the rain's sake; like the rain it works in fixed quotas behind the game's vblank count, so a strike
+  may begin a few logic frames later than the prototype's, and a white-out that would come too late in a pass is not shown (the
+  prototype's rule). Measured in MAME 0.289; Pascal drove the joined build on 20 Nov 2026: "big forest all good"; of Metropolis,
+  the bolt hidden by the buildings (below). `docs/spike/2026-11-phase80-weather-findings.md` (stage 4).
+  - **Metropolis aims down the street** (by design; task 8, 20 Nov). The design's 5.5 says "struck
+    300-800 units from the car beside the course"; on Metropolis (both directions) the strike is still 300-800 units away, off the
+    road and off any refused cell, but its direction is 2-10 degrees off the view (near the street's direction, the gap above the
+    road) instead of 12-40. Pascal, after driving the joined build: "the thinder get hidden by the building"; after driving spike
+    85's play set with this aim: "i think that works better on metropolis". Why: only the bolt's lower part is ever on screen (its
+    top, at 0.85-1.27 x the distance, is above the screen's top edge, about 0.6 x the distance, on every course), and Metropolis's
+    facades stand 80-105 units high right beside the road, so a sight line 12-40 degrees off the view crosses one 50-200 units out
+    and it hides that lower part. Spike 85's measure (the bolt's pixels against a twin build drawing it in front of all scenery,
+    about 34 stress strikes, Metropolis normal): 27 % of strikes clearly visible (half the bolt or more) with the old aim, 43 % with
+    the street aim. Every other course keeps the approved 12-40 (Big Forest and Alpine were good as they were): the session lead
+    proposed that only Metropolis change, the owner agreed ("yes only metropolis change agree"); both directions is the session
+    lead's reading of "only metropolis". Metropolis reverse
+    could not be measured (the autopilot stops against a bank there).
+
+- **The wet handling** (by design; weather stage 5). In a RAIN race the car drives as Pascal
+  approved it after driving the prototype ("hangling is good now!"): the slide starts at a lateral demand of 420 (the arcade's 546)
+  and builds, and can end in the game's flat spin-out, only above half throttle (Pascal: "The lost of control in turns i think this
+  shouldnt apply when we lift the foot of the gas pedal"); a slide held about 1.5 s at full lock on full gas above 100 km/h spins
+  the car (cool-down 77 logic frames); the wheels spin at full gas in gears 1-3 (the traction x0.6 at a standstill rising to x1 at
+  60 km/h; 0-100 km/h about 1.98 s against 1.70), with the game's smoke and squeal and a rising engine note; a brake held at 80 %
+  for 8 logic frames above 100 km/h locks the front wheels (steering does nothing, the car slows as on a lift) until the brake is
+  eased below 40 % or the car is under 20 km/h (Pascal: "A"); the braking clamp -1583 (the arcade's -1820), the grip base 376
+  (392), the squeal from 280 (364); the opponents' working performance x0.97 (their laps 3.1 % longer). None of it under cover
+  (the player's tunnel flag; Pascal: "A", dry inside), in the countdown, a put-back glide, a pit stop or after the goal; the
+  opponents' factor under cover too. DRY is v0.3's handling. The arcade has no wet handling. Differences from the prototype Pascal
+  drove: the squeal and the engine note follow the same gate as the other rules (in a glide or a pit stop they are the game's own:
+  the prototype could keep a slip's squeal there); the clamp is the design's -1583.0 (the prototype's -1582.61). Measured in MAME
+  0.289; Pascal drove the joined build on 20 Nov 2026 ("i think all the tests are good"; he named no handling point; before that
+  the prototype's sets). `docs/spike/2026-11-phase80-weather-findings.md` (stage 5).
+- **The wet handling's DRY cost, in DRY races and the attract** (by design, accepted and bounded; weather stage 5;
+  the session lead's ruling of 19 Nov 2026). The track's rule: "the attract's busiest pass is 17.98 ms: add nothing to them; show
+  their figures did not move". The wet handling breaks it by a few tens of microseconds. Each of its eight hook sites in the game's
+  physics and sound code jumps to a boot-ROM stub that tests the weather byte and, in DRY, runs the site's own instructions and jumps
+  back. That changes no state and no picture: DRY is identical pass for pass. But it costs time: 41.5 us on the mean DRY race pass,
+  about 22 calls a pass, 15 of them at the opponents' site, once per opponent. The attract's demo races run those sites too: its
+  busiest pass outside the scene loads is 17.734 ms against 17.708 ms on the same set without the handling (+26 us), about 1.2 ms
+  from the deadline. No other construction does the approved behaviour: the game computes the opponents' speed per car and per pass
+  from ROM constants, so the x0.97 can only be applied by a hook run per car whose dry path is already minimal (a test and the site's
+  own instructions); moving it to a once-a-pass site would change the bend-limited sections' speed, which the prototype Pascal drove
+  slowed too. RULING (the session lead, 19 Nov 2026): accepted. For this stage the rule reads: the attract and a DRY race may cost at
+  most the handling's dry path, bounded by a test (`tests/test_weather_handling.py::test_the_hooks_cost`, `DRY_COST_MAX_US` 50 us on
+  the mean DRY race pass and on the attract's busiest pass against the set without the handling). Stage 2's own switch test keeps its
+  10 us bound, measured on the set without the game-changing modules (`tests/test_weather_carrier.py::test_dry_runs_no_storm_code`).
+  The owner is told. Measured in MAME 0.289 only. `docs/spike/2026-11-phase80-weather-findings.md` (stage 5, fix round 1).
+
+- **The storm's sound** (by design; weather stage 6). A RAIN race has a rain bed from the countdown to
+  the finish (a generated 2 s loop of hiss at 2-7.5 kHz, a faint wash and droplet ticks, 7.1 dB under its voice's full level: Pascal,
+  "now the rain is a bit too loud, id say in between before and now"), faded out under the game's own tunnel words and back, and
+  after each lightning strike a thunder (a crack and a boom with a long rumble: "the thunder sound is good as A (one crack)",
+  "actually i like 13!") close, medium or distant by the strike's distance (0.3 / 0.6 / 0.9 s after it, the farther lower and
+  quieter), with the engine, music, effects and rain pulled down under it. The arcade has none of it. Every sample is made by the
+  project's code at build time (no recording, no third-party audio); the build now reads and writes the sound program and the two
+  sample ROMs (three more changed members). The thunder's level and the ducking are out/p75storm's (Pascal on the louder joined set:
+  "everything is good but level of the thunder is too high"), settled on the joined build: "thunder level is good" (20 Nov 2026). A thunder that started before the
+  finish rings out its sample (up to 7 s) into the goal, as in the prototype; no thunder after the finish.
+  DRY plays v0.3's sounds, write for write, except that a word arriving within 3.8 us of a tick boundary may be read one tick (17.96 ms) apart; none in the three test races (fix round 2, measured): from the boot to the run's end every write to both MultiPCM
+  chips is v0.3's in voice, register, value and order (Big Forest's DRY race 66 765 writes, Metropolis's 74 255), the only extra
+  writes the storm's three spare voices' key-offs at a reset. The ticks coincide within 4 us; within a tick each write lands up to
+  0.78 ms later than v0.3's, the level hook's few cycles on every write before it in that tick, so a note may start that much later
+  in its tick (no write crosses a tick, no order changes). One residual race remains: the main loop polls the timer in a
+  38-cycle loop (3.8 us), so a word reaching the board within that of a tick boundary can still be read a tick apart when anything has
+  moved the loop by a few cycles: none in the three DRY races compared; once between the RAIN chain with and without thunder (C055 at
+  194.631 s: engine writes a tick early). Before fix round 2 the hook's cost on the 168 register writes of the
+  power-on initialisation, before the YM3438's timer A starts, put every tick 828.8 us behind v0.3's: commands near a tick boundary
+  were read a tick apart and the five dynamic effect voices were allocated differently, so effects were cut short or ran longer by
+  up to about 1.9 s (Big Forest's test race: five effects; a note held 20.4 ms longer at the word C041). The board now gives those 8
+  288 cycles back before the timer starts (patch 4: the boot's RAM clear made faster and padded) and the reset 8100's timer reload
+  stays in place. The price: the sound program differs from the approved prototype set's (out/p75storm) in four listed ranges
+  (tests/test_weather_sound.py P75_PROGRAM_DIFF); its two sample ROMs are equal. The storm's own sounds are as before (the sound
+  tests, the listening files' levels); two storm events start a tick later than on the board before (C201's fade at 233.76 s in
+  the chain, the injected attract thunder at 21.19 s; up to 19.2 ms): inherent in the realignment. The owner can compare out/p80s/listen/11 and 12 (this board), 11b and 12b (the board before).
+  The design says: "no output sample at full scale beyond the game's own start horn" (the session lead's gate). The build: where the
+  game itself comes within a fraction of a dB of full scale without any rain (Big Forest's race on the autopilot: the start horn at
+  -0.0 dBFS, a collision's effects at 111.0 s at -0.13 dBFS), the rain bed at Pascal's level lifts the mix over it: on that race 11
+  samples at full scale (2 at the horn, 9 at 111.04-111.12 s), the same race without the storm none; while a thunder sounds or its
+  duck holds the thunder adds none (outside that window, on fix round 2's board, the runs with and without thunder clip at different
+  near-full-scale moments of the game's own, the looped samples' phase after a duck: 9 samples with the thunders, 226.162 s where the
+  control peaks at -0.26 dBFS, against 8 without). Every full-scale sample lies within one tick (0.1 s before fix round 3) of where the switch-off set is within 2.17 dB of full scale (where the rain's own -13.1 dBFS peak could take it over; fix round 1, M1); the rain alone
+  peaks at -13 dBFS. A later run also clipped one sample at Metropolis's start horn (158.76 s, the switch-off set -1.28 dBFS). Kept: the rain's level is Pascal's (the session lead's ruling). `docs/spike/2026-11-phase80-weather-findings.md` (stage 6).
+
+### Weather, the join (20 Nov)
+
+- **The storm's cap is 17.9 ms of V60 time a RAIN pass** (by design; the session lead's ruling at the join; the design amended on main): the
+  game's vblank handler moves the count up to 17.486 ms into a pass, a unit of storm work in flight is at most 0.2 ms and the tail
+  from the guard's trip to the pass's end at most 160 us since round 2 (149 measured: forced in the first module, every module's
+  late path, the sound's trigger sending two words; round 1 had 190 for the rain's old late splash loop); 17.846 ms, the cap kept
+  at 17.9 by the session lead's ruling (round 1: 17.876; stage 2 had 17.8 with one module's 31 us tail).
+  The worst pass measured on all twenty races: 17.70 ms (Bay Bridge, both directions); MAME shows a stale picture past 18.9 ms.
+- **The sound's trigger is exempt from the guard** (by design; round 2, J1, the session lead's ruling): it runs on every pass of a
+  rain mode whatever the guard says, an
+  allowed unguarded unit of 7 us idle and 25-32 us when it sends a thunder and a rain word on one pass, so every word reaches the
+  board on the pass it is due (round 1 reported them up to about 1 s late on Metropolis and Bay Bridge).

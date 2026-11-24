@@ -42,13 +42,14 @@ _SETS: dict = {}
 def _sets(romset_zip, saturn_cue):
     """(the session's set, the same set without the far copies, the conversions)."""
     from tests.test_tgp_build import _built, _seven
-    key = str(romset_zip)
-    if key not in _SETS:
+    from tests.session_cache import cached                     # a failed build cached, not rebuilt (weather Task 7)
+
+    def make():
         new, conv = _seven(romset_zip, saturn_cue)
         built, _ = _built(romset_zip, saturn_cue)
         plain = ten_course_set(built, [replace(c, far_cells=None, report=dict(c.report)) for c in conv])
-        _SETS[key] = (new, plain, conv)
-    return _SETS[key]
+        return new, plain, conv
+    return cached(_SETS, str(romset_zip), make)
 
 
 _PAIRS: dict = {}
@@ -60,14 +61,15 @@ def _pair(romset_zip, saturn_cue):
     `install_checkpoint_lists`) is installed after the copies, first fit on what they leave, so in a set built without the
     copies it lands on their bytes; with `originals_reverse` False neither set has it."""
     from tests.test_tgp_build import _built
-    key = str(romset_zip)
-    if key not in _PAIRS:
+    from tests.session_cache import cached
+
+    def make():
         built, conv = _built(romset_zip, saturn_cue)
         mine = [replace(c, report=dict(c.report)) for c in conv]
         new = ten_course_set(built, mine, originals_reverse=False)
         plain = ten_course_set(built, [replace(c, far_cells=None, report=dict(c.report)) for c in conv], originals_reverse=False)
-        _PAIRS[key] = (new, plain, mine[K].report["far_installed"])
-    return _PAIRS[key]
+        return new, plain, mine[K].report["far_installed"]
+    return cached(_PAIRS, str(romset_zip), make)
 
 
 def _faces(rs, table, cell):

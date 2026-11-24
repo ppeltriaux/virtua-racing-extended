@@ -10,13 +10,36 @@ import threading
 from contextlib import nullcontext
 from dataclasses import dataclass
 from pathlib import Path
-from typing import NamedTuple
+from types import MappingProxyType
+from typing import Mapping, NamedTuple
 
 LUA_DIR = Path(__file__).resolve().parent / "lua"
 
 
 class MameError(Exception):
     pass
+
+
+class MameKilledWarning(UserWarning):
+    """A MAME run ended by SIGKILL from outside the runner (not its own timeout), run once more (`run_mame`)."""
+
+
+# Weather stage 1, round 2: no real input device reaches a run. With the providers left at their defaults MAME reads the host's
+# keyboard, mouse (buttons mapped to keys), light guns and joysticks even with no window, and a key mapped to the gas pedal put a
+# gas edge into a test run. The scripts set the ports themselves (Lua `set_value`) and `-playback` feeds a recorded file; neither
+# goes through a provider.
+INPUT_PROVIDERS_OFF = ("-keyboardprovider", "none", "-mouseprovider", "none", "-lightgunprovider", "none", "-joystickprovider", "none")
+
+
+def mame_command(rom_dir: Path, seconds: int, script: Path, workdir: Path, extra_args: list[str] | None = None,
+                 mame: str = "mame") -> list[str]:
+    """The headless command of a test run: no video, no sound, no real input device (INPUT_PROVIDERS_OFF), unthrottled for
+    `seconds` emulated seconds with the Lua `script`, snapshots, battery RAM and settings in `workdir`; `extra_args` at the end."""
+    workdir = Path(workdir)
+    return ([mame, "vr", "-rompath", str(rom_dir), "-video", "none", "-sound", "none", "-window", *INPUT_PROVIDERS_OFF,
+             "-nothrottle", "-str", str(seconds), "-skip_gameinfo", "-autoboot_script", str(script),
+             "-snapshot_directory", str(workdir / "snap"), "-nvram_directory", str(workdir / "nvram"),
+             "-cfg_directory", str(workdir / "cfg")] + list(extra_args or []))
 
 
 _SLOTS: dict[int, threading.BoundedSemaphore] = {}
@@ -39,29 +62,110 @@ def _slot():
         return _SLOTS.setdefault(k, threading.BoundedSemaphore(k))
 
 
+_SNAP_SEQ = __import__("itertools").count()      # the safety copies' numbers in this process (thread-safe enough: next() under the GIL)
+_SWEPT: set = set()                              # the directories this process has swept (`_sweep_once`)
+_SWEPT_LOCK = threading.Lock()
+_WINDOWS = os.name == "nt"                       # the system the sweep runs on (a module flag a test can patch, not os.name)
+
+
+def _alive(pid: int) -> bool:
+    """Whether process `pid` lives (the safety copies' sweep). On Windows there is no existence probe in the standard library
+    (`os.kill(pid, 0)` sends CTRL_C_EVENT there) and no dependency is added for one: every process counts as alive, so the sweep
+    removes nothing there (a dead session's copy stays until a sweep on another system or by hand)."""
+    if _WINDOWS:
+        return True
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:                     # another user's live process
+        return True
+    except OSError:
+        return False
+    return True
+
+
+def sweep_snapshots(root: Path) -> int:
+    """Remove the safety copies run_mame's dead processes left under `root` (`.<name>.snap-<pid>-<n>` directories whose process no
+    longer lives; a live process's copies are kept); returns how many went."""
+    import re
+    import shutil
+    n = 0
+    for p in Path(root).rglob(".*.snap-*"):
+        m = re.fullmatch(r"\..+\.snap-(\d+)-\d+", p.name)
+        if m and p.is_dir() and not p.is_symlink() and not _alive(int(m.group(1))):
+            shutil.rmtree(p, ignore_errors=True)
+            n += 1
+    return n
+
+
+def _sweep_once(d: Path) -> None:
+    """At the first run beside `d` in this process: the dead processes' copies directly in `d` swept."""
+    import re
+    import shutil
+    d = Path(d).resolve()
+    with _SWEPT_LOCK:
+        if d in _SWEPT:
+            return
+        _SWEPT.add(d)
+    for p in d.iterdir():
+        m = re.fullmatch(r"\..+\.snap-(\d+)-\d+", p.name)
+        if m and p.is_dir() and not p.is_symlink() and not _alive(int(m.group(1))):
+            shutil.rmtree(p, ignore_errors=True)
+
+
 def run_mame(script: Path, seconds: int, workdir: Path, rom_dir: Path, env: dict[str, str] | None = None,
              mame: str = "mame", timeout: float | None = None, extra_args: list[str] | None = None) -> subprocess.CompletedProcess:
     """Run MAME headless for `seconds` emulated seconds with the Lua `script`; MameError when it fails or, with
     `timeout` (wall-clock seconds), when it does not end in time (it is killed). `extra_args` go at the end of the
     command (e.g. `["-aviwrite", "run.avi"]`: MAME writes the AVI under its snapshot directory, with sound). The scripts get
-    VR_LUA_DIR and (Phase 26 stage 3) VR_REVERSE_TABLE, the reverse table's address in this tree's directory layout (hex), with
-    which autoplay.lua knows the courses whose lock opens the COURSE DIRECTION screen; `env` overrides either. With VR_MAME_JOBS
-    set in the environment, at most that many of these calls run MAME at once (`_slot`)."""
+    VR_LUA_DIR, (Phase 26 stage 3) VR_REVERSE_TABLE, the reverse table's address in this tree's directory layout (hex), with
+    which autoplay.lua knows the courses whose lock opens the COURSE DIRECTION screen, and (weather stage 1) VR_WEATHER_SELECT
+    and VR_WEATHER_WORD, where the COURSE WEATHER screen's first routine lies and its first word (hex), with which it knows a
+    set that has that screen; `env` overrides any of them. With VR_MAME_JOBS
+    set in the environment, at most that many of these calls run MAME at once (`_slot`). Round 2 of weather stage 1: the command
+    is `mame_command`'s (no real input device); a run that MAME ends with SIGKILL (exit status -9; POSIX only: where the signal
+    module has no SIGKILL, as on Windows, no status is told apart and every failing one raises) sent from outside the runner
+    (its own timeout raises before any status is read) is run once more from the work directory as it was before the first
+    attempt, with a MameKilledWarning naming it; a second -9, any other failing status and the timeout raise MameError at once.
+    That copy (weather Task 6J) lies beside the work directory, on its volume (`.<name>.snap-<pid>-<n>`), never in the system temp
+    folder, and is removed in a `finally`; the first run beside a directory in a process sweeps the copies that dead processes left
+    there (`sweep_snapshots`)."""
+    import shutil
+    import signal
+    import warnings
     from vrtools.arcade.directory import directory_layout
+    killed = getattr(signal, "SIGKILL", None)           # absent on Windows: no status there counts as "killed from outside"
     workdir = Path(workdir)
     workdir.mkdir(parents=True, exist_ok=True)
-    cmd = [mame, "vr", "-rompath", str(rom_dir), "-video", "none", "-sound", "none", "-window",
-           "-nothrottle", "-str", str(seconds), "-skip_gameinfo", "-autoboot_script", str(script),
-           "-snapshot_directory", str(workdir / "snap"), "-nvram_directory", str(workdir / "nvram"),
-           "-cfg_directory", str(workdir / "cfg")] + list(extra_args or [])
-    full_env = {**os.environ, "VR_LUA_DIR": str(LUA_DIR), "VR_REVERSE_TABLE": f"{directory_layout()['reverse']:x}", **(env or {})}
+    _sweep_once(workdir.parent)
+    cmd = mame_command(rom_dir, seconds, script, workdir, extra_args, mame)
+    from vrtools.arcade.weather import screen as weather_screen
+    from vrtools.arcade.weather.layout import block as weather_block
+    full_env = {**os.environ, "VR_LUA_DIR": str(LUA_DIR), "VR_REVERSE_TABLE": f"{directory_layout()['reverse']:x}",
+                "VR_WEATHER_SELECT": f"{weather_block('screen code').start:x}",
+                "VR_WEATHER_WORD": f"{int.from_bytes(weather_screen.SIGNATURE, 'little'):x}", **(env or {})}
+    before = workdir.parent / f".{workdir.name}.snap-{os.getpid()}-{next(_SNAP_SEQ)}"
     try:
-        with _slot():
-            proc = subprocess.run(cmd, cwd=workdir, env=full_env, capture_output=True, text=True, timeout=timeout)
-    except subprocess.TimeoutExpired as e:
-        raise MameError(f"mame did not end within {timeout} s and was killed") from e
-    except FileNotFoundError as e:                       # no such program: say so instead of the system's own error
-        raise MameError(f"{mame!r} was not found: MAME 0.289 must be on the PATH (mame.exe on Windows)") from e
+        shutil.copytree(workdir, before, symlinks=True)          # the work directory as the caller left it (a retry starts from it)
+        for attempt in (1, 2):
+            try:
+                with _slot():
+                    proc = subprocess.run(cmd, cwd=workdir, env=full_env, capture_output=True, text=True, timeout=timeout)
+            except subprocess.TimeoutExpired as e:
+                raise MameError(f"mame did not end within {timeout} s and was killed") from e
+            except FileNotFoundError as e:                       # no such program: say so instead of the system's own error
+                raise MameError(f"{mame!r} was not found: MAME 0.289 must be on the PATH (mame.exe on Windows)") from e
+            if killed is not None and proc.returncode == -killed and attempt == 1:
+                warnings.warn(f"mame was killed (SIGKILL) from outside the runner in {workdir}; run once more from the work directory "
+                              f"as it was", MameKilledWarning, stacklevel=2)
+                for p in workdir.iterdir():
+                    shutil.rmtree(p) if p.is_dir() and not p.is_symlink() else p.unlink()
+                shutil.copytree(before, workdir, symlinks=True, dirs_exist_ok=True)
+                continue
+            break
+    finally:
+        shutil.rmtree(before, ignore_errors=True)
     if proc.returncode != 0 or "Average speed" not in proc.stdout:
         raise MameError(f"mame exited {proc.returncode}: {proc.stdout[-500:]}\n{proc.stderr[-1500:]}")
     return proc
@@ -75,6 +179,214 @@ def parse_rate(path: Path) -> list[tuple[int, int]]:
         if parts and parts[0] == "R":
             out.append((int(parts[1]), int(parts[2])))
     return out
+
+
+DISPLAY_LISTS = (0x60, 0x61)        # the two display lists, 0x600000 and 0x610000, by the address's top byte
+
+
+def parse_stale_log(path: Path) -> list[int]:
+    """The frames of the passes that wrote the same display list as the pass before them (a stale picture: MAME shows the other
+    list, frozen, on every second render), from stale_list.lua's L lines (the frame, the list pointer 0x5017f4 at the pass's end).
+    A pointer outside both lists (the boot's 0) is no list and breaks the sequence. ValueError when the log holds no list at all:
+    a run that measured nothing passes nothing."""
+    stale, prev, seen = [], None, 0
+    for line in open(path):
+        parts = line.split()
+        if len(parts) != 3 or parts[0] != "L":
+            continue
+        lst = int(parts[2], 16) >> 16
+        if lst not in DISPLAY_LISTS:
+            prev = None
+            continue
+        seen += 1
+        if lst == prev:
+            stale.append(int(parts[1]))
+        prev = lst
+    if not seen:
+        raise ValueError(f"{path}: no pass wrote a display list")
+    return stale
+
+
+class StormPass(NamedTuple):
+    """storm_log.lua's S line: the storm's carrier and rain at a pass's end (weather/carrier.py, weather/rain.py)."""
+    frame: int
+    state: int          # carrier.STATE: 0 idle, 1 starting, 2 show
+    switch: int         # carrier.SWITCH
+    loads: int          # the carrier's counters (cumulative)
+    starts: int
+    shows: int
+    sbr: int            # the V60's vector table base
+    drawn: int          # clusters drawn this pass
+    splashes: int       # splashes drawn this pass
+    late: int           # the rain's late passes (cumulative), then its trims (cumulative): budget clusters, splashes; late
+                        # (the vblank-count guard) clusters, splashes
+    trim_cl: int
+    trim_sp: int
+    trim_lcl: int
+    trim_lsp: int
+    primed: int         # clusters placed by the start passes
+    active: int         # 1 from the rain's first visible pass
+    xleft: int          # the grade's rows still to make
+    rec_in: int         # the frame's record count before the rain, after it
+    rec_out: int
+
+
+class StormLog(NamedTuple):
+    passes: list
+    traces: list        # (frame, writes into the storm RAM, first pc, its address, timer writes)
+    frames: list        # VR_STORM_FRAMES: (frame, mode, state, switch, SBR) at each frame end where one changed
+    after: dict         # frame -> microseconds from the vblank count's move to the pass's end (the passes it moved in)
+    dumps: dict         # frame -> {"X": 96 x 64 colour-RAM halfwords, "P": 512 backdrop colours; VR_STORM_FULL: "Q" the palette RAM,
+                        # "M" the tile maps 0x700000..0x707fff (halfwords)}
+    watch: dict         # VR_STORM_WATCH: frame -> the word there at the pass's end
+    # (a NamedTuple cannot take dataclasses' default_factory: the defaults below are immutable empties, never a shared list / dict;
+    # parse_storm_log always passes its own)
+    cover: tuple = ()   # VR_STORM_COVER / VR_STORM_UC (weather stage 3): a CoverPass per pass
+    trip: Mapping = MappingProxyType({})     # B lines (the join): frame -> (us from the count's move to the guard's trip, us from the
+                                             # trip to the pass's end)
+    watches: Mapping = MappingProxyType({})  # VR_STORM_WATCH with several addresses (the join): frame -> every word, in order
+                                             # (`watch` the first)
+    list_hw: Mapping = MappingProxyType({})  # L lines (the final review's W9): frame -> the display list's high-water mark in the
+                                             # pass, bytes from its buffer's start
+    load_psw: tuple = ()                     # I lines (Task 7): (frame, the PSW at a load's entry), one per load
+
+
+class CoverPass(NamedTuple):
+    """storm_log.lua's C line: the cover's state at a pass's end (weather/cover.py)."""
+    frame: int
+    mode: int           # 0 no cover near, 1 near (camera outside), 2 inside (no exit in view), 3 inside, the curtain at a mouth
+    under_cover: int
+    hidden: int         # clusters the cover hid this pass
+    curtain: int        # curtain clusters left to the rain to draw this pass
+    drops: int          # single drops the cover drew this pass (the pits roof's edges)
+    placed: int         # curtain placements this pass
+    roof: int           # nonzero under the pits roof's curtain
+    walk: int           # clusters the rain walked
+    nosplash: int
+    late: int           # the cover's late passes (cumulative)
+    spawns: int         # the rain's splashes spawned (cumulative)
+    cx: float           # the camera's world position
+    cy: float
+    cz: float
+    box: int            # the box holding the camera (RAM), 0 none
+    drawn: int          # the rain's clusters drawn this pass
+    py: float = float("nan")    # the player's car's y (fix round 1; nan in older logs)
+
+
+def parse_storm_log(path: Path) -> StormLog:
+    """storm_log.lua's S, T, A, B, F, W, C, L, I, X, P, Q and M lines; other and incomplete lines are skipped."""
+    passes, traces, dumps, frames, after, watch, cover, trip, watches, list_hw, load_psw = [], [], {}, [], {}, {}, [], {}, {}, {}, []
+    for line in open(path):
+        p = line.split()
+        if not p:
+            continue
+        if p[0] == "S" and len(p) == 20:
+            v = [int(x, 16) if k == 7 else int(x) for k, x in enumerate(p)  if k > 0]
+            passes.append(StormPass(*v))
+        elif p[0] == "T" and len(p) == 6:
+            traces.append((int(p[1]), int(p[2]), int(p[3], 16), int(p[4], 16), int(p[5])))
+        elif p[0] == "A" and len(p) == 3:
+            after[int(p[1])] = float(p[2])
+        elif p[0] == "B" and len(p) == 4:
+            trip[int(p[1])] = (float(p[2]), float(p[3]))
+        elif p[0] == "L" and len(p) == 3:
+            list_hw[int(p[1])] = int(p[2])
+        elif p[0] == "I" and len(p) == 3:
+            load_psw.append((int(p[1]), int(p[2], 16)))
+        elif p[0] == "W" and len(p) >= 3:
+            watch[int(p[1])] = int(p[2], 16)
+            watches[int(p[1])] = tuple(int(x, 16) for x in p[2:])
+        elif p[0] == "C" and len(p) in (18, 19):
+            cover.append(CoverPass(*(int(x, 16) if k == 15 else float(x) if k in (12, 13, 14, 17) else int(x) for k, x in enumerate(p[1:]))))
+        elif p[0] == "F" and len(p) == 6:
+            frames.append((int(p[1]), int(p[2], 16), int(p[3]), int(p[4]), int(p[5], 16)))
+        elif p[0] in ("X", "P", "Q", "M") and len(p) == 3:
+            h = p[2]
+            dumps.setdefault(int(p[1]), {})[p[0]] = [int(h[i:i + 4], 16) for i in range(0, len(h), 4)]
+    return StormLog(passes=passes, traces=traces, frames=frames, dumps=dumps, after=after, watch=watch, cover=cover, trip=trip,
+                    watches=watches, list_hw=list_hw, load_psw=tuple(load_psw))
+
+
+class HandlingFrame(NamedTuple):
+    """handling_log.lua's F line (weather stage 5): the player's handling at a frame end, the handling module's cells, the opponents'
+    working performance."""
+    frame: int
+    rel: int            # frames from the race start (autoplay.lua's: the first race's load)
+    race: int           # the run's race (1, 2, ...: counted at each countdown's start)
+    mode: int
+    handler: int
+    flags: int
+    gas: int
+    brake: int
+    gear: int           # +0x156: 0 = first gear
+    kmh: int
+    traction: float     # +0x5c
+    lock_timer: int     # +0x64 (the game's lock sound and smoke)
+    smoke: int          # +0x65 (the game's wheelspin smoke)
+    yaw: int
+    path: int           # +0x36, the heading the car travels along
+    lat: int            # L, +0x154
+    slide: int          # S, +0x14e
+    grip: int           # +0x164
+    spinout: int        # +0x6c
+    crash: int          # +0x56
+    x: float
+    z: float
+    covered: int        # bit 7 of +0x152 (the tunnel flag)
+    pit: int            # +0x191
+    glide: int          # 0x501160
+    road_point: int     # +0xa6
+    lap: int
+    engine: int         # 0x503004, the engine sound's command
+    squeal: int         # 0x503008, the squeal's command
+    switch: int         # carrier.SWITCH
+    lock: int           # the handling's cells (0 when not logged): the lock, the spin cool-down, the slip mark, the lock count,
+    cool: int           # the engine note, then its counters
+    slip: int
+    lock_count: int
+    note: int
+    spins: int
+    locks: int
+    locked_frames: int
+    slip_frames: int
+    steer_skips: int
+    opponents: tuple    # the fifteen opponents' +0x48 (the float's bits)
+    rpm: int = 0        # +0x15a
+    opp_base: tuple = ()    # the fifteen opponents' +0x3c (their base performance, the float's bits)
+    player_perf: int = 0    # the player's own +0x48 (the float's bits: the opponents' site stores it for the player too)
+
+
+class HandlingLog(NamedTuple):
+    frames: list
+    laps: list          # (frame, rel, car, lap) at each change of a car's lap counter
+    triggers: list      # (frame, rel, trigger, port)
+    calls: list         # VR_HANDLING_STUBS: (frame, (calls of each stub in that frame))
+    trace: Mapping = MappingProxyType({})    # VR_HANDLING_TRACE: (site index, exit) -> (calls, median us, mean us, min us, max us)
+                                             # (an immutable empty default: never a shared dict)
+
+
+def parse_handling_log(path: Path) -> HandlingLog:
+    """handling_log.lua's F, L, T and C lines; other and incomplete lines are skipped."""
+    frames, laps, triggers, calls, trace = [], [], [], [], {}
+    hexes = {3, 4, 5, 27, 28}
+    floats = {10, 20, 21}
+    for line in open(path):
+        p = line.split()
+        if not p:
+            continue
+        if p[0] == "F" and len(p) == 45:
+            v = [int(x, 16) if k in hexes else float(x) if k in floats else int(x) for k, x in enumerate(p[1:41])]
+            frames.append(HandlingFrame(*v, tuple(int(h, 16) for h in p[41].split(",")), int(p[42]),
+                                        tuple(int(h, 16) for h in p[43].split(",")), int(p[44], 16)))
+        elif p[0] == "L" and len(p) == 5:
+            laps.append(tuple(int(x) for x in p[1:]))
+        elif p[0] == "T" and len(p) == 5:
+            triggers.append((int(p[1]), int(p[2]), p[3], p[4]))
+        elif p[0] == "C" and len(p) > 2:
+            calls.append((int(p[1]), tuple(int(x) for x in p[2:])))
+        elif p[0] == "P" and len(p) == 8:
+            trace[(int(p[1]), int(p[2]))] = (int(p[3]), float(p[4]), float(p[5]), float(p[6]), float(p[7]))
+    return HandlingLog(frames=frames, laps=laps, triggers=triggers, calls=calls, trace=trace)
 
 
 class CollisionSample(NamedTuple):
@@ -241,6 +553,22 @@ def parse_dir_log(path: Path) -> list[DirFrame]:
             out.append(DirFrame(int(p[1]), int(p[2], 16), int(p[3]), int(p[4]), int(p[5], 16), *(int(v) for v in p[6:11]),
                                 int(p[11], 16), int(p[12]), int(p[13]), int(p[14])))
     return out
+
+
+def parse_weather_log(path: Path) -> dict[int, list[tuple[int, tuple[int, ...]]]]:
+    """P lines from weather_log.lua (weather stage 1): per palette number, its (frame, 16 words) at every frame end it changed."""
+    out: dict[int, list[tuple[int, tuple[int, ...]]]] = {}
+    for line in open(path):
+        p = line.split()
+        if p and p[0] == "P" and len(p) == 19:
+            out.setdefault(int(p[2], 16), []).append((int(p[1]), tuple(int(v, 16) for v in p[3:])))
+    return out
+
+
+def palette_at(log: dict[int, list[tuple[int, tuple[int, ...]]]], palette: int, frame: int) -> tuple[int, ...] | None:
+    """Palette `palette`'s words at the end of `frame` by a parse_weather_log result (None before its first line)."""
+    seen = [w for f, w in log.get(palette, []) if f <= frame]
+    return seen[-1] if seen else None
 
 
 HUD_COLUMNS = range(40, 62)            # the columns hud_log.lua logs of layer 0's rows 44 and 45 (the level word: 51-58)
@@ -575,6 +903,93 @@ def parse_sound_log(path: Path) -> SoundLog:
     return SoundLog(commands, flags, complete)
 
 
+class PcmWrite(NamedTuple):
+    """One P line of pcm_log.lua: a data write to a MultiPCM voice's register."""
+    frame: int
+    time: float
+    chip: int           # 1 or 2
+    voice: int          # the voice selector (0..0x1f; 7, 15, 23, 31 select nothing)
+    reg: int            # 0 pan, 1 sample, 2/3 pitch, 4 key (bit 7 on), 5 level (total level = value >> 1), 6/7 LFO
+    value: int
+
+
+class PcmLog(NamedTuple):
+    """pcm_log.lua's log (weather stage 6): the sound board's MultiPCM writes and the V60's sound words, with emulated times."""
+    writes: list[PcmWrite]
+    words: list[tuple[int, float, int]]          # (frame of the low byte, its time, the 16-bit word), in the order sent
+    modes: list[tuple[int, float, int]]          # (frame, time, mode 0x501138) where it changed
+    frames: list[tuple[int, float]]              # (frame, time) of every frame end (frames count from 1 again after a reset)
+    boots: list[float]                           # the times the script (re)started: a soft reset adds one
+    complete: bool
+
+    def voice(self, chip: int, voice: int) -> list[PcmWrite]:
+        return [w for w in self.writes if w.chip == chip and w.voice == voice]
+
+    def keyed(self, chip: int, voice: int, end: float | None = None) -> list[tuple[float, float]]:
+        """[on, off) times of a voice's key (register 4 bit 7); a key still on at the log's end closes at `end` (default: the last
+        frame's time)."""
+        out, on = [], None
+        for w in self.voice(chip, voice):
+            if w.reg != 4:
+                continue
+            if w.value & 0x80 and on is None:
+                on = w.time
+            elif not w.value & 0x80 and on is not None:
+                out.append((on, w.time))
+                on = None
+        if on is not None:
+            out.append((on, end if end is not None else (self.frames[-1][1] if self.frames else on)))
+        return out
+
+    def level_at(self, chip: int, voice: int, t: float) -> int | None:
+        """The voice's last level byte written before time `t` (None before any)."""
+        lv = None
+        for w in self.voice(chip, voice):
+            if w.time >= t:
+                break
+            if w.reg == 5:
+                lv = w.value
+        return lv
+
+    def mode_at(self, t: float) -> int | None:
+        m = None
+        for _, mt, mode in self.modes:
+            if mt > t:
+                break
+            m = mode
+        return m
+
+
+def parse_pcm_log(path: Path) -> PcmLog:
+    """pcm_log.lua's log (VR_PCM_LOG). A word is a high byte from SOUND_HIGH_PC followed by the next byte from SOUND_LOW_PC (bytes
+    from other PCs, the boot's, are skipped; a high byte left without its low one by a reset is dropped)."""
+    writes, words, modes, frames, boots, high, complete = [], [], [], [], [], None, False
+    for line in open(path):
+        p = line.split()
+        if not p:
+            continue
+        k = p[0]
+        if k == "P" and len(p) == 7:
+            writes.append(PcmWrite(int(p[1]), float(p[2]), int(p[3]), int(p[4], 16), int(p[5], 16), int(p[6], 16)))
+        elif k == "S" and len(p) == 5:
+            byte, pc = int(p[3], 16), int(p[4], 16)
+            if pc == SOUND_HIGH_PC:
+                high = byte
+            elif pc == SOUND_LOW_PC and high is not None:
+                words.append((int(p[1]), float(p[2]), high << 8 | byte))
+                high = None
+        elif k == "M" and len(p) == 4:
+            modes.append((int(p[1]), float(p[2]), int(p[3], 16)))
+        elif k == "F" and len(p) == 3:
+            frames.append((int(p[1]), float(p[2])))
+        elif k == "B" and len(p) == 2:
+            boots.append(float(p[1]))
+            high = None
+        elif k == "END":
+            complete = True
+    return PcmLog(writes, words, modes, frames, boots, complete)
+
+
 def write_centreline(path: Path, points) -> Path:
     """A centreline CSV ("x,z" per line, lap order) for autopilot.lua (VR_AUTOPILOT)."""
     path = Path(path)
@@ -713,3 +1128,56 @@ def race_report(workdir: Path, n_points: int) -> dict:
             "cars": cars, "moved": moved, "max_backstep": max_backstep, "max_cursor_lead": max_lead,
             "parked": len(parked_cars), "parked_cars": parked_cars,
             "laps_setting": last[0], "time_record": last[1], "checkpoint_record": last[2]}
+
+
+# ---- weather stage 4: the lightning's log (lightning_log.lua) ----------------------------------------------------------------
+def light_env(lay, wd: Path) -> dict:
+    """autoplay.lua's environment for lightning_log.lua (weather stage 4) on a storm set laid out as `lay` (a carrier.Layout)."""
+    from vrtools.arcade.weather import carrier, lightning
+    tables = min(lay.tables.values())
+    return {"VR_LIGHT_LOG": str(wd / "light.txt"), "VR_LIGHT_STATE": f"{lay.cell('lightning', 'state'):x}",
+            "VR_LIGHT_WORDS": str(len(lightning.STATE_NAMES)), "VR_LIGHT_SEQ": f"{lay.cell('lightning', 'strike_seq'):x}",
+            "VR_LIGHT_BAND": f"{lay.cell('lightning', 'strike_band'):x}", "VR_LIGHT_COVER": f"{lay.cell('cover', 'under_cover'):x}",
+            "VR_LIGHT_IMAGE": f"{carrier.IMAGE[0]:x},{carrier.IMAGE[1]:x}",
+            "VR_LIGHT_CODE": f"{lay.code('lightning'):x},{lay.code('rain'):x}", "VR_LIGHT_RAIN": f"{lay.code('rain'):x},{tables:x}",
+            "VR_LIGHT_NSHOW": f"{carrier.NSHOW:x}"}
+
+
+class LightPass(NamedTuple):
+    """lightning_log.lua's L line: the lightning at a pass's end (weather/lightning.py)."""
+    frame: int
+    s: dict             # the state words by STATE_NAMES (ints; the float cells' bits)
+    seq: int
+    band: int
+    cover: int
+    sky: tuple          # backdrop colours 1..3 in palette RAM
+    probes: tuple       # the colour RAM's two probes (the white-out's first and last rows)
+
+
+class Gap(NamedTuple):
+    """lightning_log.lua's G line: the pass's guard tests from the storm's code and the units between them."""
+    tests: int
+    gap_us: float
+    pc: int
+    light_us: float
+    to_rain_us: float
+    pre_us: float       # from the carrier's body (its show counter) to the pass's first guard test
+
+
+def parse_light_log(path: Path, units: dict | None = None) -> tuple[list, dict]:
+    """(the L lines as LightPass, the G lines by frame); `units` (when given) gets the U lines: pc -> (longest us, count)."""
+    from vrtools.arcade.weather import lightning
+    names = lightning.STATE_NAMES
+    passes, gaps = [], {}
+    for line in open(path):
+        p = line.split()
+        if p and p[0] == "L" and len(p) == 2 + len(names) + 8:
+            w = [int(x, 16) for x in p[2:]]
+            s = {n: (v - (1 << 32) if v >= 1 << 31 else v) for n, v in zip(names, w)}
+            r = w[len(names):]
+            passes.append(LightPass(int(p[1]), s, r[0], r[1], r[2], tuple(r[3:6]), tuple(r[6:8])))
+        elif p and p[0] == "G" and len(p) == 8:
+            gaps[int(p[1])] = Gap(int(p[2]), float(p[3]), int(p[4], 16), float(p[5]), float(p[6]), float(p[7]))
+        elif p and p[0] == "U" and len(p) == 4 and units is not None:
+            units[int(p[1], 16)] = (float(p[2]), int(p[3]))
+    return passes, gaps

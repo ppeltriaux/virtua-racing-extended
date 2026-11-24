@@ -3,7 +3,15 @@ set against the same conversions built without the stretches ("main's": every pl
 
 The mechanism (recon, docs/spike/2026-11-phase37-tunnel-sound-recon.md §1): bit 7 of the segment flag of the quad under the
 player's car; boot 0xffa671 sends C201 when it comes on and C200 when it goes off; the sound board keeps one bit, which C200 and
-the reset 8100 clear. Needs VR_ROMDIR and VR_SATURN_CUE; two conversions of the seven courses and about twenty MAME runs."""
+the reset 8100 clear. Needs VR_ROMDIR and VR_SATURN_CUE; two conversions of the seven courses and about twenty MAME runs.
+
+Weather Task 6J round 2 (the whole suite): both sets are built with the weather switch off (`ten_course_set(..., weather=False)`,
+tests.test_weather_dry's `_seven_dry`): the comparison set without the stretches cannot carry the weather (the cover refuses a
+course whose cover stretches are not tunnel-flagged: Alpine's 108-146), and the switch-off set is the game this module tested;
+the weather set's DRY game is the switch-off set's, pass for pass (tests/test_weather_dry.py::test_dry_is_mains_race_pass_for_pass)
+and the V60's sound words exactly, the tunnel's C201 / C200 among them, on Metropolis both ways
+(tests/test_weather_dry.py::test_dry_sends_mains_sound_words, entry 6: the standing gate of the tunnel words on the WEATHER set),
+and its RAIN cover by the same flags is tests/test_weather_cover.py's."""
 import shutil
 import struct
 import threading
@@ -62,13 +70,13 @@ class Session:
 
     def __init__(self, romset_zip, saturn_cue, base: Path):
         from tests.test_race_build import _drive_line
-        from tests.test_tgp_build import _seven
+        from tests.test_weather_dry import _seven_dry
         from vrtools.arcade.tencourse import build_all, ten_course_set
         self.romset_zip, self.saturn_cue, self.base = romset_zip, saturn_cue, base
         self.source = RomSet.from_zip(romset_zip)
-        self.out, self.conv = _seven(romset_zip, saturn_cue)
+        self.out, self.conv = _seven_dry(romset_zip, saturn_cue)                     # the weather off (round 2: see above)
         plain, plain_conv = build_all(self.source, saturn_cue, [replace(p, tunnels=()) for p in PLANS])
-        self.plain, self.plain_conv = ten_course_set(plain, plain_conv), plain_conv
+        self.plain, self.plain_conv = ten_course_set(plain, plain_conv, weather=False), plain_conv
         self.sets = {"new": _zip_dir(base / "new", romset_zip, self.out), "main": _zip_dir(base / "main", romset_zip, self.plain)}
         self.dir = decode_directory(self.out)
         self.lines = {e: _drive_line(self.conv[e - 3]) for e in (ALPINE, METROPOLIS)}
@@ -197,10 +205,8 @@ class Session:
 
 @pytest.fixture
 def s(romset_zip, saturn_cue, tmp_path_factory) -> Session:
-    key = str(romset_zip)
-    if key not in _SESSION:
-        _SESSION[key] = Session(romset_zip, saturn_cue, tmp_path_factory.mktemp("tunnel"))
-    return _SESSION[key]
+    from tests.session_cache import cached                     # a failed build is cached, not rebuilt by every test (Task 7)
+    return cached(_SESSION, str(romset_zip), lambda: Session(romset_zip, saturn_cue, tmp_path_factory.mktemp("tunnel")))
 
 
 # --- the bytes -------------------------------------------------------------------------------------------------------------------

@@ -8,12 +8,17 @@
 --   VR_END_TAP_AT n (Phase 27): the taps are installed at frame n instead of at the race load (600: the coin, after autoplay.lua's
 --                 VR_POKE has written its last frame)
 --   VR_END_COIN   n: a coin, then START, once the n-th attract pit scene (mode 0x07) after the race has ended (none when unset)
---   VR_END_NEXT   "wheel:direction" (Phase 27): a second game in the same session, driven here from NEXT_COIN frames after the first
+--   VR_END_NEXT   "wheel:direction[:rain][;wheel:direction[:rain]...]" (Phase 27; weather stage 2 the third field and the list:
+--                 each item one more game after the one before, the same way): a second game in the same session, driven here from NEXT_COIN frames after the first
 --                 game's attract load (mode 0x02): its coin, START and course select on autoplay.lua's frames counted from that coin
 --                 as from autoplay's coin at 600 (the wheel at 128 around the coin and START, the paddle `wheel` from 735, the
 --                 course's gas press at DIR_PRESS, the COURSE DIRECTION screen answered as autoplay answers it: REVERSE when
 --                 `direction` is 1, else NORMAL, the second press at 1400); its race is held as the first (its own L line) and
---                 these inputs end at its load, where autoplay.lua and the autopilot drive again
+--                 these inputs end at its load, where autoplay.lua and the autopilot drive again. Weather stage 1: on a set with the
+--                 COURSE WEATHER screen (VR_WEATHER_SELECT / VR_WEATHER_WORD, as autoplay.lua tells it) the screens are answered as
+--                 autoplay answers them there (REVERSE from 1260, the direction pressed at 1300, the wheel back to 128 at 1310: DRY,
+--                 the press from 1400 locks the weather), so the second race loads on the frame it does without the screen; with
+--                 the third field 1 the wheel goes to 200 (RAIN) from 1360 to the weather's lock, as autoplay.lua's VR_RAIN=1
 --   VR_END_NEXT_LINE  the second race's autopilot line (a centreline CSV), handed to autopilot.lua's `vr_autopilot_load` at its load
 --   VR_END_PRESET "table:d,d,...[;table:d,...]" (hex table, signed decimal d, Phase 27 Task 4): at each race's results (the first
 --                 frame end the mode byte reads 0x16 after the race: the race's time is final; the insert ran three frames later in
@@ -57,11 +62,16 @@ local tap_at = tonumber(os.getenv("VR_END_TAP_AT") or "")
 local coin_after = tonumber(os.getenv("VR_END_COIN") or "")
 local flag_at = tonumber(os.getenv("VR_DIRECTION_RAM") or "", 16)
 if not flag_at then error("race_end.lua: VR_DIRECTION_RAM is missing or not hex: " .. tostring(os.getenv("VR_DIRECTION_RAM"))) end
-local next_wheel, next_dir = string.match(os.getenv("VR_END_NEXT") or "", "^(%d+):([01])$")
-if os.getenv("VR_END_NEXT") and not next_wheel then error("race_end.lua: VR_END_NEXT is not wheel:direction: " .. os.getenv("VR_END_NEXT")) end
-next_wheel = tonumber(next_wheel)
-local next_reverse = next_dir == "1"
+local next_games = {}                       -- next_games[k]: the game after race k (wheel, reverse, rain)
+for item in string.gmatch(os.getenv("VR_END_NEXT") or "", "[^;]+") do
+  local w, d, r = string.match(item, "^(%d+):([01])$")                -- wheel:direction, or wheel:direction:rain (the ":" required)
+  if not w then w, d, r = string.match(item, "^(%d+):([01]):([01])$") end
+  if not w then error("race_end.lua: VR_END_NEXT is not wheel:direction[:rain][;...]: " .. os.getenv("VR_END_NEXT")) end
+  next_games[#next_games + 1] = {tonumber(w), d == "1", r == "1"}
+end
 local next_line = os.getenv("VR_END_NEXT_LINE")
+local wx_at, wx_word = tonumber(os.getenv("VR_WEATHER_SELECT") or "", 16), tonumber(os.getenv("VR_WEATHER_WORD") or "", 16)
+local weather = wx_at ~= nil and wx_word ~= nil and mem:read_u32(wx_at) == wx_word
 local presets = {}
 for t, ds in string.gmatch(os.getenv("VR_END_PRESET") or "", "(%x+):([-%d,]+)") do
   local d = {}
@@ -98,8 +108,9 @@ emu.register_frame_done(function()
   frame = frame + 1
   local mode = mem:read_u8(0x501139)
   if tap_at and frame == tap_at then install_taps() end
-  if mode == 0x11 and not racing and (races == 0 or (races == 1 and next_at)) then   -- a race load (the first; VR_END_NEXT's second)
+  if mode == 0x11 and not racing and (races == 0 or (next_games[races] and next_at)) then   -- a race load (the first; VR_END_NEXT's)
     races, racing = races + 1, true
+    attract_at, next_at = nil, nil
     load = load or frame
     out:write(string.format("L %d\n", frame))
     if not tap_at then install_taps() end
@@ -157,15 +168,21 @@ emu.register_frame_done(function()
     if t == 0 then coin:set_value(1); out:write(string.format("C %d\n", frame)) elseif t == 10 then coin:set_value(0)
     elseif t == 40 then start:set_value(1) elseif t == 50 then start:set_value(0) end
   end
-  if next_wheel and races == 1 and not racing and not attract_at and mode == 0x02 then attract_at = frame end
+  if races >= 1 and next_games[races] and not racing and not attract_at and mode == 0x02 then attract_at = frame end
   if attract_at and not next_at and frame == attract_at + NEXT_COIN then next_at = frame; out:write(string.format("C %d\n", frame)) end
-  if next_at and races == 1 then                       -- the second game up to its race load, on autoplay.lua's frames (coin at 600)
+  if next_at and races >= 1 and next_games[races] then -- the next game up to its race load, on autoplay.lua's frames (coin at 600)
+    local next_wheel, next_reverse, next_rain = table.unpack(next_games[races])
     local t = frame - next_at + 600
     coin:set_value((t < 610) and 1 or 0)
     start:set_value((t >= 720 and t < 730) and 1 or 0)
     local w, gas = (t < 735) and 128 or next_wheel, 0
     if (t >= 1200 and t < 1210) or t >= 1400 then gas = 255 end                 -- DIR_PRESS..DIR_LIFT, the second press from 1400
     if t >= 1210 and t < 1402 then w = (next_reverse and t >= 1300) and 200 or 128 end     -- DIR_LIFT, DIR_STEER, DIR_RETURN
+    if weather then                                                             -- the direction at 1300, the weather (DRY) at 1400
+      if t >= 1300 and t < 1310 then gas = 255 end
+      if t >= 1210 and t < 1402 then w = (next_reverse and t >= 1260 and t < 1310) and 200 or 128 end
+      if next_rain and t >= 1360 and t < 1402 then w = 200 end                  -- weather stage 2: RAIN, as autoplay's W_RAIN
+    end
     wheel:set_value(w); accel:set_value(gas)
   end
   out:flush()

@@ -1038,3 +1038,481 @@ test-menu page, the races, the name entry, the cold boot and the attract, no rea
   0xde80c..0xde845 (CPU 0x10de80c..), course-header pointer words into the program ROM, each +0x110 (the tables they point at
   moved with the image); the program ROM pair: the image and everything after it. The polygon, copro data and TGP program ROMs
   are identical to main's.
+
+## 24. The COURSE WEATHER screen and the weather byte (weather stage 1, `weather/screen.py`, `weather/layout.py`)
+
+Ported from spike 64 (de04235); measurements in `docs/spike/2026-11-phase80-weather-findings.md` (stage 1). Built by
+`ten_course_set(..., weather=True)` (the default) as the last writer; `weather=False` (`vrtools build --no-weather`) gives the set
+as before, byte for byte.
+
+- **The direction word** (0x502294..0x502297, byte accesses only; §19): the flag; `DIR_PHASE` 0 none, 1 the direction chosen,
+  2 its lock (`dirsel`), 5 the direction's lock look held, 3 the weather chosen, 4 the weather locked; `DIR_ARMED` the direction
+  screen's arming flag, then the hold's countdown (16 to 0), then the weather screen's arming flag, and from the weather lock on
+  **the weather byte**: 0 DRY, 1 RAIN; `DIR_SHOWN` the choice shown (0, 1) or a drawing phase (0xff..0xfc; 0xfb drawn). Cleared
+  whole by `dirclear` (every select screen's state 0) and by `bankdemo` (the attract's two and linked play's two course loads):
+  `bankdemo`'s first instruction `mov.b #0, 502294` becomes `mov.w #0, 502294` (the same 8 bytes).
+- **Sites** (their addresses and sizes are `weather/layout.py`'s, found in main's routines as main's layout assembles them; each
+  checked on the set before anything is written, `PatchError` naming it; the figures below printed from `layout.blocks()`):
+
+  | site (`layout.blocks()`) | address | bytes | was | becomes |
+  |---|---|---|---|---|
+  | `dirsel`'s lock (directory image) | 0x27b1fc | 9 | `mov.w #FC277C, A[R25]` | `mov.w #wxsel, A[R25]` |
+  | `start`'s `jmp dirdone` (directory image) | 0x27a1ad | 6 | `jmp dirdone` | `jmp wxdone` |
+  | `bankdemo` (directory image) | 0x2799f6 | 8 | `mov.b #0, 502294` | `mov.w #0, 502294` |
+  | `olock`'s two handlers (originals' picture block) | 0x28f5fd, 0x28f608 | 9 + 9 | `mov.w #osel, A[R25]`, `mov.w #dirsel, A[R25]` | `mov.w #wxdir, A[R25]` (both) |
+  | the race end's record test (boot) | 0xfc40ce | 16 | `movz.bw #0, 5018FC[PC]; test1 #1, 501174[PC]` | `jsr wxgate` + nops |
+  | the HUD's call (boot) | 0xff4799 | 6 | `jsr hudorig` | `jsr hudwx` |
+
+  The directory image keeps its 7 221 bytes (bound 7 300); only immediates and one size bit change in it.
+- **The flow.** `wxdir` (the handler while COURSE DIRECTION is open): `osel` (an original) or `dirsel`, then while `DIR_PHASE` 1
+  and a choice is shown `wxdlook` (R13 0): the shown side's B palettes from the picture record's `normal` set, the other's from
+  its `grey` set, then the entry's direction piece's look list (an original: its A palettes and arrow ring palettes, normal on the
+  shown side, grey on the other). `wxsel` (from `dirsel`'s lock): on `DIR_PHASE` 2 `DIR_PHASE` := 5, `DIR_ARMED` := 16, the timer
+  raised to 0x30 if lower, `wxdlook` (R13 2: the record's `chosen` / `grey` sets; an original: origpic's lock lists), the
+  direction's frame; on 5 the frame, `DIR_ARMED` − 1, and at 0 `DIR_PHASE` := 3, `DIR_ARMED` := 0, `DIR_SHOWN` := 0xff, the timer
+  := 0x140 (`ScreenTune.timer`), then 4 000 passes of a two-instruction loop (origpic's `FIRST_WAIT`) before the first clear; on 3
+  `wxdraw` one phase a logic frame while drawing, then R10 = ([0x501060] + [0x50106c]) >> 1, `DIR_ARMED` := 1 when R10 ≤ 0x1c,
+  the choice 1 when armed and R10 > 0x20 (from DRY) or > 0x18 (from RAIN), on a change `wxshow` (the labels) and `wxlook` (as
+  `wxdlook`, the weather piece's look lists: the badge's palettes normal with RAIN shown, grey with DRY; an original's A
+  palettes), `wxcursor` (the game's frame at "wxsides": (−112.0, 57.0) DRY, (112.0, 57.0) RAIN), and the lock on the gas edge or
+  the timer ≤ 0x20: the weather byte := `DIR_SHOWN`, `DIR_PHASE` := 4, `wxlook` (R13 2), the handler := 0xfc277c (198 video frames
+  to mode 0x11). `wxdone` (from `start`): with `DIR_PHASE` 4 `wxcursor` (the frame steady: the handler is 0xfc27be), else
+  `dirdone`. `wxgate`: `movz.bw #0, 5018FC`, then Z set (`cmp.b` of the byte with itself) while the weather byte is not 0, else
+  `test1 #1, 501174`: the `be FC417C` after the site takes the race-without-a-record path in RAIN (no insert, no name entry, no
+  battery write). `hudwx`: `hudorig`, then with the weather byte not 0 the word (`ScreenTune.rain_word`) through 0xff8926 with
+  [0x501434] = 3 (white), on rows 46-47 ending in column 58, or with the flag set ending in column 50 (49 on Bay Bridge and
+  Acropolis, whose REVERSE starts in 51), [0x501434] restored.
+- **The drawing phases** (`DIR_SHOWN`, each ending in the piece's row list for that phase, run by origpic's `orows`: rows of
+  (source, destination, count: 0 a blit by 0xff9436, else longwords), a zero word ends them): 0xff layer 0 cleared (0xff92c9),
+  layer 2's checker (0xfc358e), the title (0xff870d), the labels, rows: the double arrow, the wheel panel, the red arrow, STEP TO
+  START!, the caption's characters to block 0x3580, palette 0x73 to 0x6b, the caption's map; 0xfe the picture into slot 0 (DRY)
+  through select.`picture` at the piece's header cell (an original: B on layer 0, its A map blitted by the rows on layer 2 with
+  its A palettes in the normal look); 0xfd into slot 2 (RAIN; an original: its A characters copied to the next art's A home with
+  its palettes, its A map blitted and then moved onto them, + the header's delta to each of 21 × 16 cells); 0xfc the badge.
+- **The tile layout** (layer 0 unless said; COURSE DIRECTION's columns, one row lower):
+
+  | piece | cells (row, column) |
+  |---|---|
+  | COURSE WEATHER (countdown font) | rows 0-2, columns 17-44 |
+  | DRY / RAIN pictures (16 × 21; converted on layer 2, an original's B on layer 0 over its A on layer 2) | (5, 9) / (5, 37) |
+  | the badge (4 × 5 cells, over the RAIN picture) | (8, 46) |
+  | the double arrow 0x1e2205 | (11, 28) |
+  | DRY / RAIN labels (0xffe8fb, 0xC200 yellow for the choice shown, 0x8200 white) | (27, 14) / (27, 41), rows 27-29 |
+  | the wheel panel 0x1e0f71 and the SELECT WEATHER caption (2 × 18) | (31, 7); caption (32, 8) |
+  | the red arrow 0x1e1185 | (33, 28) |
+  | STEP TO START! 0x1e13e1 | (31, 35) |
+  | the countdown (the game's) | rows 39-41 (40-42 with [0x40dc9b] = 0), columns 28-31 |
+
+- **The middle slot** (not shown on either screen): COURSE WEATHER's caption in block 0x3580 (palette 0x6b := 0x73), the badge in
+  0x3480 (palette 0x69) on a converted course, or on an original its composed characters in one or two palette groups at 0x3480
+  and 0x3500 (palettes 0x69, 0x6a): each badge cell's character holds the badge's colours and the B colours it shows, each colour
+  with its grey (`grey_word`: (5 r + 9 g + 2 b) / 16 on all three guns). The next course select's mode 0x0f uploads the select
+  characters again; the race load uploads its own.
+- **Data.** A weather piece per entry kind (the seven converted share one; each original its own), in program ROM (read at the
+  locks): 8 list pointers (phases 0xff, 0xfe, 0xfd, 0xfc; looks choosing DRY, choosing RAIN, locked DRY, locked RAIN), 8 header
+  words (the DRY and RAIN picture cells, an original's A palettes' address or 0, 0, the A map's character delta, the RAIN A cell,
+  0, 0), the lists. A direction piece per entry kind: 8 pointers, of which `wxdlook` reads the last four (choosing NORMAL,
+  choosing REVERSE, locked NORMAL, locked REVERSE; a converted course: one empty list; an original: two lists of its own and
+  origpic's two lock lists). The code's tables "wxpieces" and "wxdpieces" hold each menu entry's piece addresses. Graphics (badge
+  characters, maps and palettes, the caption) in bank 0, mapped on the select screens. Every block: `weather/layout.py`'s table
+  (`blocks()`), checked against main's reserved blocks, the spawn-list slots and the reverse variants' annex as the set holds it
+  (`annex_span`), and erased, before the install.
+
+## 25. The storm's carrier and the rain (weather stage 2, `weather/carrier.py`, `weather/rain.py`, `weather/layout.py`)
+
+(The join: the RAM addresses in this section are this stage's own branch's; with the five modules laid out together they moved: the
+joined build's are in §30, generated from the layout.)
+
+Ported from spike 70's carrier and spike 48's rain (branch `spike70-storm`, 91ad73f); the contract later stages build on is
+`weather/carrier.py`'s docstring; measurements in `docs/spike/2026-11-phase80-weather-findings.md` (stage 2). Installed by
+`install_weather` after the screen (`carrier.install(rs, converted, tune)`); nothing of it with `weather=False`. SBR stays the
+boot's (0xfff000) and the board's interval timer as the boot leaves it (period 1, written at 0xfe005b); a first build that moved
+the vector table into RAM was removed (findings, stage 2: the test menu's memory test). The one thing the storm does to the
+interrupts (the final review's W8): the load masks them across its copy lists with the game's own pair, `updpsw.w #0, #40000` /
+`updpsw.w #FFFFFFFF, #40000`, because the vblank handler's backdrop column update (0xFFE0E0 -> 0xFFE498 -> 0x279A76) reads the bank
+window that the load maps to bank 3 for 45-50 us.
+
+- **RAM** 0x520000..0x53efff (the boot clears 0x500000..0x53efff at 0xfe1469 with interrupts off; nothing else writes it in a game:
+  spike 70's ramcheck; the test menu's MEMORY TEST does, and leaving the menu reboots):
+
+  | range | what |
+  |---|---|
+  | 0x520000 | SWITCH (byte: the storm on this logic frame), 0x520001 STATE (0 idle, 1 starting, 2 show), 0x520002 a start asked for another pass, 0x520004 LOADKEY (0x5354_0000 \| menu entry while loaded), 0x520008.. words: loads, start passes, show passes, the guard routines' trims (records, late) |
+  | 0x520100..0x521fff | the modules' cells in registry order, zeroed at each load (to 0x520b80); the rain's: 0x520100 its state (27 words: active, grade state, rows left, last yaw, the generator, yaw shift, slant, clusters drawn, splashes drawn, the next splash, the car's view point y / z, the ground plane's slope / height, x, the splash hold, clusters placed, landings, spawns, late passes, budget trims (clusters, splashes), late trims (clusters, splashes), passes, records before / after), 0x520180 60 clusters x 32 bytes (x, y, z floats in view space; the polygon word of its shape; the two tilts; drops landed; the drop table offset), 0x520900 40 splashes x 16 bytes (world x, y, z; age 0 free, 1..6) |
+  | 0x522000..0x529fff | the image: the carrier's `body` 0x522000, `release` 0x52205c, `guard_time` 0x52206f, `guard_records` 0x522089; the rain's `start` 0x5220b8, `frame` 0x5226c5, `release` 0x52311d; the drop table 0x5231d0 (8 shapes x 5 drops: x and bottom, floats); 4 880 bytes in all |
+  | 0x52a000..0x53efff | data (to 0x530810: 26 640 bytes): the overcast table 0x52a000 and the boot's table 0x52d000 (96 rows of 64 halfwords: row = channel x 32 + value), this course's sky 0x530000 (its palette RAM address 0x900c00, its colour count, the grey colours) and own backdrop colours 0x530410 |
+
+- **ROM** (blocks of `weather/layout.py`; each erased before the install; the bytes used and the room left: the findings' generated
+  table, stage 2, which these figures agree with):
+
+  | block | address | bytes | holds |
+  |---|---|---|---|
+  | the scenery call (boot site) | 0xfee144 | 6 | was `jsr FF8450[PC]` (the scenery cells, the race scene's last emitter); becomes `jsr 0xfff120` |
+  | storm stub (boot) | 0xfff120 | 0x500 (940 used) | the stub (DRY path, decision, release 0xfff23b, load 0xfff25a, copy_list 0xfff2cf), then the copy directory (10 words: each entry's list), the bank table (10 bytes: (bank << 4) \| 1), the common list, the ten entries' lists |
+  | storm image (bank 3) | 0x1df4c0 | 0x5000 (4 880 used) | the image, copied to 0x522000 |
+  | storm data (bank 3) | 0x1e44c0 | 0x6000 (all used) | the overcast and the boot's tables |
+  | storm course data (bank 3) | 0x1ea4c0 | 0x2900 (9 664 used) | per entry its sky blob (8 + 2 n bytes, 16-aligned) |
+  | rain objects (polygon ROM) | 0xfda424 | 0xfbc0 (all used) | 40 drop objects of 1 424 bytes (shape s, variant k at word 0x3f6909 + (5 s + k) x 356), 12 splash objects of 624 (layout l, stage t at word 0x3fa0a9 + (6 l + t) x 156) |
+  | rain colours (program ROM) | 0x28ff80 | 0x60 (92 used) | 34 drop colour words (a word per record; colour pointer 0x87fc0), 12 splash words (per stage the ring and the droplets; 0x87fe2) |
+
+- **A copy record** (16 bytes, little-endian words): the bank register's value ((bank << 4) \| 1), the source (a window address
+  0x100000..0x1fffff), the destination (RAM), halfwords (at most 0x4000); a 0 word ends a list. The common list: the image, the
+  overcast table, the boot's table (bank 3); an entry's list: its sky blob (bank 3) and its own backdrop colours (its own bank,
+  the palette block's colours: a reverse variant uses the same block).
+- **The stub** (in place of the site's callee): `cmp.b #1, 502296; be wet; cmp.b #0, 520001; bne wet; jmp FF8450` (DRY: nothing
+  else). `wet`: the decision R9 = weather byte 1 and [0x40dc8c] 0 and menu entry < 10 and the mode [0x501138] one of 0x12 0x13
+  0x14 0x15 0x16 0x19 0x1a 0x1b 0x1c; with STATE not 0 and (R9 0, or LOADKEY not this entry's) `release`; SWITCH := R9; the game's
+  scenery routine; then with SWITCH 1: STATE 0 -> `load`, else the image's `body`. `release`: the image's `release` (each module's,
+  reverse order), STATE, LOADKEY, SWITCH := 0. `load`: the module cells zeroed (movcfu.h), interrupts masked, the common list and
+  the entry's list copied (each record: the bank register, movcu.h), the course's bank back, interrupts again, LOADKEY, STATE := 1.
+- **The guard** (`guard_time`, and `emit_guard_time` inline): late once the game's vblank count 0x500501 is not 0
+  (`cmp.b #0, 500501; bne late`): the game writes 0 there at its wait's exit (0xfe1406, the pass's start) and its vblank handler
+  counts it up 17.38 ms into the pass (sometimes up to 0.1 ms later: the handler's work before its increment varies). Tested before
+  every unit of the storm's work (the rain's: each cluster, each landing, each relaunch, each splash spawn, each splash's transform
+  and its drawing, each grade row; the longest, a cluster's motion, wraps and scale, between the cluster loop's test and its first
+  landing test, 178 us measured); a module's unit stays under 0.2 ms (carrier.UNIT_MAX_US). The cap (`RAIN_BUSY_MAX_MS`, 17.9 ms
+  since the join; 17.8 at this stage) is this guard's bound: the count moves at 17.383-17.486 ms, then the unit in flight (at most
+  0.2 ms), then the pass's tail (at most `TAIL_US`, 160 us since the join's round 2, 149 us measured forced; 31 us at this stage). `guard_records` (R0 = records): adds them to [0x5011a0] when the result stays within [0x5011b0], else R0 = 1.
+- **The body** (0x522000): STATE 1: each module's `start` (R0 0 when done; all done: STATE := 2); STATE 2: each module's `frame`.
+- **The rain's start** (STATE 1 passes): the pass's slant, yaw and ground plane, then from the next unplaced cluster, at most 20 a
+  pass (`rain.START_QUOTA`: three start passes): a new depth 3.6 + 41.4 r^2, x and y across the view at that depth, a shape
+  (polygon word, table offset), tilts; the drops already under the ground landed (no splash); placed counted.
+- **The rain's frame** (STATE 2): on its first pass the sky blob's colours to palette RAM (movcu.h), the grade started (96 rows to
+  make); then spike 48's pass: per cluster fall 0.32, wind 0.05, the yaw shift, wrap at the sides, back to the top when out of the
+  bottom or all landed; the landing test against the ground plane, a splash spawned (world coordinates, the ring's next entry) for a
+  landing 3..35 deep within 12 sideways outside the car's box, none for 3 passes after a late one; the cluster drawn within the
+  budget (a matrix 0xB: x column (g, 0, tilt), y column (slant g, g, 0), z column (0, 0, g), the view position; then the object: 1,
+  the colour pointer, the shape's variant k (records 34 - 7 k), the budget word); then each live splash, sheared onto the ground
+  plane, drawn within the budget, aged; a late splash loop frees the rest. Then 3 rows of the overcast table into the colour RAM
+  (`rain.GRADE_ROWS`; row r: channel r % 3, value r / 3; RAM 0x910000 + channel 0x4000 + value 0x200): the grade fades in over 32
+  passes, as the prototype's did at the pit box.
+- **The rain's release**: with the grade started, the boot's table in one copy (96 rows); with the sky written, the course's own
+  colours back when palette RAM's colours 1-3 still are the grey's.
+- **When the release runs** (fix round 1): in the game's flow, at the attract's opening (mode 0x2, its fourth frame, a pass of the
+  game's own scene load: two vblanks and more), which every way from a RAIN race to another game passes (the results' last mode
+  0x1d first; also with a coin and START in the results or during the race). From the last rain mode to there the grade stays in
+  the colour RAM; nothing drawn shows it (0x1d shows the last rain picture; the attract's opening draws nothing that reads the
+  grade, and the game has already loaded its own palette over the grey sky): the same race RAIN and DRY, the same inputs, equal pixel
+  for pixel from the frame after 0x1d's first through the next game's selection screens. The branch for another menu entry while
+  loaded is not reached by the game's flow.
+- **The units with no guard test before them** (MAME 0.289; the worst course, the 512-colour sky): a pass's work from the scenery
+  routine's return to its first guard test (the stub, the body, the rain's setup; on the first visible pass also the sky copy)
+  47.5-51.5 us; the load 40 us (F0, nothing drawn); the release 349 us (bounded by `carrier.RELEASE_US_MAX`, 400 us; the DRY pass
+  it lands on 44.7 ms, the RAIN one 356 us longer).
+- **A later module's hook site** (`carrier.Module.sites`): a "boot site" or "program site" block of its own in `weather/layout.py`'s
+  table, the site's original bytes (checked in the set before anything is written: PatchError naming the site) and new bytes made
+  from the settled Layout; its stub an erased block of its own (`Module.rom`, a function of the Layout: it can `jsr` the module's
+  RAM routines, exported as `entries`). In a DRY game the site does what its original instructions did (a call site: the stub tests
+  the weather byte, then SWITCH, and jumps to the original callee). `tests/test_weather_carrier.py`'s dummy module hooks the race
+  scene's call at 0xfee13e (`jsr FF7C1E[PC]`) with a stub at 0xfff700: in RAIN its RAM routine runs on every race pass after the
+  load, in DRY never.
+
+## 26. Cover: no rain under tunnels and roofs (weather stage 3, `weather/cover.py`, `weather/cover_geom.py`, `weather/rain.py`)
+
+(The join: the RAM addresses in this section are this stage's own branch's; with the five modules laid out together they moved: the
+joined build's are in §30, generated from the layout.)
+
+Ported from spike 57 (FRAME57, CL57, the march `p57_geom`) and spikes 61-68 (the pits roof: SIL57, WIN57, PD57), as spike 70
+joined them; the contract is `weather/cover.py`'s docstring. A module of the storm's carrier (§25) registered before the rain: no
+site in the game's code, nothing in a DRY game.
+
+- **RAM** (the module cells, zeroed at each load; addresses as laid out with the cover and the rain alone, on the stage-3 branch;
+  the joined build's addresses come from its layout, `carrier.lay_out`, never from this table):
+
+  | range | what |
+  |---|---|
+  | 0x520100 | `under_cover` (byte): 1 on a pass whose camera is under cover (modes 2 and 3), written by the cover's frame before the rain's (the interface the lightning reads) |
+  | 0x520104..0x5201f7 | the cover's state, 30 words (`cover.STATE`: mode, the box holding the camera, the mouth in view, near boxes listed, clusters hidden, placements, the camera's world x y z, curtain clusters left to the rain, the last mode, fresh, the curtain's ground (height, slope), roof, the loop breaker's cluster and count, a drop-by-drop cluster's lam s* h* and drop entry, KCOV, its mode, single drops drawn, walk, nosplash, the car's ground saved, passes, late passes), the near boxes (12 words, NNEAR_MAX), mode 1's mouth plane (4 floats), mode 3's mouth frame in view space (15 floats: U u0, S s0, H h0, the mouth's centre) |
+  | 0x5201f8..0x5205b7 | per rain cluster its curtain state (16 bytes: u s h in the mouth's frame, the tilt word it was placed with) |
+  | 0x5220c4.. | the image: the cover's `frame` 0x5220c4, `cluster` 0x522bba, `release` 0x523809 (5 982 bytes); the rain after it (`start` 0x523824; `rand` 0x524914, `shape` 0x524941 are its new entries); the single-drop table 0x524aa8 (40 x 16 bytes: centre x y, half width across, half height) |
+  | 0x530000 | this course's cover table (the largest, Metropolis's, 1 128 bytes) |
+
+- **The cover table** (per menu entry, in the cover's course data: bank 3 to 0x530000; little-endian; offsets from the table's
+  start): `nstr`; per stretch 20 bytes (the circle's centre x z and radius squared, the first box's offset, the box count); per box
+  40 bytes (origin x z, axis x z, length, lateral min max on n = (-az, ax), its two mouths' offsets, vis: bit 0/1 the mouth seen
+  from it, bit 3 ROOFED); per mouth 64 bytes (centre x y z at road height, outward x z, the opening's lateral min max on (-oz, ox),
+  the roof's height over the road, the curtain's lateral placement bounds, its height PH = min(2.5 H, 25), its depth D 60, the end
+  structure's x and y extent kx0 kx1 ky0 ky1, zero for a marched mouth). Metropolis: the pits roof's road (one box, x -120..-99.1)
+  and lane (-99.1..-70.8), measured, ROOFED; the long tunnel (15 boxes). Alpine: 14 boxes; Bay Bridge 6. 4 bytes (nstr 0) for the
+  seven other courses. Built by `cover_geom.tables` from the set's faces at build time; byte for byte the prototype's.
+- **ROM**: `cover objects` (polygon ROM) 0xfe9fe4, 12 160 bytes: 40 single-drop objects (shape s, drop j in bottom order at word
+  0x3fa7f9 + (5 s + j) x 76; 6 records each); their colour words are the rain's drop words (§25: a single box's six records take
+  the drop sequence's first six). The cover table per course in `storm course data` (bank 3, grown to 0x3300 by this stage).
+- **The rain's call** (`rain.py`, only when the layout holds a `cover`): after a cluster's motion or relaunch and the store of its
+  position, `cmp.w #0, mode; be skip`, the time guard, R14 / R10 := the car's ground (the rain's G0V / TV), `jsr cluster`, the
+  position stored again; the scale g capped at R12; the landing's ground from R14 / R10; no splash when R13 is not 0 or `nosplash`
+  is set; the cluster drawn only when R13 is 0; the loop walks `walk` clusters. `cluster` keeps R6 and R7, may advance R5 (single
+  drops drawn), changes R0, R1-R4, R8-R20.
+- **The registers across the rain's `jsr cluster`** (fix round 1, F1; `cover.CLUSTER_INPUTS` / `CLUSTER_RETURNS`; checked from the
+  emitted code by `test_the_cover_keeps_the_rains_live_registers`, which derives the rain's live set by a liveness walk of its own
+  code and follows every path of `cluster`, its callees `win` and `pd` included):
+
+  | register | owner | in | out | who restores it |
+  |---|---|---|---|---|
+  | R1-R3 | the rain (the cluster's view position) | yes | yes (stored again) | the cover moves them only to place a curtain cluster |
+  | R5 | the rain (the display list's write pointer) | yes | yes | `pd` advances it past the single drops it writes (its only result: `cover.CALLEE_RETURNS`) |
+  | R6 | the rain (the cluster) | yes | kept | never written by the cover |
+  | R7 | the rain (the loop count) | yes | kept | never written by the cover |
+  | R10 / R14 | the drops' ground (slope / height) | the car's | the ground the landing uses | `pd` uses R14 as a temporary: the mouth's ground written again after `jsr pd` (fixed in 65885bf) |
+  | R12 | the scale cap | - | yes | `win` and `pd` use it as a temporary: GCAP_SIL after `jsr pd`, BIG at `s_hide` (fixed in this round: the prototype had the same clobber) |
+  | R13 | drawn (0) or not | - | yes | set on every path |
+  | R0, R4, R8, R9, R11, R15-R20 | free | - | - | the rain reads none of them after the call before writing it |
+
+  The rain's other registers (R21-R25, R29-R31) are the carrier's contract: no module writes them.
+- **Under cover by height** (fix round 1, F6; fix round 2, R2-1, R2-4): a ROOFED box (the pits roof, flat) holds the camera only
+  below its end's top (mouth 0's road + H), as before; a marched box only while the view is low: the camera less than LOW_VIEW_MAX
+  = 10 above the player's car (+0x22; measured in the three tunnels: VR1 0.5-1.2, VR2 0.7-2.2, VR3 3.4-6.3 above the car, the high
+  view VR4 14.3-23.3). In mode 1 a marched box hides every cluster within MG whatever its height while the view is low (the
+  approved prototype's CL57); in the high view, and under the pits roof, only clusters below the higher of the stretch's mouths'
+  tops; a cluster above that top within the box has no landing (no splash carried under the roof on the car's ground plane).
+- **The near list** (fix round 2, R2-2): up to NNEAR_MAX = 12 boxes within `near` of the camera, in table order: a geometry test
+  holds that no road point of the three courses has more than 10 within near + 25 (the camera's reach off the road), so none is
+  dropped (6 could drop the box under the high camera in Alpine's tunnel).
+- **A late pass** (fix round 1, M1): the cover forces mode 2 (nothing of the rain drawn) and writes `under_cover` 1, the safe value
+  for the lightning. `walk` is written before `frame`'s first guard (M2).
+
+## 27. The lightning (weather stage 4, `weather/lightning.py`, `weather/carrier.py`, `weather/layout.py`)
+
+(The join: the RAM addresses in this section are this stage's own branch's; with the five modules laid out together they moved: the
+joined build's are in §30, generated from the layout.)
+
+Ported from spike 60/62's "thin" lightning as joined in spike 70 (branches `spike60-lightning-restrike` b918448, `spike70-storm`);
+measurements in `docs/spike/2026-11-phase80-weather-findings.md` (stage 4). A module of the storm's carrier (§25), registered
+BEFORE the rain (`carrier.REGISTRY`: cover, lightning, rain; the session lead's ruling of 19 Nov 2026): its routines run before the
+rain's in a SHOW pass, and its release after the rain's. It has no hook site in the game's code (no DRY cost: in a DRY game nothing
+of the storm runs, §25). Addresses below are the stage-4 branch's own build; the join re-lays them (§30).
+
+- **RAM** (the carrier's spaces, §25):
+
+  | place | what |
+  |---|---|
+  | cells 0x520100 | `under_cover` (the module `cover`'s byte cell: 1 on a pass whose camera is under cover; the lightning reads it) |
+  | cells 0x520104 | the lightning's state, 57 words (`lightning.STATE_NAMES`): init, its pass count, the phase (0 idle, 1 placing, 2 the bolt's frame, 3 the timeline), the countdown, seeded, its generator, the pattern, the step, the rule's previous flash level, falling, the next onset slot and the last three onsets' pass counts, the level, the sky's slot in palette RAM, the colour-RAM rows washed and wanted, tries left, the run and the turn ahead, the placement's best (have, hidden height, foot x y z, distance, direction cos / sin), the bolt's frame (four axis terms, height scale, thickness scale, object word), its records this pass, counters (strikes, onsets, blocked, bolt passes, bolts and white-outs skipped under cover, white-outs skipped late, bolts trimmed by the budget, in sight / hidden / no valid foot (no strike), view refusals, tries, placement passes cut, white-outs cut, bolts behind the camera, skies late, bolts late), the foot's last view depth, white-outs begun |
+  | cells 0x5201ec | `strike_seq` (word: +1 on the first pass of each strike's timeline, on no other pass), 0x5201f0 `strike_band` (word: 1 under 467 units, 2 under 633, 3 beyond; set on that same pass and held unchanged until the first pass of the next strike that happens: never cleared, not at the strike's end, not by a re-strike, not by an aborted attempt; the session lead's amendment of fix round 1: the sound tests its time guard first and may read the band a pass or more after a strike's first pass); both 0 at each load; a byte or halfword read at either address reads the value. A placement that finds no valid foot strikes nowhere and changes neither. A strike begun under cover counts like any other (no bolt, no white-out, the sky flash kept; spec 5.4: "Rain sound fades out under cover and back (5.6); thunder is heard the same."): both cells are set |
+  | image 0x5220c4 | the code (`frame`, `release` 0x522f26), then its tables at 0x5240d0: six patterns of 40 bytes (a level a pass, 0xff-terminated), the flash level and the sky slot per level (7 bytes each); 0x5241d0 16 directions (cos, sin, 0.93 cos - \|sin\|: 12-40 degrees off the view, left then right); 0x524290 9 turns (cos, sin: -25..25 degrees), then 7 floats (8 / k); 0x5242f4 the 12 bolt objects' polygon words |
+  | data 0x530000 | the white-out table (96 rows of 64 halfwords, the rain's row order: channel x 32 + value) |
+  | data 0x533000 | this course's blob: its three flash skies (n colours each, one after the other, in 3 072 bytes), then its grids at +3 072: i0, j0, w, h, scale, base (words), the int8 foot grid and the int8 occluder grid (w x h each, rows of z): cell (i, j) of 16 units from (-1 024, -1 024) is at (j - j0) w + (i - i0) inside the box; outside it "beyond the band" (foot) and "none" (occluder); a foot code -128 refused, -127 beyond the band, else code x scale + base |
+
+- **Read from the rain** (by name, never written): its state cells XSTATE, XLEFT (the grade complete) and RAND (the seed), its data
+  places `sky` (the backdrop's palette RAM address, n, the grey colours), `own` (the course's own colours), `overcast` (the overcast
+  table, the white-out's restore).
+- **ROM** (blocks of `weather/layout.py`, erased before the install):
+
+  | block | address | bytes | holds |
+  |---|---|---|---|
+  | lightning objects (polygon ROM) | 0xfef200 | 0x10de0 (all used) | 12 bolt objects packed (6 shapes, then mirrored; 4 024-7 064 bytes, 99-175 records; every record ZMAX, the glow strips unculled), at the END of the erased run from 0xfda424 (its start, 21 052 bytes after the rain's objects, stays for stage 3) |
+  | lightning colours (program ROM) | 0x28ffe0 | 0x10 (all used) | 8 colour words: glow, left, highlight, right, then the dim four (colour pointer 0x87ff0) |
+  | lightning data (bank 3) | 0x174000 | 0x32000 (201 844 used) | the white-out table, then per entry its blob (flash skies in 3 072 bytes, grids: 9 124-24 088 bytes) |
+  | storm stub's lists (§25) | | | one record in the common list (the white-out table: `Module.copies`) and one an entry (its blob: `course_copies`) |
+
+- **A pass** (SHOW): the scheduler (idle: in mode 0x14 with the rain's grade complete, the countdown; the first race pass seeds the
+  generator and schedules the first strike; a strike begins after the guard: the next scheduled 20-40 s on, a pattern, the run and
+  the turn ahead), the placement (4 tries a pass, a try three units after the guard), the bolt's frame (a unit; strike_seq and
+  strike_band), the timeline (the rule on each onset), then the level applied: the sky's slot (a string move after the guard), the
+  colour RAM toward the white-out or the overcast table (8 rows a unit after the guard, brightest value first), the bolt (not under
+  cover; after the guard; when REC_COUNT + 175 stays within the budget at 0x5011b0; at view depth 50 or more): a matrix entry (0xB,
+  the camera matrix times the bolt's frame, the foot in view space) and an object entry (1, the colour pointer, the object's word,
+  the budget word) at 0x5017f4, the record count raised by 175.
+- **Release** (the attract's opening, after the rain's): when the sky slot is a flash sky and palette RAM's backdrop colours 1-3
+  still equal it, the course's own colours back (one string move); the colour RAM is the rain's release's (the boot's table: any
+  white-out with it).
+- **The aim per course** (task 8, branch `phase86-bolt-street`): the placement's 16 directions (`lightning.NANG` a side, evenly from
+  low to high degrees off the camera's horizontal view direction) come from `LightningTune.aim_for(entry)`: `aim_deg`, the approved
+  12-40, for every course, except the entries in `aim_by_entry`: Metropolis (entry 6) aims down the street, 2-10 (both
+  directions). The image keeps the default direction table (`dirs`, 192 bytes: per direction cos, sin, 0.93 cos - |sin|); a course
+  with its own range has its own 192-byte table in "lightning data" after the last course blob (the blobs keep their places) and one
+  more record in its entry's copy list, `@dirs`: a copy into the module's image table (`carrier.TABLE_COPY`), applied after the
+  common list (which copies the whole image at every load), so it holds until the next load and the next course's load has the
+  default again. Nothing else of the placement changed (the distance, the in-view check, the grids, the 16 tries, the
+  least-hidden choice, never on the road or a refused cell).
+
+## 28. The wet handling (weather stage 5, `weather/handling.py`, `weather/layout.py`)
+
+(The join: the RAM addresses in this section are this stage's own branch's; with the five modules laid out together they moved: the
+joined build's are in §30, generated from the layout.)
+
+Ported from spike 54 as phases 55, 58 and 59 left it (branch `spike54-handling-v2`, 258a86e) and as spike 70 joined it; the game's
+handling code is the Phase 50 recon's (`docs/spike/2026-11-phase50-handling-recon.md`, branch `phase50-handling-recon`). A module of
+the carrier (§25): eight hook sites in the boot ROM's physics and sound code, their stubs in the boot ROM, the wet routines in the
+storm image. Nothing of it with `weather=False`; in a DRY game each site runs its own instructions after one test.
+
+- **The sites** ("boot site" blocks owned by `handling`; the carrier checks each holds its original bytes before writing anything):
+
+  | site | original instructions | becomes | back to | the stub keeps | the wet routine changes |
+  |---|---|---|---|---|---|
+  | slide 0xfed8be | `cmp.h #222, 154[R25]` | `jmp <stub>` + 2 nops | 0xfed8c6 | all but the flags (the original compare sets them) | +0x14e, +0 (the spin flag), the cells; R0 (dead: written first from 0xfed8c6, 0xfed8e3, 0xfed97e); R1 saved |
+  | brake 0xfed178 | `cmpf.s #-1820.0, R11` | `jmp <stub>` + 2 nops | 0xfed180 | as above | R11 (the force: its purpose), +0x64 at a lock, the cells; R0 dead (written first from 0xfed180, 0xfed18a, 0xfed190); R10 read only |
+  | wspin 0xfed190 | `cmpf.s #1040.0, R11` | `jmp <stub>` + 2 nops | 0xfed198 | as above | R12 on the slip path (the traction, stored at 0xfed1ec: its purpose), the cells; R0 dead; R13, R14 saved |
+  | steer 0xfeb2df | `sub.h R0, 6A[R25]; mov.h 6A[R25], R0` | `jmp <stub>` + 2 nops | 0xfeb2e7 | as above (0xfeb2e7 sets the flags) | while locked: +0x177, a counter, and R0 left as it was (dead from 0xfeb339) |
+  | engine 0xffa390 | `mov.w 15A[R19], R0; cmp.w #7D0, R0` | `jmp <stub>` + 6 nops | 0xffa39c | as above | R0 (the engine sound's level + the engine note: its purpose); the flags its own compare's |
+  | grip 0xfeb43d | `mov.w 5011A8[PC], R20` | `jmp <stub>` + nop | 0xfeb444 | all but the flags (0xfeb444's add sets them) | R20 (the grip base - 16: its purpose) |
+  | squeal 0xffa46e | `sub.w #16C, R0` | `jmp <stub>` + nop | 0xffa475 | as above (0xffa475's test sets them) | R0 (\|L\| - 280, at least 180 while slipping: its purpose) |
+  | opp 0xfec7a7 | `mov.w R0, 48[R25]; mov.w 19C[R25], R19` | `jmp <stub>` + 3 nops | 0xfec7b0 | as above (0xfec7b0's compare sets them) | R0 x 0.97, then the site's own two instructions (R19 by the second) |
+
+- **The stubs** (block "handling stubs", boot 0xfffea0, 0x150 bytes, 323 used; one after the other in the sites' order, 0x26-0x2c
+  bytes each, entries 0xfffea0, 0xfffec8, 0xfffef0, 0xffff18, 0xffff40, 0xffff6c, 0xffff93, 0xffffba): `cmp.b #1, 502296; bne dry;
+  cmp.b #0, 520000; be dry; jmp <the wet routine>; dry: <the site's original instructions>; jmp <the site's end>`. Every site is a
+  `jmp` (its nops never run; the prototype called three stubs with `jsr`: a jump back is cheaper on the opponents' site, run 15
+  times a pass). The dry labels: 0xfffeba, 0xfffee2, 0xffff0a, 0xffff32, 0xffff5a, 0xffff86, 0xffffad, 0xffffd4. The grip's original
+  `mov.w 5011A8[PC], R20` is PC-relative: the dry path reads the same address in the absolute form (`2d 34 f3 a8115000`, the same
+  length). A DRY pass pays, per call, the site's jump, the test, its branch and the jump back: 41.5 us on the mean DRY race pass
+  (about 22 calls: the opponents' site 15, the engine and squeal sites once, the physics sites 0.7-0.84 a pass).
+- **The wet routines** (the storm image, in this build 0x5231d4..0x523785, 1 457 bytes; entries slide 0x5231d4, brake 0x523325,
+  wspin 0x523452, steer 0x5235ec, engine 0x52362c, grip 0x52367b, squeal 0x5236c5, opp 0x523728, the module's `frame` 0x52375f;
+  the carrier lays them out, so they move with the modules before them): each begins `cmp.b #14, 501138; be race; jmp <its stub's
+  dry label>`. The gate of the player's rules: `cmp.w #FE8E18, A[R]; bne; cmp.w #0, 501160; bgt; cmp.h #0, 191[R]; bne; test1 #7,
+  152[R]; bne` (R the player: R25 in the physics code, R19 in the sound code). The values are the build's immediates (tune.HandlingTune:
+  the design's table; handling.py's named constants for the prototype's others). A RAIN race pass on which no rule fires pays about
+  0.17 ms for them (every gate evaluated).
+- **The cells** (zeroed at each load; 28 bytes after the rain's, in this build 0x520b80): the state word (bytes: the lock, the spin
+  cool-down, the slip mark, the lock count), the engine note (rpm added to the engine sound), then counters (spins fired, locks,
+  locked logic frames, slip logic frames, steering skips). `frame` (after the rain's): the time guard, then outside the race mode the
+  state word and the engine note cleared.
+
+## 29. The storm's sound (weather stage 6, `weather/sound.py`, `weather/thunder_gen.py`, `weather/layout.py`)
+
+(The join: the RAM addresses in this section are this stage's own branch's; with the five modules laid out together they moved: the
+joined build's are in §30, generated from the layout.)
+
+The sound board (MAME 0.289's `segam1audio`): a 68000 at 10 MHz running `epr-14870a.7` (the zip holds it word-swapped), two MultiPCM
+chips (28 voices each, 44 643 Hz) whose sample ROMs are `mpr-14873.32` (chip 1) and `mpr-14876.4` (chip 2), a YM3438. The V60 sends a
+16-bit word as two bytes through the latch 0xc40000 (its queue 0x503020, entry 0xffa246 with R0 the word; at most one word a frame).
+The program's main loop runs once a YM3438 tick, 17.9 ms. Since stage 6 the build reads and writes these three members
+(`RomSet.sound_program` / `sound_pcm1` / `sound_pcm2`); with `weather=False` they are written back unchanged.
+
+- **The sound numbers** (8 bytes each at 0x58a + 8 (n - 1): a header pointer, a handler). 0x74-0x78 had the do-nothing handler 0x588
+  in the original; they become B074 thunder close, B075 medium, B076 distant (handlers: arm the duck, then the multi-voice handler
+  0xa5e), B077 rain on (0xa5e), B078 rain off (0xa5e). A header: the track count, a byte
+  0xa5e copies to 0xf00002/3, then per track the work area (32 bits), 0x80, the voice byte (bit 5 chip 2, bits 0-4 the voice
+  selector), the track's address, 0x40, 0 (transpose), the level byte, 1; 0xa5e copies those 10 bytes into the work area and clears
+  its other 54 (a restarted track starts clean: its fades too).
+- **The tracks** (bytes the interpreter at 0x1244 reads once a tick): a byte below 0xe0 is a note (its pitch from the table at
+  0x24cc: note 0x30 plays a sample at 20 000 Hz, 0x2c at 15 814.6, 0x1c at 6 294.3) followed by its length in ticks; e3 n waits n
+  ticks (a tie after a note); f1 s sample; e2 v level (ignored while a fade runs); fc from to rate fade-in; f2 rate fade-out (+8 every
+  rate + 1 ticks to 0xfe); ea hi lo jump; e4 end (key off, the work area freed). Work area fields: +0 bit 7 active, +1 the voice byte,
+  +8 the level byte (total level = byte >> 1, 0.375 dB a step), +0x19 bit 7 fading out / bit 2 fading in, +0x2d the fade's rate,
+  +0x2e its counter, +0x37 a fade-in's target.
+- **Thunder** (SoundTune: thunder_db -1.5 adds tk = 8 to every level byte; delays 17 / 34 / 50 ticks): close = crack track
+  (work area 0xf00f80, chip 2 voice 0x14: e3 17, f1 110, e2 tk, note 0x30 for 24 ticks, e4) + rumble track (0xf01000, chip 1 voice
+  0x15: e3 17, f1 113, e2 tk, note 0x1c for 255 ticks, e3 108, e4); medium the same with e3 34, notes 0x2e / 0x1a, level 4 + tk;
+  distant one rumble track (e3 50, f1 114, fc 0x50 + tk, tk, 3, note 0x19 for 255 ticks, e3 137, e4).
+- **Rain**: B077's track (0xf01080, chip 2 voice 0x19, level 0x7e): f1 115, fc 0x7e, lv, 1, ea to the loop body; the body: note 0x2c
+  for 255 ticks, 132 x (e3 255), ea to itself (a re-key every 10 minutes). lv = SoundTune.rain_level (0x26, -7.1 dB): the fades step
+  by 8, so lv is 0x06 + 8 k. B078: the rain's track restarted at level lv: f2 0, e3 36, e4 (fade to silence, key off). A thunder
+  already sounding is not touched: it finishes its sample (the rumble's track keys off 363 ticks after its note, 6.52 s at the
+  measured tick of 17.957 ms; the distant one 392 ticks, 7.04 s; the crack 24 ticks).
+- **The patches** (each site's first instructions become a `jmp abs.l` to a routine in the erased run from 0xac00; a branch's
+  displacement word left behind is dead):
+  - 0x26e `bsr 1c42; bsr c9e` -> `jsr duck; nop`: the duck routine runs the delay (0xf01400.w: at 0 the target 0xf01405 := the armed
+    depth 0xf01406 and the hold 0xf01402.w := 67), the hold (at 0 the target := 0), moves the current depth 0xf01404 toward the target
+    (4 steps a tick down, 1 up) and, when it moved, rewrites the level of every active sample track (0x1670) but the crack's and the
+    rumble's; then the two calls.
+  - 0x548 `bsr 19d4; bra 1aec` (the reset 8100's second call and tail; its first call, `bsr 117e` at 0x544, stays: 0x117e
+    reloads the YM3438's timer A, so the ticks restart at v0.3's moment) -> `jmp reset; nop`: the second call, our three voices
+    keyed off (0x16e6 with D7 = 0x15, 0x34, 0x39), the duck's eight bytes cleared, `jmp 1aec` (three dead nops keep the routine
+    out/p75storm's length).
+  - 0x550 `andi.b #1, d0; beq 562` (the tunnel word C2xx) -> `jmp tunnel`: the tunnel bit (0xf00012 bit 1) as before; with the rain's
+    work area active, C201 starts its fade-out (+0x2d 0, +0x2e 0, +0x19 bit 2 off, bit 7 on), C200 its fade-in back to its level
+    (+0x2d 1, +0x2e 0, bit 7 off, bit 2 on).
+  - 0x17f2 `btst #5, d7; bne 182a` (the chip register write: D5 register, D6 value, D7 voice byte) -> `jmp level`: a level write
+    (D5 = 5) of a voice but 0x34 and 0x15 while the duck is down gets twice the duck added (0xfe at most; D0 saved), then the two
+    original paths (0x17fa chip 1, 0x182a chip 2).
+    Its cost (38 cycles a non-level write on chip 1, 42 on chip 2; 66 / 70 a level write) on the 168 writes of the power-on
+    initialisation (0x191a), before 0x117e starts the YM3438's timer A, would put every tick 8 288 cycles (828.8 us) behind v0.3's
+    for good: patch 4 gives them back.
+  - 0x982 `lea $f00000.l, a0; move.w #$1ff6, d4` (the boot's RAM clear; its loop at 0x98c, `move.w #0, (a0)+; dbra`, 180 050
+    cycles in all) -> `jmp clear; nop x2`: the same 0x3fee bytes cleared by longs (`moveq #0, d0`; 4 091 x `move.l d0, (a0)+`;
+    `move.w d0, (a0)+`), then `move.w #8168, d4; dbra d4, *` (81 702 cycles), then `jmp $994.w`: 8 288 cycles fewer than the
+    original. D0, D4 and A0 end as the original leaves them. The ticks are then v0.3's within 4 us (fix round 2: DRY write for write but for the poll's race); the
+    main loop's timer poll (0x1164, 38 cycles) still decides a word that reaches the board within 3.8 us of a tick boundary.
+  - The thunder handlers: `move.w #(delay - 4), 0xf01400; move.b #steps, 0xf01406; jmp a5e` (steps = SoundTune.duck_steps: 11 / 8 /
+    6, 4.125 / 3.0 / 2.25 dB).
+- **Samples** (12-bit, two points in three bytes; a table entry of 12 bytes at 12 n: start with bit 22 set, loop point, minus the
+  length, then attack 15, release 15): chip 2 entry 110 the crack (0x600, 7 000 points, its loop on its last point, a 0), entry 115
+  the rain (0x2f10, 31 629 points, loop point 0); chip 1 entry 113 the rumble (0x600, 40 912 points), entry 114 the same data from point
+  3 776 (0.6 s). Generated by `thunder_gen` (no input; deterministic; the prototype's bytes).
+- **The V60's triggers**: the storm module `sound`, last in the carrier's frame order, no hook site (THE TRIGGERS in sound.py's
+  docstring). Its cells: rain (byte), seen (byte), nrain, nthunder, late (words; since round 2 the passes it ran on late). It reads lightning's `strike_seq` and
+  `strike_band` (their low bytes).
+- **Layout** (`weather/layout.py`, owner "sound"): "sound code" 0xac00 (0x500; 980 bytes used, the clear routine last
+  at 0xafb4), the five code sites (0x26e, 0x548, 0x550, 0x982, 0x17f2), "sound numbers" 0x922 (40),
+  "chip 1 samples" 0x600 (0xf000), "chip 1 sample table" (entries 113-114), "chip 2 crack entry", "chip 2 rain entry", "chip 2
+  samples" 0x600 (0xe300).
+
+## 30. The joined storm (weather, the join: `weather/carrier.py`, `weather/layout.py`, `weather/tune.py`)
+
+Generated from the joined layout (`carrier.lay_out(carrier.default_modules(rs))`, out/p80j/scripts/ramtable.py); the per-stage
+tables of §25-§29 give each stage's own branch's addresses, which moved when the modules came together. Registry order: cover,
+lightning, rain, handling, sound (cells, code and tables laid out in that order). The joined figures: the cap `RAIN_BUSY_MAX_MS`
+17.9 ms (the count's move by 17.486 ms, a unit in flight of at most `UNIT_MAX_US` 200 us, a tail of at most `TAIL_US` 160 us);
+the worst pass measured on the twenty RAIN races 17.70 ms.
+
+- **Storm RAM** (0x520000..0x53efff):
+
+| RAM | owner | what | bytes |
+|---|---|---|---|
+| 0x520000..0x5200ff | carrier | SWITCH, STATE, PENDING, LOADKEY, the counters | 256 |
+| 0x520100..0x520100 | cover | cell `under_cover` | 1 |
+| 0x520104..0x5201f7 | cover | cell `state` | 244 |
+| 0x5201f8..0x5205b7 | cover | cell `cst` | 960 |
+| 0x5205b8..0x52069b | lightning | cell `state` | 228 |
+| 0x52069c..0x52069f | lightning | cell `strike_seq` | 4 |
+| 0x5206a0..0x5206a3 | lightning | cell `strike_band` | 4 |
+| 0x5206a4..0x520723 | rain | cell `state` | 128 |
+| 0x520724..0x520ea3 | rain | cell `clusters` | 1920 |
+| 0x520ea4..0x521123 | rain | cell `pool` | 640 |
+| 0x521124..0x521127 | handling | cell `state` | 4 |
+| 0x521128..0x52112b | handling | cell `slip_rev` | 4 |
+| 0x52112c..0x52112f | handling | cell `fires` | 4 |
+| 0x521130..0x521133 | handling | cell `locks` | 4 |
+| 0x521134..0x521137 | handling | cell `lock_frames` | 4 |
+| 0x521138..0x52113b | handling | cell `slip_frames` | 4 |
+| 0x52113c..0x52113f | handling | cell `steer_skips` | 4 |
+| 0x521140..0x521140 | sound | cell `rain` | 1 |
+| 0x521144..0x521144 | sound | cell `seen` | 1 |
+| 0x521148..0x52114b | sound | cell `nrain` | 4 |
+| 0x52114c..0x52114f | sound | cell `nthunder` | 4 |
+| 0x521150..0x521153 | sound | cell `late` | 4 |
+| (cells end 0x521154) | | | 4180 of module cells |
+| 0x522000..0x5220d8 | carrier | body, release, guards (image) | 217 |
+| 0x5220dc..0x523839 | cover | code (image) | 5982 |
+| 0x52383c..0x5246c4 | lightning | code (image) | 3721 |
+| 0x5246c8..0x525981 | rain | code (image) | 4794 |
+| 0x525984..0x525f34 | handling | code (image) | 1457 |
+| 0x525f38..0x526005 | sound | code (image) | 206 |
+| 0x526008..0x526287 | cover | table `drops` (image) | 640 |
+| 0x526288..0x526387 | lightning | table `patterns` (image) | 256 |
+| 0x526388..0x526447 | lightning | table `dirs` (image) | 192 |
+| 0x526448..0x5264ab | lightning | table `turns` (image) | 100 |
+| 0x5264ac..0x5264db | lightning | table `bolts` (image) | 48 |
+| 0x5264dc..0x52661b | rain | table `drops` (image) | 320 |
+| (image end 0x52661c) | | | 17948 of 32768 |
+| 0x52a000 | rain | data `overcast` | |
+| 0x52d000 | rain | data `boot` | |
+| 0x530000 | lightning | data `whiteout` | |
+| 0x533000 | cover | data `table` | |
+| 0x533470 | lightning | data `course` | |
+| 0x539e90 | rain | data `sky` | |
+| 0x53a2a0 | rain | data `own` | |
+| (data end 0x53a6a0) | | | 67232 of 86016 |
+
+- **Room** (`layout.room` on the joined build; every block fits): the storm stub 1 276 of 1 472 (the block grown at the join from
+  0x500: 0xfff120..0xfff6e0; the boot ROM's erased run 0xfff6e0..0xfffea0 free, 1 984 bytes, before the handling's stubs at
+  0xfffea0); the storm image 17 948 of 20 480 since the join's round 2 (bank 3 0x1df4c0; in RAM 0x522000..0x52661b); storm data 24 576 of 24 576; storm
+  course data 12 032 of 13 056; lightning data 201 844 of 204 800; the polygon ROM's three object blocks full (rain 64 448 from
+  0xfda424, cover 12 160 from 0xfe9fe4, lightning 69 088 from 0xfef200); module cells 4 180 of 7 936; storm RAM data 67 232 of
+  86 016; the handling's stubs 323 of 336; the sound program 980 of 1 280.
+- **The contract's figures with every module on** (carrier.py's docstring, re-measured at the join with storm_makeup.lua and the
+  storm logger's B lines on the twenty RAIN races): from the scenery routine's return to the first guard test 4.9-5.1 us (the
+  cover, first, tests at once; stage 2: 47.5-51.5); the load pass 83.5 us from the scenery routine's return to its end (stage 2:
+  40); the release 360 us (stage 2: 349; RELEASE_US_MAX 400); the longest unit between two guard tests 151 us; the unit in flight at
+  the count's move at most 80 us; the tail from the guard's trip to the pass's end, round 1: 182 us after a trip in the rain's
+  splash loop (its late path then visited every remaining slot), 195.5 once; round 2 (J1 the sound's trigger exempt from the
+  guard, J2 the late splash path in one string fill; Metropolis and Bay Bridge reverse): 58 us at most naturally, 72 us forced at
+  the splash loop's head with 40 live slots and the trigger sending two words, 149 us forced in the first module (every module's
+  late path, the trigger sending two words). The sound's trigger, an allowed unguarded unit: 7 us idle, 25-32 us with a thunder
+  and a rain word (SOUND_TRIGGER_US 40). UNIT_MAX_US 200, TAIL_US 160 (round 1: 190; stage 2: 31), RAIN_BUSY_MAX_MS 17.9 >=
+  17.486 + 0.200 + 0.160 = 17.846 (round 1: 17.876; stage 2: 17.8). The worst pass measured: the findings' "Join" section.
+- **The rain's state words** gained SPLIVE and LV at the end in round 2 (the live splash count and this pass's alive slots before
+  a late trip; 29 words in the 128-byte `state` cell). The sound's `late` cell counts the passes it ran on late ("sent on a late
+  pass"; it sends all the same).

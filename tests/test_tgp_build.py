@@ -227,20 +227,19 @@ _SEVEN: dict = {}
 def _built(romset_zip, saturn_cue):
     """build_all's result once per session (Phase 26: the reverse tests make a second set from it without the variant)."""
     from vrtools.arcade.tencourse import build_all
-    key = str(romset_zip)
-    if key not in _BUILT:
-        _BUILT[key] = build_all(RomSet.from_zip(romset_zip), saturn_cue)
-    return _BUILT[key]
+    from tests.session_cache import cached                     # a failed build cached, not rebuilt (weather Task 7)
+    return cached(_BUILT, str(romset_zip), lambda: build_all(RomSet.from_zip(romset_zip), saturn_cue))
 
 
 def _seven(romset_zip, saturn_cue):
     """build_all + ten_course_set once per session (the six drives share it)."""
     from vrtools.arcade.tencourse import ten_course_set
-    key = str(romset_zip)
-    if key not in _SEVEN:
+    from tests.session_cache import cached
+
+    def make():
         out, conv = _built(romset_zip, saturn_cue)
-        _SEVEN[key] = (ten_course_set(out, conv), conv)
-    return _SEVEN[key]
+        return ten_course_set(out, conv), conv
+    return cached(_SEVEN, str(romset_zip), make)
 
 
 _PLAIN: dict = {}
@@ -250,11 +249,12 @@ def _seven_plain(romset_zip, saturn_cue):
     """Phase 33: the session's set built WITHOUT the three originals' reverse variants (`originals_reverse=False`): the set as
     it was before Phase 33, for the tests of an entry without a variant and as the reference the full set is compared with."""
     from vrtools.arcade.tencourse import ten_course_set
-    key = str(romset_zip)
-    if key not in _PLAIN:
+    from tests.session_cache import cached
+
+    def make():
         out, conv = _built(romset_zip, saturn_cue)
-        _PLAIN[key] = (ten_course_set(out, conv, originals_reverse=False), conv)
-    return _PLAIN[key]
+        return ten_course_set(out, conv, originals_reverse=False), conv
+    return cached(_PLAIN, str(romset_zip), make)
 
 
 @pytest.mark.parametrize("k", range(1, 7))                                   # the six new courses (Alpine is Phase 7's gate)

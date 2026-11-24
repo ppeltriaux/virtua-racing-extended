@@ -277,7 +277,7 @@ def test_check_names_the_rom_files_mame_needs_beyond_the_build(tmp_path, romset_
     and a set without them builds and then does not run. A missing one is a problem; a mismatched CRC a warning."""
     from vrtools.arcade.romset import OTHER_FILES
     from vrtools.cli import main
-    assert len(OTHER_FILES) == 13 and "93c45.bin" in OTHER_FILES and "epr-14870a.7" in OTHER_FILES
+    assert len(OTHER_FILES) == 10 and "93c45.bin" in OTHER_FILES and "opr14742.bin" in OTHER_FILES and "epr-14870a.7" not in OTHER_FILES
     with zipfile.ZipFile(romset_zip) as z:
         names = {Path(i.filename).name for i in z.infolist()}
     if not set(OTHER_FILES) <= names:
@@ -289,10 +289,10 @@ def test_check_names_the_rom_files_mame_needs_beyond_the_build(tmp_path, romset_
             name = Path(info.filename).name
             if name == "93c45.bin":
                 continue
-            dst.writestr(info.filename, bytes(OTHER_FILES[name][0]) if name == "epr-14870a.7" else src.read(info.filename))
+            dst.writestr(info.filename, bytes(OTHER_FILES[name][0]) if name == "opr14742.bin" else src.read(info.filename))
     rc = main(["check", "--roms", str(d), "--saturn", str(saturn_cue), "--out", str(tmp_path / "out")])
     out = capsys.readouterr().out
-    assert rc == 1 and "93c45.bin" in out and "epr-14870a.7" in out and "warning" in out
+    assert rc == 1 and "93c45.bin" in out and "opr14742.bin" in out and "warning" in out
 
 
 def test_seconds_too_short_is_a_usage_error(tmp_path, romset_zip, saturn_cue):
@@ -319,3 +319,27 @@ def test_parse_tune_rejects_nan_and_inf():
     for bad in ("ALPINE:pace=nan", "ALPINE:time_factor=inf", "ALPINE:pace=-inf"):
         with pytest.raises(ValueError):
             parse_tune([bad])
+
+
+@pytest.mark.parametrize("argv,want", [([], True), (["--no-weather"], False)])
+def test_no_weather_reaches_the_build(tmp_path, monkeypatch, argv, want):
+    """Weather stage 1: `build` builds with the COURSE WEATHER screen; `--no-weather` gives ten_course_set weather=False (the set as
+    before the weather feature, for comparisons), and `weather_tunes` None (the join's one rule for tunes: the design's defaults from the
+    command line). The build's inputs and conversions are stubbed; ten_course_set records what it is
+    given and stops the build (a PatchError: return code 2)."""
+    from types import SimpleNamespace
+    from vrtools import cli
+    from vrtools.arcade.patch import PatchError
+    seen = {}
+
+    def ten(patched, converted, **kw):
+        seen.update(kw, patched=patched, converted=converted)
+        raise PatchError("stop here")
+    monkeypatch.setattr(cli, "check_inputs", lambda roms, saturn, out: SimpleNamespace(ok=True, lines=[]))
+    monkeypatch.setattr(cli.RomSet, "from_zip", staticmethod(lambda *a, **k: "rs"))
+    monkeypatch.setattr(cli, "tgp_budget", lambda rs: 0)
+    monkeypatch.setattr(cli, "build_all", lambda rs, saturn, plans: ("patched", ["conv"]))
+    monkeypatch.setattr(cli, "ten_course_set", ten)
+    rc = cli.main(["build", "--roms", str(tmp_path), "--saturn", str(tmp_path / "x.cue"), "--out", str(tmp_path / "out")] + argv)
+    assert rc == 2 and seen == {"weather": want, "weather_tunes": None, "patched": "patched", "converted": ["conv"]}, (rc, seen)
+    # (the join: the weather's tunes go to ten_course_set too, None from the command line: the design's defaults)

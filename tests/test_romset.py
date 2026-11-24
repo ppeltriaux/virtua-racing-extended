@@ -128,3 +128,35 @@ def test_zip_wrong_size_and_crc_reported(tmp_path):
 def test_expected_table_covers_required_files():
     from vrtools.arcade.romset import EXPECTED
     assert set(EXPECTED) == set(REQUIRED_FILES)
+
+
+def test_the_sound_members_are_read_and_written():
+    """Weather stage 6: the sound board's program and its two sample ROMs are members the build reads and writes (the storm's sounds
+    are patched into them): the program as the 68000 sees it (the zip holds it word-swapped, ROM_LOAD16_WORD_SWAP), the sample ROMs as
+    they are; to_files gives the files back unchanged; a set made without them (a writer's synthetic set) has None and writes none."""
+    from vrtools.arcade.romset import SOUND_PROGRAM, SOUND_PCM1, SOUND_PCM2
+    files = _files(**{SOUND_PROGRAM: bytes([1, 2, 3, 4, 5, 6, 7, 8]), SOUND_PCM1: b"c1" * 4, SOUND_PCM2: b"c2" * 4})
+    rs = RomSet.from_files(files)
+    assert rs.sound_program == bytes([2, 1, 4, 3, 6, 5, 8, 7]) and rs.sound_pcm1 == b"c1" * 4 and rs.sound_pcm2 == b"c2" * 4
+    assert rs.to_files() == files
+    bare = RomSet(rs.program, rs.boot, rs.data, rs.polygons, rs.copro_data, rs.tgp_program)
+    assert bare.sound_program is None and not {SOUND_PROGRAM, SOUND_PCM1, SOUND_PCM2} & set(bare.to_files())
+
+
+def test_the_members_read_and_never_read():
+    """28 members are read (verified by size and CRC), 10 never read; the sound members moved from the second list to the first."""
+    from vrtools.arcade.romset import EXPECTED, OTHER_FILES, SOUND_FILES
+    assert len(EXPECTED) == 28 and len(OTHER_FILES) == 10 and set(SOUND_FILES) <= set(EXPECTED)
+    assert not set(SOUND_FILES) & set(OTHER_FILES) and not set(EXPECTED) & set(OTHER_FILES)
+    assert EXPECTED["epr-14870a.7"] == (0x20000, 0x919D9B75)
+
+
+def test_no_writer_copies_a_set_field_by_field():
+    """A writer that copied a set as RomSet(rs.program, ..., rs.tgp_program) dropped the members it did not name (the sound board's,
+    weather stage 6): every module of vrtools copies with dataclasses.replace, which keeps them all."""
+    import re
+    from pathlib import Path
+    root = Path(__file__).resolve().parents[1] / "vrtools"
+    found = [f"{p.relative_to(root)}:{src[:m.start()].count(chr(10)) + 1}" for p in root.rglob("*.py") if p.name != "romset.py"
+             for src in [p.read_text()] for m in re.finditer(r"\bRomSet\(", src)]
+    assert found == []

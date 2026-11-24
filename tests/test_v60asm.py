@@ -56,6 +56,21 @@ FORMS = [
     ("pop reg", ("r25",), "pop R25"),
     ("pushm imm", (0x38E,), "pushm #38E"),
     ("popm imm", (0x38E,), "popm #38E"),
+    # weather stage 2 (the rain's code): the float group, the string moves
+    ("mulf.s reg,reg", ("r1", "r2"), "mulf.s R1, R2"),
+    ("addf.s imm,reg", (1.5, "r3"), "addf.s #3FC00000, R3"),
+    ("subf.s abs,reg", (0x501B24, "r19"), "subf.s 501B24, R19"),
+    ("cmpf.s abs,reg", (0x501B00, "r3"), "cmpf.s 501B00, R3"),
+    ("cmpf.s imm,reg", (-0.6, "r14"), "cmpf.s #BF19999A, R14"),
+    ("movf.s disp[reg],reg", (0x10, "r6", "r15"), "movf.s 10[R6], R15"),
+    ("movf.s imm,reg", (1.0, "r11"), "movf.s #3F800000, R11"),
+    ("negf.s reg,reg", ("r1", "r1"), "negf.s R1, R1"),
+    ("divf.s reg,reg", ("r4", "r5"), "divf.s R4, R5"),
+    ("mulf.s abs(reg),reg", (0x501B00, "r7", "r0"), "mulf.s 501B00(R7), R0"),
+    ("cvt.ws reg,reg", ("r0", "r1"), "cvt.ws R0, R1"),
+    ("cvt.sw reg,reg", ("r11", "r1"), "cvt.sw R11, R1"),
+    ("movcu.h [reg],reg,[reg],reg", ("r0", "r3", "r1", "r3"), "movcu.h [R0], R3, [R1], R3"),
+    ("movcfu.h [reg],imm,[reg],reg", ("r11", 0, "r11", "r9"), "movcfu.h[R11], #0, [R11], R9"),     # unidasm pads the mnemonic to 8: none left
 ]
 
 

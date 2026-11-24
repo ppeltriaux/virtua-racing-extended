@@ -7,6 +7,7 @@ them (the whole program ROM is the colour table: colours.py); they are never pla
 
 from __future__ import annotations
 
+import dataclasses
 import struct
 
 from vrtools.arcade.colours import TABLE_BASE, palette_from_rom
@@ -41,7 +42,7 @@ def install_far_copies(rs: RomSet, tile_table: int, palette_course: int, far_cel
     and a report: "cells" {cell: records, records_before, bytes, colour_entries}, "polygon_bytes", "colour_entries",
     "colour_first", "added_records". PatchError when an object passes `max_records`, or the room is missing."""
     from vrtools.convert.geometry import assign_colours
-    out = RomSet(rs.program, rs.boot, rs.data, rs.polygons, rs.copro_data, rs.tgp_program)
+    out = dataclasses.replace(rs)
     report = {"cells": {}, "polygon_bytes": 0, "colour_entries": 0, "colour_first": None, "added_records": 0}
     if not far_cells:
         return out, report
