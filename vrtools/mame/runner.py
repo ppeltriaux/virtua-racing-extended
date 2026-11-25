@@ -307,6 +307,27 @@ def parse_storm_log(path: Path) -> StormLog:
                     watches=watches, list_hw=list_hw, load_psw=tuple(load_psw))
 
 
+class RainPixels(NamedTuple):
+    """rain_pixels.lua's P line: a race frame's key-coloured pixels and mean relative luminance (0..1)."""
+    frame: int
+    kmh: int
+    magenta: tuple            # the picture's top, middle and bottom thirds
+    cyan: int
+    yellow: int
+    luminance: float
+
+
+def parse_rain_pixels(path: Path) -> list[RainPixels]:
+    """rain_pixels.lua's log (VR_RPIX_LOG), in frame order."""
+    out = []
+    for line in Path(path).read_text().splitlines():
+        p = line.split()
+        if len(p) == 9 and p[0] == "P":
+            v = [int(x) for x in p[1:]]
+            out.append(RainPixels(v[0], v[1], tuple(v[2:5]), v[5], v[6], v[7] / 10000))
+    return out
+
+
 class HandlingFrame(NamedTuple):
     """handling_log.lua's F line (weather stage 5): the player's handling at a frame end, the handling module's cells, the opponents'
     working performance."""

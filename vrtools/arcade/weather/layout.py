@@ -19,6 +19,10 @@ byte address), and its blocks: the stub and its copy lists, the scenery call, th
 bank 3 (where spike 70 stored its image), the rain's polygon objects (spike 70's place) and colour words (spike 70's place), and the
 storm's RAM (carrier.STORM_RAM, laid out there). The carrier places its pieces inside its blocks itself (carrier.install).
 
+v0.4.1 (the streaming rain, docs/superpowers/specs/2026-11-25-streaming-rain-design.md) adds "rain tones": the drops' colour table
+(four tone sets: near, mid, far, lit), in the program ROM's erased run after "screen pieces 3" (0x2be554..0x2be8b0 in main's set);
+"rain colours" keeps the splashes' words.
+
 Stage 3 (the cover; weather/cover.py) adds one block: its 40 single-drop objects in the polygon ROM right after the rain's objects
 (where spike 70 put them); its code, cells, table and per-course tables go in the storm's own blocks.
 
@@ -82,7 +86,11 @@ TABLE = (
     Block("storm data", "bank3", 0x1E44C0, 0x6000, "carrier"),            # the static tables (the overcast and the boot's colour tables)
     Block("storm course data", "bank3", 0x1EA4C0, 0x3300, "carrier"),     # per course: its grey sky; stage 3: its cover table
     Block("rain objects", "polygon", 0xFDA424, 0xFBC0, "rain"),           # 40 drop objects, 12 splash objects
-    Block("rain colours", "program", 0x28FF80, 0x60, "rain"),             # 34 drop and 12 splash colour words (spike 70's place)
+    Block("rain colours", "program", 0x28FF80, 0x60, "rain"),             # 12 splash colour words (spike 70's place; v0.4's 34 drop
+                                                                          # words moved to "rain tones")
+    Block("rain tones", "program", 0x2BE560, 0x100, "rain"),              # v0.4.1: the drops' colour table, 4 sets x 29 words (232
+                                                                          # bytes), after "screen pieces 3" in the colour-table run's
+                                                                          # erased tail, below the direction screen's block (0x2be8b0)
     # stage 3: the cover (weather/cover.py)
     Block("cover objects", "polygon", 0xFE9FE4, 0x2F80, "cover"),         # 40 single-drop objects (spike 70's place, after the rain's)
     Block("storm RAM cells", "ram", 0x520000, 0x2000, "carrier"),         # carrier.CARRIER_CELLS, MODULE_CELLS

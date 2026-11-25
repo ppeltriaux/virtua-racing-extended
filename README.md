@@ -1,4 +1,4 @@
-# Virtua Racing Extended v0.4
+# Virtua Racing Extended v0.4.1
 
 Virtua Racing Extended is the 1992 Sega Model 1 arcade Virtua Racing with ten courses: its own three
 (Big Forest, Bay Bridge, Acropolis) and the seven the 1995 Saturn port added (Alpine, Amazon Falls,
@@ -12,10 +12,10 @@ https://continuearcade.com/virtua-racing-extended/
 This repository is a patch: one command builds the game on your machine from your own copies of the
 arcade game and of the Saturn port. It holds none of either (see "What is in the patch").
 
-> **v0.4 is an early release, not a finished one.** All ten courses load and race, with opponents,
+> **v0.4.1 is an early release, not a finished one.** All ten courses load and race, with opponents,
 > pit lanes, walls, checkpoints, the in-race map and a best-time table per course, all ten can be
 > raced in reverse and in the rain, but the tuning and the finish are still being worked on: see
-> "Known issues in v0.4" and "Planned".
+> "Known issues in v0.4.1" and "Planned".
 
 ## What you need
 
@@ -100,6 +100,22 @@ you want them.
 (`pace`), its checkpoint time extensions (`time_factor`) and sets its race length (`laps`, 1 to 7);
 repeat `--tune` per course. The defaults are 5 laps and the values the build was tested with.
 
+## What's new in v0.4.1
+
+Upgrading from v0.4 keeps every best time already saved: the tables are unchanged. The rain's new look was tuned by play over
+several test builds; the release build was then driven by hand briefly.
+
+- **The rain streams with your speed:** at rest it falls as before; as you speed up the drops lean toward you (about 30 degrees at
+  100 km/h, 45 at 170, never more than 60, never flat) and stretch into long thin streaks with a brighter head, white near the car
+  and greyer in the distance. A lightning flash lights every streak bright white for a moment. The road splashes stay, as many as
+  before. The screens, the lightning, the sound and the handling are as in v0.4.
+- **Known issue (new in this update):** at three tunnel exits (Metropolis's roof by the pits, Alpine, and Bay Bridge in reverse)
+  a long streak or two can reach into the opening just before the exit, more than in v0.4; the other three exits show fewer stray
+  drops than before.
+- **Tested:** all twenty races in the rain with the test autopilot in MAME 0.289 (the arcade's rate, never a stale picture; the
+  rain's pixels on screen at speed compared with v0.4's on the same race; the splashes a second within 10 % of v0.4's on every
+  course); the lightning's flash rule read from the picture itself, the lit rain in it. A DRY race is unchanged.
+
 ## What's new in v0.4
 
 Each item says how it was tested. Upgrading from v0.3 keeps every best time already saved: the tables are unchanged.
@@ -125,7 +141,7 @@ Each item says how it was tested. Upgrading from v0.3 keeps every best time alre
 ## What's new in v0.3
 
 Each item says how it was tested. The release build itself was tested in MAME with the test autopilot and has not
-been played by hand (see "Known issues in v0.4"). Upgrading from v0.2 or v0.2.1 keeps every best time already saved.
+been played by hand (see "Known issues in v0.4.1"). Upgrading from v0.2 or v0.2.1 keeps every best time already saved.
 
 - **The table you just raced comes first:** after a race you finish, the attract mode's first ranking page now shows
   the best-time table of the course and direction you just raced (normal or reverse, with or without a new best time),
@@ -166,7 +182,7 @@ The trees, the far buildings and the palms were tested in MAME with the test aut
 
 ## What's new in v0.2.1
 
-Built and tested with the test autopilot in MAME; not yet played by hand (see "Known issues in v0.4").
+Built and tested with the test autopilot in MAME; not yet played by hand (see "Known issues in v0.4.1").
 
 - **Best times for reverse races:** each of the seven converted courses keeps its four best reverse times, apart from
   its normal table. A reverse race that finishes at or under the fourth time asks for your name, as a normal race does,
@@ -236,12 +252,12 @@ Built and tested with the test autopilot in MAME; not yet played by hand (see "K
 
 The game the patch builds changes on those four courses only. v0.1.1 changed the tests only.
 
-## Known issues in v0.4
+## Known issues in v0.4.1
 
-- **Weather (new in v0.4):** at the exit of a tunnel a few stray drops can show at the opening's edge (Alpine in both
-  directions, Bay Bridge and Metropolis's long tunnel in reverse). On Metropolis the buildings still hide much of the lightning
-  bolt on about half the strikes (the sky flash and the thunder still come). The rain's look, sound and handling were tuned by play on four
-  courses (see "What's new in v0.4"), not on all ten.
+- **Weather:** at three tunnel exits (Metropolis's roof by the pits, Alpine, and Bay Bridge in reverse) a long streak of rain or
+  two can reach into the opening just before the exit (more than in v0.4, since the streaks are long now); the other exits show
+  fewer stray drops than v0.4. On Metropolis the buildings still hide much of the lightning bolt on about half the strikes (the
+  sky flash and the thunder still come). The rain's look, sound and handling were tuned by play on a few courses, not on all ten.
 - **Linked play (two cabinets):** not supported yet. A linked game cannot race a converted course, and has no COURSE WEATHER
   screen. The patch is for one cabinet.
 - **Not yet played by hand:** the reverse best times (the seven converted courses' since

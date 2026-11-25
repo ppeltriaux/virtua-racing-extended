@@ -547,10 +547,33 @@ Status: **open** (still in the build), **fixed** (was a deviation, no longer), *
   interrupts only across its load's copy lists (the final review's W8: `weather/carrier.py`'s contract). Measured
   in MAME 0.289 only. In this stage it also rains inside
   tunnels (stage 3 adds cover). `docs/spike/2026-11-phase80-weather-findings.md` (stage 2).
+  **Since v0.4.1 the rain streams with the car's speed** (by design; `docs/superpowers/specs/2026-11-25-streaming-rain-design.md`,
+  as Pascal drove and approved it on 25 Nov 2026: "ok i think we r good, let s publish this update, update the website rain video
+  with this one and make a release"): at rest and to walking pace the fall above; with speed the drops lean toward the direction of
+  travel by atan(v / 170 km/h), at most 60 degrees, and move along that lean; each drop two crossed flat strips a quarter of v0.4's
+  width, longer with speed (2.1 times at 150 km/h, 9 times from 330), its leading 35 % one tone brighter; three depth bands white
+  to grey (never blue: only the palette's near-neutral entries); on the lightning's sky flashes every streak the palette's
+  brightest white and three times as wide (the cluster's five drops spread with it, as driven), one tone brighter for 6 passes
+  after, nothing under cover; from 27 km/h the drops no longer land and the splashes are placed by rule (2.85 a pass, uniform on
+  the car's ground plane within 12 units sideways and 3-35 units ahead, outside the car's box, none under cover, near a tunnel or
+  roof only on the camera's side of its mouth) at v0.4's
+  rate within 10 % on every course. The cover's single drops (the pits roof's curtain's edge) are the same strips, leaned and toned
+  as the rain beside them; the curtain's whole clusters are the rain's own drawing. The lit rain changes only the rain's colour
+  words and width, never palette RAM or the colour RAM: the flash rule's measure cannot see it, so the tests read the picture
+  itself (`test_weather_lightning.py`). DRY and the attract are unchanged. The figures: the findings, "Streaming rain".
 - **Cover** (by design; its known limitations below are open, still in the build; weather stage 3). In a RAIN race no drop and no splash under the arcade's
   flagged tunnels and roofs (Metropolis's long tunnel and the roof by the pits with its pit lane, Alpine's tunnel, Bay Bridge's own
   tunnel); approaching, the rain stops at the mouth; inside, rain is seen beyond the exit in the opening and the car drives out
   into it. As Pascal approved it: "the long tunnel in metropolis is perfect", then of the roof by the pits "short tunnel is good".
+  **Since v0.4.1 (the streaming rain)** the exits' stray drops are long leaning streaks at speed: an exit's stray drop crosses its
+  edge with more pixels than v0.4's short drop did. Measured on the three taped trajectories (`tests/test_weather_cover.py`'s
+  OWN_LEAKS, px over a pass / its worst frame): Metropolis normal (the pits roof's exit) 966 / 74 (v0.4: 8 / 3; its worst frame one
+  streak over the wall beside the opening at 123 km/h), Alpine 1 404 / 173 (1 490 / 84), Bay Bridge reverse 376 / 17 (40 / 6);
+  better on Metropolis reverse 318 / 21 (912 / 61), Alpine reverse 194 / 7 (1 048 / 59), Bay Bridge normal 71 / 8 (123 / 32). The
+  pits roof's whole clusters are tested with the streaks' length and depth reach (`cover.py`), which took Metropolis normal's worst
+  frame from 125 to 74 px; the long tunnel's curtain clusters are drawn whole as before (the sort hides what lies behind the
+  portal), their streaks leaning toward the camera. A known issue of v0.4.1 by the session lead's ruling (the public README says
+  so); the fix is the first item of `docs/follow-ups.md`'s streaming rain entry.
   Short unflagged roofs and bridges keep their rain (the session lead's proposal, not objected). The high view (VR4) puts the camera
   above the pits roof: rain falls on the roof there. The arcade has no weather. Under the pits roof the exit's rain is sparser
   (about 38 drops in view, the prototype's) and lies on the end opening's plane, as in the prototype Pascal approved (stage 3

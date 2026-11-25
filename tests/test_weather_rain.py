@@ -16,6 +16,7 @@ from pathlib import Path
 
 import pytest
 
+from vrtools.arcade.patch import PatchError
 from vrtools.arcade.select import WHEEL_FOR_ENTRY
 from vrtools.arcade.budget import FRAME_BUDGET
 from vrtools.mame.framerate import RAIN_BUSY_MAX_MS, arcade_rate_misses, worst_busy
@@ -109,30 +110,210 @@ def test_the_rain_subset_selection():
 
 # ---- static: the prototype's values ---------------------------------------------------------------------------------------------
 def test_rain_tune_defaults_and_bounds():
-    """RainTune: S5.3's values (300 drops in 60 clusters of 5, splashes within 35 units, 6-frame splashes); others refused."""
+    """RainTune: S5.3's values (300 drops in 60 clusters of 5, splashes within 35 units, 6-frame splashes) and v0.4.1's streaming rain
+    as Pascal drove it (docs/superpowers/specs/2026-11-25-streaming-rain-design.md: the lean atan(v / 170 km/h) to 60 degrees, a
+    quarter of v0.4's width, the head's 35 %, the length 2.1 at 150 km/h and 9 from 330, the far depth 16 -> 8 with its top bias, the
+    bands cut at 0.33 and 0.55, the six tones, the lit rain x3 wide with 6 passes of afterglow, the splash rule from 27 km/h at 2.85
+    a pass); others refused, among them a lean that could go flat and a tone that is not near-neutral (Pascal: "this is wrong, the
+    water is blue")."""
     from vrtools.arcade.weather.tune import RainTune
     t = RainTune()
     assert (t.drops, t.clusters, t.splash_range, t.splash_frames) == (300, 60, 35.0, 6)
+    assert (t.lean_kmh, t.lean_max_deg, t.width, t.head) == (170.0, 60.0, 0.25, 0.35)
+    assert (t.length_kmh, t.length, t.place_depth, t.place_top_power, t.place_up) == ((150.0, 330.0), (2.1, 9.0), (16.0, 8.0), 3, 0.10)
+    assert t.band_cuts == (0.33, 0.55)
+    assert t.tones == ((29, 30, 31), (27, 28, 29), (25, 26, 26), (22, 23, 24), (22, 23, 24), (19, 20, 20)) and t.lit_tone == (31, 31, 31)
+    assert (t.lit_width, t.afterglow, t.splash_kmh, t.splash_rate) == (3.0, 6, 27.0, 2.85)
+    round6_far = ((29, 30, 31), (24, 25, 28), (19, 21, 27), (16, 18, 24), (12, 15, 24), (10, 13, 21))   # spike 87 round 6: blue
     for bad in ({"drops": 299}, {"clusters": 61, "drops": 305}, {"clusters": 0, "drops": 0}, {"splash_range": 3.0},
-                {"splash_range": 45.5}, {"splash_frames": 5}):
+                {"splash_range": 45.5}, {"splash_frames": 5}, {"lean_max_deg": 82.0}, {"lean_max_deg": 0.0}, {"lean_kmh": 20.0},
+                {"width": 0.05}, {"width": 1.5}, {"head": 0.0}, {"length": (9.0, 2.1)}, {"length": (0.5, 9.0)},
+                {"length_kmh": (330.0, 150.0)}, {"place_depth": (8.0, 16.0)}, {"place_depth": (16.0, 3.0)}, {"place_top_power": 0},
+                {"place_up": 0.5}, {"band_cuts": (0.55, 0.33)}, {"band_cuts": (0.0, 0.5)}, {"tones": round6_far},
+                {"tones": t.tones[:5]}, {"lit_tone": (31, 31, 28)}, {"lit_width": 5.0}, {"afterglow": -1}, {"splash_kmh": 80.0},
+                {"splash_rate": 7.0}):
         with pytest.raises(ValueError):
             RainTune(**bad)
     assert RainTune(drops=200, clusters=40).clusters == 40
 
 
-def test_the_drop_objects():
-    """8 shapes of 5 box drops, each in 5 variants (all its drops, then without the lowest, the two lowest, ...: 34, 27, 20, 13, 6
-    records), padded to one size; the drop table (per shape and drop its x and bottom); the bytes are the prototype's (spike 48's
-    narrower drops, seed 45)."""
+def lean_model(v: float, tune=None) -> dict:
+    """The pass's choices `rain.Rain.choose` makes for the car's speed v km/h, in Python (its docstring's formulas)."""
+    import math
+    from vrtools.arcade.weather.tune import RainTune
+    t = tune or RainTune()
+    tl = min(max(v / t.lean_kmh, 0.0), math.tan(math.radians(t.lean_max_deg)))
+    (v1, v2), (l1, l2), (d1, d2) = t.length_kmh, t.length, t.place_depth
+    u = min(max((v - v1) / (v2 - v1), 0.0), 1.0)
+    length = 1 + (l1 - 1) * min(max(v / v1, 0.0), 1.0) + (l2 - l1) * u
+    k = length / math.sqrt(1 + tl * tl)
+    zfv = d1 + (d2 - d1) * u
+    return {"tan": tl, "deg": math.degrees(math.atan(tl)), "length": length, "K": k, "T": tl * k, "ZFV": zfv,
+            "cuts": tuple(zfv * c for c in t.band_cuts), "move": v >= t.splash_kmh}
+
+
+def test_the_lean_rule(romset_zip, saturn_cue):
+    """The lean (design point 2): atan(v / 170 km/h), at most 60 degrees: 30 degrees at 100 km/h, 41 at 150, 50 at 200, 56 at 250,
+    60 from about 295; vertical at rest; never flat at any speed the car reaches. The length (point 3): 1 at rest, 2.1 at 150 km/h, 9
+    from 330; the far depth 16 to 150 km/h, 8 from 330; the drop's axis keeps that length (the y column's length K sqrt(1 + t^2) is
+    L). The emitted code holds the rule's constants (`choose`: the speed's scale 1 / lean_kmh, the cap tan 60, FALL for the depth
+    step, the length's and the depth's scales)."""
+    import math
+    from vrtools.arcade.v60asm import asm
     from vrtools.arcade.weather import rain
-    objs, size, records, faces, table = rain.drop_objects()
-    assert len(objs) == 40 and size == 1424 and records == 34 and all(len(o) == size for o in objs)
-    assert faces[:7] == ["L", "H", "F", "R", "J", "T", "J"] and faces.count("T") == 5
-    assert len(table) == 8 * 5 * 8
-    assert hashlib.sha256(b"".join(objs)).hexdigest()[:16] == "e5bb302fb676e1d7"
-    assert hashlib.sha256(table).hexdigest()[:16] == "3f78bdb14d994890"
-    widths = [w for shape in rain.shapes() for _, _, w, _, _ in shape]
-    assert len(widths) == 40 and 0.035 <= min(widths) and max(widths) <= 0.05          # Pascal: "narrower drops"
+    from vrtools.arcade.weather.tune import RainTune
+    want = {0: 0.0, 100: 30.0, 150: 41.0, 200: 50.0, 250: 56.0, 295: 60.0, 340: 60.0}
+    for v, deg in want.items():
+        assert abs(lean_model(v)["deg"] - deg) < 0.6, (v, lean_model(v)["deg"])
+    assert lean_model(0)["K"] == 1.0 and lean_model(0)["T"] == 0.0 and not lean_model(26)["move"] and lean_model(27)["move"]
+    assert abs(lean_model(150)["length"] - 2.1) < 1e-9 and abs(lean_model(330)["length"] - 9.0) < 1e-9
+    assert lean_model(150)["ZFV"] == 16.0 and lean_model(330)["ZFV"] == 8.0 and abs(lean_model(400)["deg"] - 60.0) < 1e-9
+    for v in (60, 150, 240, 330):
+        m = lean_model(v)
+        assert abs(m["K"] * math.sqrt(1 + m["tan"] ** 2) - m["length"]) < 1e-9
+    code = b"".join(it for it in _rain_items(romset_zip, saturn_cue)[1] if isinstance(it, bytes))
+    t = RainTune()
+    for form, args in (("mulf.s imm,reg", (1.0 / t.lean_kmh, "r2")), ("cmpf.s imm,reg", (math.tan(math.radians(60.0)), "r2")),
+                       ("mulf.s imm,reg", (rain.FALL, "r3")), ("mulf.s imm,reg", (1.0 / 180.0, "r8")),
+                       ("mulf.s imm,reg", (-8.0, "r3")), ("addf.s imm,reg", (16.0, "r3")), ("mulf.s imm,reg", (1.1, "r1")),
+                       ("mulf.s imm,reg", (6.9, "r8")), ("cmpf.s imm,reg", (27.0, "r1"))):
+        assert asm(form, *args) in code, (form, args)
+
+
+def _rain_items(romset_zip, saturn_cue, names=("cover", "lightning", "rain", "handling", "sound")):
+    """(the layout, the rain's code items) of the registry's modules `names` on the session's converted set."""
+    from tests.test_tgp_build import _seven
+    from vrtools.arcade.weather import carrier
+    out, _ = _seven(romset_zip, saturn_cue)
+    mods = [m for m in carrier.default_modules(out) if m.name in names]
+    lay = carrier.lay_out(mods)[0]
+    return lay, next(m for m in mods if m.name == "rain").code(lay).items
+
+
+def test_the_pass_choices_are_made_once_a_pass(romset_zip, saturn_cue):
+    """The pass's choices (lean, length, far depth, band cuts, colour set, width, the splash rule's rate) are one unit of `frame`
+    before its cluster loop: one guard test before them, no loop inside them, and the cluster loop reads none of their inputs (the
+    car's speed, the lightning's LEVEL, the cover's under_cover); it reads their results (LEANK, LEANT, WCUR, the bands) from the
+    rain's cells. The lit table is the lightning's own flash levels (lightning.FLASH_OF_LEVEL not 0: the sky flashes and the
+    white-out; the bolt alone is none)."""
+    from vrtools.arcade.v60asm import asm
+    from vrtools.arcade.weather import carrier, lightning, rain as R
+    lay, items = _rain_items(romset_zip, saturn_cue)
+    lab = {it[1]: k for k, it in enumerate(items) if isinstance(it, tuple) and it[0] == "label"}
+    k0 = lab["fr_on"]
+    k1 = lab["c_loop"]
+    region = items[k0:k1]
+    guard = asm("cmp.b imm,abs", 0, carrier.VBL)
+    assert sum(1 for it in region if it == guard) == 1
+    inside = {it[1] for it in region if isinstance(it, tuple) and it[0] == "label"}
+    assert not [it for it in region if isinstance(it, tuple) and it[0] != "label" and it[1] in inside and
+                lab[it[1]] < region.index(it) + k0], "a loop in the pass's choices"
+    loop = b"".join(it for it in items[k1:lab["syn_loop"]] if isinstance(it, bytes))
+    level = lay.cell("lightning", "state") + 4 * lightning.STATE_NAMES.index("LEVEL")
+    for addr in (R.SPEED, level, lay.cell("cover", "under_cover")):
+        assert asm("mov.w abs,reg", addr, "r0") not in loop and addr.to_bytes(4, "little") not in loop, hex(addr)
+    for n in ("LEANK", "LEANT", "WCUR", "PN", "PM", "PF", "CUTA", "CUTB"):
+        assert R.cell(lay, n).to_bytes(4, "little") in loop, n
+    choose = b"".join(it for it in region if isinstance(it, bytes))
+    assert level.to_bytes(4, "little") in choose and R.SPEED.to_bytes(4, "little") in choose
+    assert R.lit_table() == bytes((0, 1, 1, 1, 1, 0, 0, 0)) and len(lightning.FLASH_OF_LEVEL) == lightning.LEVELS == 7
+    assert [bool(f) for f in lightning.FLASH_OF_LEVEL] == [bool(b) for b in R.lit_table()[:7]]
+
+
+def test_the_rain_builds_and_rains_without_the_lightning_or_the_cover(romset_zip, saturn_cue):
+    """The lit rain reads the lightning's LEVEL only when the lightning is in the build: the rain alone, and the rain with the cover
+    but no lightning, still build (their code never names a lightning cell; no lit rain then), and so does the full set."""
+    from vrtools.arcade.weather import carrier
+    from tests.test_weather_carrier import _stage1
+    s1 = _stage1(romset_zip, saturn_cue)
+    for names in (("rain",), ("cover", "rain"), ("cover", "lightning", "rain", "handling", "sound")):
+        mods = [m for m in carrier.default_modules(s1) if m.name in names]
+        built, rep = carrier.build(s1, mods)
+        lay = rep["layout"]
+        assert ("lightning" in names) == (("lightning", "state") in lay.cells)
+        items = next(m for m in mods if m.name == "rain").code(lay).items
+        assert sum(1 for it in items if it == ("label", "ch_glow")) == ("lightning" in names)
+
+
+def test_the_drop_objects():
+    """8 shapes of 5 drops, each drop two crossed flat strips (design point 3) a quarter of v0.4's width, its head the leading 35 %
+    (point 4), every record drawn from both sides; each shape in 5 variants (all its drops, then without the lowest, the two lowest,
+    ...: 29, 23, 17, 11, 5 records), padded to one size; the drop table (per shape and drop its x and bottom, as v0.4's: the same
+    shapes, seed 45); the polygon ROM's bytes before and after: 56 960 for v0.4's 40 boxes, 48 960 now (8 000 of the block free)."""
+    from vrtools.arcade.weather import rain
+    from vrtools.arcade.weather.tune import RainTune
+    objs, size, records, faces, table = rain.drop_objects(RainTune())
+    assert len(objs) == 40 and size == 1224 and records == 29 and all(len(o) == size for o in objs)
+    assert faces[:8] == ["H", "T", "J", "H", "T", "J", "H", "T"] and faces.count("H") == 10 and faces.count("T") == 10
+    assert len(table) == 8 * 5 * 8 and hashlib.sha256(table).hexdigest()[:16] == "3f78bdb14d994890"      # v0.4's drop table
+    assert hashlib.sha256(b"".join(objs)).hexdigest()[:16] == DROP_OBJECTS
+    widths = [w for shape in rain.shapes(width=0.25) for _, _, w, _, _ in shape]
+    assert len(widths) == 40 and 0.25 * 0.035 <= min(widths) and max(widths) <= 0.25 * 0.05
+    assert [h for shape in rain.shapes(width=0.25) for _, _, _, h, _ in shape] == [h for shape in rain.shapes() for _, _, _, h, _ in shape]
+    d = rain.strips(0.0, 0.0, 0.01, 1.0, 0.0, 0.35)
+    assert [r[0] for r in d] == ["J", "H", "T"] * 2 and abs(d[1][2][1] - (-0.5 + 0.35)) < 1e-12 and d[2][2][1] == 0.5
+    import struct as st
+    flags = [st.unpack_from("<I", objs[0], 24 + 40 * k)[0] for k in range(records)]
+    assert all(f & rain.NOCULL for f in flags)
+    sobjs = rain.splash_objects(6)
+    from vrtools.arcade.weather import layout
+    assert len(objs) * size + len(sobjs) * len(sobjs[0]) == layout.block("rain objects").size - 8000
+
+
+DROP_OBJECTS = "67ed236e4ace086c"         # the streaming rain (v0.4.1); v0.4's boxes: "e5bb302fb676e1d7"
+
+
+def test_the_colour_picks(romset_zip, saturn_cue):
+    """The colour table (design point 5, white to grey, never blue; point 6, the lit rain): the six depth tones and the lit tone
+    picked from the near-neutral entries of the polygon palette only (under the grade: the channels within 2, R <= G <= B), equal to
+    the build Pascal approved (spike 87 round 7, play_fx3): near head / tail 124 / 834, mid 872 / 713, far 713 / 199, lit 6; four
+    sets of a word per record (H the head's tone, T the tail's, J the next record's) in the layout block "rain tones"; the splashes'
+    words v0.4's (ring 126, droplets 124, the ring's last stages 99) in "rain colours"."""
+    from tests.test_tgp_build import _seven
+    from vrtools.arcade.weather import layout, rain
+    from vrtools.arcade.weather.tune import RainTune
+    out, _ = _seven(romset_zip, saturn_cue)
+    pal = rain.polygon_palette(out)
+    assert len(pal) == 897 and pal[40] == pal[41] == 0
+    assert rain.tone_picks(out, RainTune()) == [(124, 834), (872, 713), (713, 199), (6, 6)]
+    assert [tuple(rain.shown(pal[i]) for i in p) for p in rain.tone_picks(out, RainTune())] == \
+        [((29, 30, 31), (27, 28, 29)), ((25, 26, 26), (22, 23, 24)), ((22, 23, 24), (19, 20, 20)), ((31, 31, 31), (31, 31, 31))]
+    assert {c: rain.pick(pal, t) for c, t in rain.SPLASH_COLOURS.items()} == {"ring": 126, "drop": 124, "ring_late": 99}
+    _, _, records, faces, _ = rain.drop_objects(RainTune())
+    words = rain.tone_words(out, faces, RainTune())
+    assert len(words) == 4 * records == 116 and all(w & 0xC00 == 0xC00 for w in words)
+    assert 2 * len(words) <= layout.block("rain tones").size and layout.block("rain tones").space == "program"
+    near = words[:records]
+    assert [w & 0x3FF for w, f in zip(near, faces) if f == "H"] == [124] * 10 and set(w & 0x3FF for w in words[3 * records:]) == {6}
+    assert [near[k] & 0x3FF for k in range(3)] == [124, 834, 124]           # head, tail, the jump the next head's
+    sp = rain.splash_words(out, 6)
+    assert len(sp) == 12 and sp[-4] & 0x3FF == sp[-2] & 0x3FF == 99 and sp[0] & 0x3FF == 126
+    assert 2 * len(sp) <= layout.block("rain colours").size
+
+
+def test_the_tones_are_never_blue(romset_zip, saturn_cue):
+    """Design point 5's rules on the tones as shown (under the grade): every head and tail near-neutral, each tail no brighter than
+    its head, each band no brighter than the one nearer it, the far head no darker than the overcast sky's grey. The approved tones
+    hold them; spike 87 round 6's bluer tones, planted (picked from the whole palette as that build did), FAIL them (Pascal of that
+    build: "this is wrong, the water is blue"), and the build refuses a tone set that breaks them."""
+    from tests.test_tgp_build import _seven
+    from vrtools.arcade.weather import rain
+    from vrtools.arcade.weather.tune import RainTune
+    out, _ = _seven(romset_zip, saturn_cue)
+    pal = rain.polygon_palette(out)
+    shown = [(rain.shown(pal[h]), rain.shown(pal[t])) for h, t in rain.tone_picks(out, RainTune())]
+    assert rain.tone_faults(shown) == []
+    round6 = [((29, 30, 31), (24, 25, 28)), ((19, 21, 27), (16, 18, 24)), ((12, 15, 24), (10, 13, 21)), ((31, 31, 31), (31, 31, 31))]
+    planted = [(rain.shown(pal[rain.pick(pal, h)]), rain.shown(pal[rain.pick(pal, t)])) for h, t in round6]
+    faults = rain.tone_faults(planted)
+    assert any("far head" in f and "not near-neutral" in f for f in faults) and any("darker than the overcast" in f for f in faults)
+    dark = [shown[0], shown[1], (shown[2][0], (16, 17, 18)), shown[3]]     # a far tail grey but not lighter than the road (design
+    assert rain.tone_faults(dark) == [f"the far tail (16, 17, 18) is not lighter than the road {rain.ROAD_GREY}"]   # point 5); a far
+                                                                           # head below the sky (next)
+    assert any("darker than" in f for f in rain.tone_faults([shown[0], shown[1], ((18, 19, 20), (17, 18, 19)), shown[3]]))
+    _, _, _, faces, _ = rain.drop_objects(RainTune())
+    with pytest.raises(PatchError, match="far head"):
+        rain.tone_words(out, faces, RainTune(tones=RainTune().tones[:4] + ((16, 17, 18), (15, 16, 17))))
 
 
 def test_the_splash_objects():
@@ -142,23 +323,6 @@ def test_the_splash_objects():
     sp = rain.splash_objects(6)
     assert len(sp) == 12 and {len(o) for o in sp} == {24 + 14 * 40 + 40}
     assert hashlib.sha256(b"".join(sp)).hexdigest()[:16] == "f09536f35e8a09d7"
-
-
-def test_the_colour_picks_are_the_prototypes(romset_zip, saturn_cue):
-    """The colour words, picked from the program ROM's polygon palette (the boot's copy source; the two entries the game changes left
-    out) with the prototype's targets under the grade, are the prototype's (picked from its palette dump): the drops' left,
-    highlight, front, right and top faces 255, 124, 361, 222, 24; the splashes' ring 126, droplets 124, the ring's last stages 99."""
-    from tests.test_tgp_build import _seven
-    from vrtools.arcade.weather import rain
-    out, _ = _seven(romset_zip, saturn_cue)
-    pal = rain.polygon_palette(out)
-    assert len(pal) == 897 and pal[40] == pal[41] == 0
-    assert {f: rain.pick(pal, t) for f, t in rain.GLASS.items()} == {"L": 255, "H": 124, "F": 361, "R": 222, "T": 24}
-    assert {c: rain.pick(pal, t) for c, t in rain.SPLASH_COLOURS.items()} == {"ring": 126, "drop": 124, "ring_late": 99}
-    _, _, _, faces, _ = rain.drop_objects()
-    drops, splashes = rain.colour_words(out, faces, 6)
-    assert len(drops) == 34 and len(splashes) == 12 and all(w & 0xC00 == 0xC00 for w in drops + splashes)
-    assert splashes[-4] & 0x3FF == splashes[-2] & 0x3FF == 99 and splashes[0] & 0x3FF == 126
 
 
 def test_the_grey_sky():
@@ -252,7 +416,9 @@ def test_the_late_splash_path_is_constant_time(romset_zip, saturn_cue):
     allcode = b"".join(it for it in items if isinstance(it, bytes))
     assert asm("add.w imm,abs", 1, splive) in allcode and asm("sub.w imm,abs", 1, splive) in allcode
     assert asm("add.w reg,abs", "r0", trim) in code and asm("mov.w abs,abs", lv, splive) in code
-    assert list(R.STATE_NAMES[-2:]) == ["SPLIVE", "LV"] and R.STATE_NAMES.index("REC_OUT") == 26     # storm_log.lua's indices kept
+    assert R.STATE_NAMES.index("REC_OUT") == 26 and R.STATE_NAMES.index("SPLIVE") == 27 and R.STATE_NAMES.index("LV") == 28
+    assert R.STATE_NAMES[29:] == ("MOVE ZST LEANK LEANT ZFV SPADD SPACC AGLOW PN PM PF WCUR CUTA CUTB".split())   # v0.4.1, after LV:
+    # storm_log.lua's indices kept
 
 
 # ---- the runs -----------------------------------------------------------------------------------------------------------------
@@ -320,8 +486,11 @@ class StormSession:
         if "cover" in lay.codes:                       # the join: the cover's state with every S line (C lines: what a pass was)
             from vrtools.arcade.weather import cover
             env.update(cover.log_env(lay))
-        if "sound" in lay.codes:                       # the join: the sound's thunders sent (its cell nthunder) on every W line
-            env["VR_STORM_WATCH"] = f"{lay.cell('sound', 'nthunder'):x}"
+        if "sound" in lay.codes:                       # the join: the sound's thunders sent (its cell nthunder) on every W line;
+            from vrtools.arcade.weather import rain    # v0.4.1: the rain's splashes spawned second (test_weather_streaming.py)
+            env["VR_STORM_WATCH"] = ",".join(f"{a:x}" for a in (lay.cell('sound', 'nthunder'), rain.cell(lay, 'SPAWNS'),
+                                                                  rain.cell(lay, 'WCUR'), rain.cell(lay, 'AGLOW')))
+            # (WCUR, AGLOW: the lit rain's passes, which the cover's pixel measures judge with the lit white: its fix round 1, F3)
         return env
 
     def _make(self, key):
@@ -513,8 +682,10 @@ AFTER_SECONDS = 80
 # 1600; in its countdown (the race starts after 1840: HUD_SNAPS) the load key is poked to entry RELOAD_OTHER's at the end of frame
 # RELOAD_POKE, with junk over the grey sky's first two colours in the storm's DATA; dumps before and well after (the restart's start
 # passes and the grade's rows done).
-RELOAD_POKE, RELOAD_OTHER, RELOAD_JUNK = 1700, 5, 0x7C1F7C1F
-RELOAD_DUMPS = (1690, 1830)
+RELOAD_POKE, RELOAD_OTHER, RELOAD_JUNK = 1760, 5, 0x7C1F7C1F
+RELOAD_DUMPS = (1750, 1900)             # v0.4.1, the streaming rain: its start fills more passes to the guard, so the grade's fade
+                                        # ends later (gate1: 9 rows left at 1690, done by 1801 after a poke at 1700); the poke and both
+                                        # dumps moved so each dump comes after a complete grade (the comparison itself unchanged)
 RELOAD_SECONDS = 40
 
 

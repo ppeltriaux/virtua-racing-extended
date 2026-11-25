@@ -1,12 +1,52 @@
-"""Weather stage 2: the rain, as the owner approved it (spec 5.3): 300 narrow solid 3D box drops falling with a slight wind slant in a
-volume round the camera, anchored to the world sideways when the car turns, ending on the road with a splash fixed to the road; an
-overcast grade over the 3D picture and each course's backdrop greyed. A module of the storm's carrier (weather/carrier.py: its RAM
-contract); its RAM cells, tables and code are laid out there.
+"""Weather stage 2: the rain, as the owner approved it (spec 5.3), streaming with the car's speed since v0.4.1: 300 thin 3D drops in a
+volume round the camera, falling with v0.4's slight wind slant at rest and leaning toward the direction of travel with speed, anchored
+to the world sideways when the car turns, landing on the road with a splash fixed to the road below walking pace and splashing by rule
+above it; an overcast grade over the 3D picture and each course's backdrop greyed. A module of the storm's carrier (weather/carrier.py:
+its RAM contract); its RAM cells, tables and code are laid out there.
 
-Pascal's path to it (17 Nov 2026): stippled streaks and flat screen streaks rejected; "rectangleish drops falling with depth
+Pascal's path to v0.4's rain (17 Nov 2026): stippled streaks and flat screen streaks rejected; "rectangleish drops falling with depth
 perspective", "transparent 3d paralellepipedes"; of the streaming drops "they should probably still be falling down"; solid faces
 kept (stipple reads as a grid); "One thing that feel missing is the impact on the road, it look like they're floating"; "narrower
 drops"; of the flash a late pass made, "like a flash"; then "the rain is good". Haze: "just look like a grid" (none).
+
+THE STREAMING RAIN (v0.4.1; docs/superpowers/specs/2026-11-25-streaming-rain-design.md, every value a RainTune field). Pascal asked on
+20 Nov for the rain to be brought closer, as a test, to another racing game's, whose rain streams with the speed (his words are in the
+design); 25 Nov: "can you now review the weather link i ve sent you before and try to see if we can mimic this effect but
+keeping the road splash?". Driven on spike 87's throwaway builds the same day: a lean to 82 degrees, "i dont like it, i think the rain
+should go to horrizontal, it should be like in the video about maybe 45 degree? but please double check. also we might want to make
+the rain drops a bit thiner" (read: not horizontal; about 45 to 55 degrees at 205 km/h in the footage); the lean capped, 0.7 width:
+"this is much better, can we try thiner rain and also at speed i got the feeling the rain doesnt feel the screen or is less intense
+can you check"; 0.5: "this is great, let s try to see if we devide the rain width by half"; 0.35: "i think this is even better than
+the previous one"; 0.25: "this is great let s keep it. one more thing, would you recommand some effect in the rain drop? think extra
+hard and ask questions"; chosen: "Depth shading", "Lightning lights the rain", "Bright head, fading tail", colour "White, as now";
+"is this one with the effects?", "i think the 2 i ve tried need to be stronger"; of the head "yes it s good"; of a bluer far band
+"this is wrong, the water is blue"; of white to grey (play_fx3): "ok i think we r good, let s publish this update, update the website
+rain video with this one and make a release". Ported from spike 87 (b2dd844, mk87.py's "fx3") by rewriting into this module's form:
+  1. at rest and to walking pace v0.4's rain (its fall, its slant, its landings and splashes);
+  2. the lean: the drops' axis leans toward the direction of travel by atan(v / lean_kmh), at most lean_max_deg (30 degrees at 100
+     km/h, 41 at 150, 50 at 200, 56 at 250, 60 from about 295); the clusters move along it: FALL down and ZST = FALL tan(lean)
+     nearer a pass; a moving cluster that leaves the view (nearer than ZNEAR, out of its top as it comes nearer, out of its bottom)
+     comes back inside it, at a depth uniform from ZMIN to the far depth ZFV and a height biased to the view's top;
+  3. thin, long streaks: each drop two crossed flat strips (`strips`) a quarter of v0.4's width (a one-pixel line at most depths),
+     drawn from both sides; their length grows with speed (the drop's y column scaled to length / sqrt(1 + tan^2): 2.1 times at 150
+     km/h, 9 from 330), the far depth ZFV shrinks (16 units to 150 km/h, 8 from 330);
+  4. bright head, fading tail: the leading 35 % of each strip (the end it travels toward, the bottom) one tone brighter;
+  5. depth shading, white to grey, never blue: three bands cut at band_cuts of ZFV, each its head and tail tones from the near-neutral
+     palette entries only (`tone_words`, `tone_faults`), in the colour table (layout block "rain tones": four sets of a word per
+     record, near, mid, far, lit);
+  6. lightning lights the rain: on every pass the lightning's LEVEL is a flash (the sky flashes and the white-out:
+     lightning.FLASH_OF_LEVEL not 0; the rain's table `lit`) every band the lit set (the palette's brightest white) and the drops
+     lit_width wide (the matrix's x and z columns: the cluster's five drops spread with them, as driven), then for `afterglow`
+     passes each band one set brighter at its normal width; none of it while the cover's under_cover is set, none without the
+     lightning in the build (it reads the lightning's LEVEL cell: lightning.py's interface; carrier.READ_AFTER_WRITE orders it);
+  7. splashes: below splash_kmh (MOVE 0) the drops land and splash as v0.4's; at or above it (MOVE 1) they do not land and the splash
+     rule (`synthetic`) spawns splash_rate a pass (v0.4's rate at race speeds) where v0.4's landings fall: uniform within LAT
+     sideways and ZDRAW..splash_range ahead, on the car's ground plane (the plane the landing tests: on the road), outside the car's
+     box, none after a late pass and none under cover (the cover's mode 2 or 3); near a tunnel or roof with the camera outside (mode
+     1) only on the camera's side of the nearest mouth's plane.
+The pass's choices (lean, length, far depth, band cuts, colour sets, width, the rule's rate) are made once a pass by `choose`, one
+unit after the guard before the cluster loop; the clusters read its results from the rain's cells (the cover's single drops too:
+weather/cover.py's `pd`).
 
 Ported (rewritten from the listings, the values unchanged) from spike 46 (`spike/p46_rain.py`: the clusters, their motion, the
 overcast and the skies), spike 47/48 (`spike/p48_rain.py`: landing, splashes, the narrower drops, the guard, mode 0x13) as spike 70
@@ -18,15 +58,16 @@ the grade copies GRADE_ROWS rows a pass of the overcast table built here (the sa
 one row a pass always and up to 8 while no vblank had come: the grade faded in over about 34 passes at the pit box, "~1.2 s", which
 3 rows a pass keeps: 32 passes); every row waits for the guard too (the prototype's first row did not).
 
-A rain pass (the carrier's SHOW state), as spike 48's: the car's speed gives the slant (wind / fall + 0.05 per unit a frame, at most
-0.30), the yaw's change shifts every cluster sideways by depth x angle (the rain stays with the world when the car turns); each of
-the 60 clusters (5 drops, one of 8 shapes, a random tilt) falls 0.32 and drifts 0.05 a pass in view space, wraps at the sides, and
-goes back to the top at a new depth (3.6 + 41.4 r^2) once out of the bottom or with all its drops landed; a drop lands when its
-bottom reaches the car's ground plane in view space (the camera matrix 0x501b00 and the car's ground contact and pitch); a landing
-1 to 35 units deep, within 12 units sideways and outside the car's box spawns a splash (a 40-entry ring, world coordinates, 6
-stages, drawn sheared onto the ground plane, grown beyond 12 units deep); the clusters are drawn first, then the splashes, each
-only while the frame's records stay within the budget and the pass is not late; after a late pass no new splashes for 3 passes,
-and a late splash loop frees the splashes it did not reach. Then GRADE_ROWS rows of the grade."""
+A rain pass (the carrier's SHOW state): the car's speed gives the slant (wind / fall + 0.05 per unit a frame, at most 0.30), the
+yaw's change shifts every cluster sideways by depth x angle (the rain stays with the world when the car turns); the pass's choices;
+each of the 60 clusters (5 drops, one of 8 shapes, a random tilt) falls 0.32, comes ZST nearer and drifts 0.05 a pass in view space,
+wraps at the sides, and goes back to the top at a new depth (3.6 + 41.4 r^2) once out of the bottom or with all its drops landed (at
+rest), or comes back inside the view (moving); a drop lands (at rest) when its bottom reaches the car's ground plane in view space
+(the camera matrix 0x501b00 and the car's ground contact and pitch); a landing 1 to 35 units deep, within 12 units sideways and
+outside the car's box spawns a splash (a 40-entry ring, world coordinates, 6 stages, drawn sheared onto the ground plane, grown
+beyond 12 units deep); the clusters are drawn first (the leaning matrix, the colour set of their depth band), the rule's splashes
+spawned, then the splashes drawn, each only while the frame's records stay within the budget and the pass is not late; after a late pass
+no new splashes for 3 passes, and a late splash loop frees the splashes it did not reach. Then GRADE_ROWS rows of the grade."""
 from __future__ import annotations
 
 import math
@@ -83,10 +124,15 @@ DY = tuple(SZ * v for v in (0.08, 0.20, 0.27, 0.27, 0.20, 0.08))
 DW = ((0.05, 0.08), (0.06, 0.10), (0.06, 0.10), (0.05, 0.09), (0.05, 0.08), (0.04, 0.06))
 DANG = ((30.0, 150.0, 260.0), (80.0, 200.0, 320.0))
 SEG = 8
+# ---- the streaming rain (v0.4.1; its values are RainTune's fields) -----------------------------------------------------------
+RPD = 6                                 # records a drop: two crossed strips, each its seed edge, its head quad and its tail quad
+ZNEAR = 1.6                             # a moving cluster nearer than this view depth is placed again
+SETS = ("near", "mid", "far", "lit")    # the tone sets of the colour table, in its order: one word per record of the full object each
+ROAD_GREY = (17, 18, 21)                # the road's lightest grey under the grade measured (Metropolis; Big Forest's 15 16 17): every
+                                        # tone lighter (design point 5: build-time, `tone_faults`)
 # ---- polygon and colour words ------------------------------------------------------------------------------------------------
 MOIRE, NOCULL, ZMAX, ZMIN_MODE = 0x2000, 0x4000, 2 << 10, 1 << 10
 FULL = 0xC00                            # colour word mode 3: unlit, full intensity
-GLASS = {"L": (17, 18, 21), "H": (29, 30, 31), "F": (19, 20, 23), "R": (15, 16, 19), "T": (27, 28, 30)}   # targets under the grade
 SPLASH_COLOURS = {"ring": (24, 25, 27), "drop": (29, 30, 31), "ring_late": (20, 21, 24)}
 POLY_PALETTE = 0x2EC980                 # the polygon palette in the program ROM (the boot copies it to 0x902000, 0xfe6b04)
 POLY_PALETTE_END = 0x2ED082
@@ -117,8 +163,9 @@ def cover_cell(lay, name: str) -> int:
 
 
 # ==================================================================================================================== objects
-def shapes(seed: int = SEED) -> list[list[tuple]]:
-    """Per shape the drops (x, y, w, h, turn), as spike 46 drew them (the same random sequence)."""
+def shapes(seed: int = SEED, width: float = 1.0) -> list[list[tuple]]:
+    """Per shape the drops (x, y, w, h, turn), as spike 46 drew them (the same random sequence), each width x `width` (RainTune's
+    width: 0.25; 1 is v0.4's)."""
     rng = random.Random(seed)
     out = []
     for _ in range(NSHAPE):
@@ -130,92 +177,57 @@ def shapes(seed: int = SEED) -> list[list[tuple]]:
         boxes = []
         for x, y in pts:
             th = math.radians(rng.uniform(*TH_R)) * rng.choice((-1, 1))
-            boxes.append((x, y, rng.uniform(*W_R), rng.uniform(*H_R), th))
+            boxes.append((x, y, rng.uniform(*W_R) * width, rng.uniform(*H_R), th))
         out.append(boxes)
     return out
 
 
-def _sub(a, b):
-    return (a[0] - b[0], a[1] - b[1], a[2] - b[2])
-
-
-def _cross(a, b):
-    return (a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0])
-
-
-def _faces_out(q, out) -> bool:
-    """MAME's back-face test keeps the drawn quad q when (q1 - q0) x (q2 - q0) points along `out`."""
-    n = _cross(_sub(q[1], q[0]), _sub(q[2], q[0]))
-    return n[0] * out[0] + n[1] * out[1] + n[2] * out[2] > 0
-
-
-def box(cx, cy, w, h, th) -> list[tuple]:
-    """One drop: records (face, link, p0, p1, normal); a square w x w turned by th about y, h tall, centred at (cx, cy, 0). A quad
-    strip round the left side, a highlight strip on the front's left edge, the front, the right side, then the top (back faces
-    culled by the renderer: the faces the camera sees are drawn)."""
+def strips(cx, cy, w, h, th, head: float) -> list[tuple]:
+    """One streaming drop (v0.4.1): records (face, link, p0, p1, normal) of two crossed flat strips w wide and h tall centred at
+    (cx, cy, 0), the first across x, the second across z; each its seed edge at the bottom (J), the head quad up to head x h (H: the
+    streak's leading end, the end it travels toward), then the tail quad to the top (T). Both sides are drawn (NOCULL), so a strip
+    seen edge-on is the other one seen flat; the turn th is not used (a strip has no sides to turn)."""
     a = w / 2
-    c, s = math.cos(th), math.sin(th)
-
-    def plan(u, v):
-        return (cx + u * c - v * s, u * s + v * c)
-    corners = {"BL": plan(-a, a), "FL": plan(-a, -a), "FR": plan(a, -a), "BR": plan(a, a)}
-    fl, fr = corners["FL"], corners["FR"]
-    corners["M"] = (fl[0] + HL * (fr[0] - fl[0]), fl[1] + HL * (fr[1] - fl[1]))
-    yb, yt = cy - h / 2, cy + h / 2
-    ring = ["BL", "FL", "M", "FR", "BR"]
-    faces = ["L", "H", "F", "R"]
-    norms = {"L": (-c, 0.0, -s), "H": (s, 0.0, -c), "F": (s, 0.0, -c), "R": (c, 0.0, s)}
-    edge = {k: ((x, yb, z), (x, yt, z)) for k, (x, z) in corners.items()}
-    q = (edge["BL"][1], edge["BL"][0], edge["FL"][0], edge["FL"][1])
-    flip = not _faces_out(q, norms["L"])
-    e = {k: (v[::-1] if flip else v) for k, v in edge.items()}
-    recs = [("J", 0, *e["BL"], norms["L"])]
-    for k in range(4):
-        q = (e[ring[k]][1], e[ring[k]][0], e[ring[k + 1]][0], e[ring[k + 1]][1])
-        if not _faces_out(q, norms[faces[k]]):
-            raise PatchError(f"a drop's face {faces[k]} winds inward (turn {th})")
-        recs.append((faces[k], 2, *e[ring[k + 1]], norms[faces[k]]))
-    t = [(corners[k][0], yt, corners[k][1]) for k in ("FL", "FR", "BR", "BL")]
-    if not _faces_out(t, (0.0, 1.0, 0.0)):
-        t = t[::-1]
-    recs.append(("J", 0, t[1], t[0], (0.0, 1.0, 0.0)))
-    recs.append(("T", 2, t[2], t[3], (0.0, 1.0, 0.0)))
-    return recs
+    yb, ym, yt = cy - h / 2, cy - h / 2 + head * h, cy + h / 2
+    n, m_ = (0.0, 0.0, -1.0), (1.0, 0.0, 0.0)
+    return [("J", 0, (cx - a, yb, 0.0), (cx + a, yb, 0.0), n), ("H", 2, (cx - a, ym, 0.0), (cx + a, ym, 0.0), n),
+            ("T", 2, (cx - a, yt, 0.0), (cx + a, yt, 0.0), n),
+            ("J", 0, (cx, yb, -a), (cx, yb, a), m_), ("H", 2, (cx, ym, -a), (cx, ym, a), m_), ("T", 2, (cx, yt, -a), (cx, yt, a), m_)]
 
 
 def _rec(flags, n, p0, p1) -> bytes:
     return struct.pack("<I3f3f3f", flags, *n, *p0, *p1)
 
 
-def cluster_object(boxes) -> tuple[bytes, int, list[str]]:
-    """The first record's points are the seeds; every record after the first steps the colour pointer (flag 12). (bytes, records,
-    each record's face)."""
-    recs = [r for b in boxes for r in b]
+def cluster_object(drops) -> tuple[bytes, int, list[str]]:
+    """The first record's points are the seeds; every record after the first steps the colour pointer (flag 12); every record drawn
+    from both sides (NOCULL: flat strips). (bytes, records, each record's face)."""
+    recs = [r for d in drops for r in d]
     first = recs[0]
     out = struct.pack("<6f", *first[2], *first[3])
     order = []
     for k, (face, link, p0, p1, n) in enumerate(recs[1:]):
-        fl = 0x1 | ZMAX | (link << 8) | (0x1000 if k else 0)
+        fl = 0x1 | ZMAX | NOCULL | (link << 8) | (0x1000 if k else 0)
         out += _rec(fl, n, p0, p1)
         order.append(face)
     out += struct.pack("<I9f", 0, *([0.0] * 9))
     return out, len(order), order
 
 
-def drop_objects(seed: int = SEED) -> tuple[list[bytes], int, int, list[str], bytes]:
-    """Each shape's drops sorted by their bottom; per shape NDROP variants (all its drops, then without the lowest, the two lowest,
-    ...): (the 40 objects padded to one size, that size, the full object's records (34), its faces, the drop table: per shape and
-    drop (x, bottom) as two floats)."""
+def drop_objects(tune: RainTune, seed: int = SEED) -> tuple[list[bytes], int, int, list[str], bytes]:
+    """Each shape's drops (`shapes` at the tune's width) sorted by their bottom, each two crossed strips with the tune's head share;
+    per shape NDROP variants (all its drops, then without the lowest, the two lowest, ...): (the 40 objects padded to one size, that
+    size, the full object's records (29), its faces, the drop table: per shape and drop (x, bottom) as two floats)."""
     objs, table = [], b""
-    for meta in shapes(seed):
+    for meta in shapes(seed, tune.width):
         meta = sorted(meta, key=lambda bx: bx[1] - bx[3] / 2)
-        boxes = [box(*bx) for bx in meta]
+        drops = [strips(*bx, tune.head) for bx in meta]
         for k in range(NDROP):
-            objs.append(cluster_object(boxes[k:]))
+            objs.append(cluster_object(drops[k:]))
         table += b"".join(struct.pack("<2f", x, y - h / 2) for x, y, w, h, th in meta)
     size = len(objs[0][0])
     for k, (o, n, od) in enumerate(objs):
-        if n != objs[0][1] - 7 * (k % NDROP) or od != objs[0][2][:n] or len(o) > size:
+        if n != objs[0][1] - RPD * (k % NDROP) or od != objs[0][2][:n] or len(o) > size:
             raise PatchError(f"the drop object {k} is not the full one less {k % NDROP} drops")
     return [o + b"\0" * (size - len(o)) for o, _, _ in objs], size, objs[0][1], objs[0][2], table
 
@@ -305,17 +317,80 @@ def pick(palette: list[int], target: tuple[int, int, int]) -> int:
     return best[1]
 
 
-def colour_words(rs: RomSet, faces: list[str], frames: int) -> tuple[list[int], list[int]]:
-    """(the drops' sequence, a word per record: a jump record takes the next face's colour; the splashes': per stage the ring,
-    dimmer in the last two stages, and the droplets)."""
+def shown(word: int) -> tuple[int, int, int]:
+    """A palette word's colour (R, G, B, 5 bits each) under the grade at full intensity."""
+    return tuple(shown5((word >> (5 * ch)) & 31, ch) for ch in range(3))
+
+
+def near_neutral(rgb) -> bool:
+    """A near-neutral colour: its channels within 2 of each other and R <= G <= B (v0.4's white's own cast; Pascal of a bluer far
+    band: "this is wrong, the water is blue")."""
+    return rgb[0] <= rgb[1] <= rgb[2] and rgb[2] - rgb[0] <= 2
+
+
+def neutral_palette(palette: list[int]) -> list[int]:
+    """The palette with every entry whose colour under the grade is not near-neutral as 0 (never picked)."""
+    return [w if w and near_neutral(shown(w)) else 0 for w in palette]
+
+
+def tone_sets(tune: RainTune) -> list[tuple[tuple, tuple]]:
+    """(head, tail) targets per set of SETS: near, mid, far (the depth tones), lit (both the lit tone)."""
+    t = tune.tones
+    return [(t[0], t[1]), (t[2], t[3]), (t[4], t[5]), (tune.lit_tone, tune.lit_tone)]
+
+
+def tone_picks(rs: RomSet, tune: RainTune) -> list[tuple[int, int]]:
+    """Per set of SETS the palette entries (head, tail) picked for its targets among the near-neutral entries only."""
+    pal = neutral_palette(polygon_palette(rs))
+    return [(pick(pal, hd), pick(pal, tl)) for hd, tl in tone_sets(tune)]
+
+
+def tone_faults(sets: list[tuple[tuple, tuple]]) -> list[str]:
+    """What breaks the depth tones' rules in `sets` (per set of SETS the shown (head, tail) colours): a colour not near-neutral; the far
+    head darker than the overcast sky's grey (SKY_GREY, rounded); a tone not lighter than the road (ROAD_GREY, by the channels'
+    sum); a band brighter than the one nearer it; a tail brighter than its head. Empty when they hold."""
+    out = []
+    for name, (hd, tl) in zip(SETS, sets):
+        for part, c in (("head", hd), ("tail", tl)):
+            if not near_neutral(c):
+                out.append(f"the {name} {part} {c} is not near-neutral (channels within 2, R <= G <= B)")
+            if sum(c) <= sum(ROAD_GREY):
+                out.append(f"the {name} {part} {c} is not lighter than the road {ROAD_GREY}")
+        if sum(tl) > sum(hd):
+            out.append(f"the {name} tail {tl} is brighter than its head {hd}")
+    sky = tuple(round(v) for v in SKY_GREY)
+    if any(a < b for a, b in zip(sets[2][0], sky)):
+        out.append(f"the far head {sets[2][0]} is darker than the overcast sky's grey {sky}")
+    for (n0, s0), (n1, s1) in zip(zip(SETS, sets), zip(SETS[1:3], sets[1:3])):
+        if sum(s1[0]) > sum(s0[0]):
+            out.append(f"the {n1} head {s1[0]} is brighter than the {n0} head {s0[0]}")
+    return out
+
+
+def tone_words(rs: RomSet, faces: list[str], tune: RainTune) -> list[int]:
+    """The colour table: per set of SETS a word per record of the full drop object (its `faces`: a head record H the set's head
+    tone, a tail record T its tail tone, a jump record J the next record's); PatchError when the picked tones break `tone_faults`."""
+    picks = tone_picks(rs, tune)
     pal = polygon_palette(rs)
-    picks = {f: pick(pal, t) for f, t in GLASS.items()}
-    drops = [FULL | picks[faces[k + 1] if f == "J" else f] for k, f in enumerate(faces)]
+    bad = tone_faults([(shown(pal[h]), shown(pal[t])) for h, t in picks])
+    if bad:
+        raise PatchError("the rain's tones: " + "; ".join(bad))
+    out = []
+    for ph, pt in picks:
+        for k, f in enumerate(faces):
+            g = faces[k + 1] if f == "J" else f
+            out.append(FULL | (ph if g == "H" else pt))
+    return out
+
+
+def splash_words(rs: RomSet, frames: int) -> list[int]:
+    """The splashes' colour words: per stage the ring, dimmer in the last two stages, and the droplets (v0.4's)."""
+    pal = polygon_palette(rs)
     sp = {c: pick(pal, t) for c, t in SPLASH_COLOURS.items()}
     splashes = []
     for t in range(frames):
         splashes += [FULL | sp["ring_late" if t >= frames - 2 else "ring"], FULL | sp["drop"]]
-    return drops, splashes
+    return splashes
 
 
 def rgb555(r, g, b) -> int:
@@ -392,10 +467,17 @@ def _clamp(b: Block, reg: str, lo: float, hi: float, q: str) -> None:
 
 
 STATE_NAMES = ("ACTIVE XSTATE XLEFT LASTYAW RAND DTH SLV DRAWN SPDRAWN SPW PYV PZV TV G0V PXV LATEF PRIMED LANDS SPAWNS LATE TRIM_CL "
-               "TRIM_SP TRIM_LCL TRIM_LSP NFRAMES REC_IN REC_OUT SPLIVE LV").split()
+               "TRIM_SP TRIM_LCL TRIM_LSP NFRAMES REC_IN REC_OUT SPLIVE LV "
+               "MOVE ZST LEANK LEANT ZFV SPADD SPACC AGLOW PN PM PF WCUR CUTA CUTB").split()
 # SPLIVE (the join, round 2, J2): the splash slots alive (age not 0), kept exact (+1 when a spawn takes a dead slot, -1 when a
 # splash ends, set at a late trip); LV: this pass's splash loop's slots processed and still alive. Appended last: storm_log.lua
 # reads the words before them by index.
+# The streaming rain's pass choices (v0.4.1, `choose`, once a pass before the cluster loop; appended after LV): MOVE 1 when the car's
+# speed is at least splash_kmh (the drops do not land, the splashes come by rule), ZST the depth step a pass along the lean (FALL x
+# tan(lean)), LEANK / LEANT the drop's y column's scale and its depth share (length / sqrt(1 + tan^2), x tan), ZFV the far depth a
+# moving cluster comes back at, SPADD the rule's splashes this pass (SPACC their running sum), AGLOW the afterglow's passes left,
+# PN / PM / PF the colour pointers of the near, mid and far bands this pass, WCUR the width factor, CUTA / CUTB the band cuts (view
+# depths). The cover reads LEANK, LEANT and the bands' cells for its single drops (weather/cover.py's `pd`).
 
 
 def cell(lay: carrier.Layout, name: str) -> int:
@@ -426,6 +508,12 @@ class Rain:
         self.table = lay.table("rain", "drops")
         self.T0, self.TB = lay.data_at("rain", "overcast"), lay.data_at("rain", "boot")
         self.SKY, self.OWN = lay.data_at("rain", "sky"), lay.data_at("rain", "own")
+        self.LIT = lay.table("rain", "lit")
+        self.LEVEL = 0                                   # the lightning's LEVEL cell (lightning.py's interface for the lit rain)
+        if ("lightning", "state") in lay.cells:          # a build without the lightning still builds and rains (no lit rain)
+            from vrtools.arcade.weather import lightning
+            self.LEVEL = lay.cell("lightning", "state") + 4 * lightning.STATE_NAMES.index("LEVEL")
+        self.UC = lay.cell("cover", "under_cover") if self.cover else 0
 
     # ---- pieces
     def rnd(self, b: Block, dst: str) -> None:
@@ -557,6 +645,95 @@ class Rain:
         b.emit("mov.w reg,abs", "r12", c["G0V"])
         b.emit("mov.w imm,abs", 0, c["LANDS"])
 
+    def choose(self, b: Block, late: str) -> None:
+        """The pass's choices, once a pass before the cluster loop, one unit after the guard (late: to `late`, nothing of the pass
+        done). From the car's km/h v: t = tan(lean) = clamp(v / lean_kmh, 0, tan(lean_max_deg)); ZST = FALL t; MOVE = v >=
+        splash_kmh (SPADD = splash_rate then, else 0); the length L = 1 + (l1 - 1) clamp(v / v1) + (l2 - l1) u and the far depth
+        ZFV = d1 + (d2 - d1) u, u = clamp((v - v1) / (v2 - v1)) (RainTune's length_kmh v1 v2, length l1 l2, place_depth d1 d2);
+        LEANK = L / sqrt(1 + t^2) (four Newton steps from (2 + t^2) / 2: 1 + t^2 is 1..4), LEANT = t LEANK; the band cuts CUTA /
+        CUTB = ZFV x band_cuts. The colours: the near, mid and far sets with WCUR 1; on a pass whose lightning LEVEL is a flash
+        (lightning.FLASH_OF_LEVEL not 0: the sky flashes and the white-out; the table `lit`) every band the lit set, WCUR lit_width,
+        AGLOW = afterglow; else while AGLOW is not 0 (one less a pass) the near band the lit set, the mid the near set, the far the
+        mid set; under cover (the cover's under_cover byte) none of it and AGLOW 0. Uses R0-R4, R8, R9."""
+        c, t = self.c, self.t
+        emit_guard_time(b, late)
+        b.emit("mov.w abs,reg", SPEED, "r0")
+        _f(b, "cvt.ws", "r0", "r1")                     # R1 = v
+        b.emit("mov.w reg,reg", "r1", "r2")
+        _f(b, "mulf.s", ("f", 1.0 / t.lean_kmh), "r2")
+        _clamp(b, "r2", 0.0, math.tan(math.radians(t.lean_max_deg)), "ch_t")   # R2 = t
+        b.emit("mov.w reg,reg", "r2", "r3")
+        _f(b, "mulf.s", ("f", FALL), "r3")
+        b.emit("mov.w reg,abs", "r3", c["ZST"])
+        b.emit("mov.w imm,abs", 0, c["MOVE"])
+        b.emit("mov.w imm,abs", 0, c["SPADD"])
+        _f(b, "cmpf.s", ("f", t.splash_kmh), "r1")
+        b.branch("blt", "ch_still")
+        b.emit("mov.w imm,abs", 1, c["MOVE"])
+        b.emit("mov.w imm,abs", F(t.splash_rate), c["SPADD"])
+        b.label("ch_still")
+        b.emit("mov.w reg,reg", "r2", "r3")
+        _f(b, "mulf.s", "r2", "r3")
+        _f(b, "addf.s", ("f", 1.0), "r3")               # R3 = a = 1 + t^2
+        b.emit("mov.w reg,reg", "r3", "r4")
+        _f(b, "addf.s", ("f", 1.0), "r4")
+        _f(b, "mulf.s", ("f", 0.5), "r4")               # R4 = x0 = (1 + a) / 2
+        for _ in range(4):                              # x = (x + a / x) / 2
+            b.emit("mov.w reg,reg", "r3", "r8")
+            _f(b, "divf.s", "r4", "r8")
+            _f(b, "addf.s", "r8", "r4")
+            _f(b, "mulf.s", ("f", 0.5), "r4")           # R4 = sqrt(a)
+        (v1, v2), (l1, l2), (d1, d2) = t.length_kmh, t.length, t.place_depth
+        b.emit("mov.w reg,reg", "r1", "r8")
+        _f(b, "subf.s", ("f", v1), "r8")
+        _f(b, "mulf.s", ("f", 1.0 / (v2 - v1)), "r8")
+        _clamp(b, "r8", 0.0, 1.0, "ch_u")               # R8 = u
+        b.emit("mov.w reg,reg", "r8", "r3")
+        _f(b, "mulf.s", ("f", d2 - d1), "r3")
+        _f(b, "addf.s", ("f", d1), "r3")
+        b.emit("mov.w reg,abs", "r3", c["ZFV"])
+        for name, cut in zip(("CUTA", "CUTB"), t.band_cuts):
+            b.emit("mov.w reg,reg", "r3", "r9")
+            _f(b, "mulf.s", ("f", cut), "r9")
+            b.emit("mov.w reg,abs", "r9", c[name])
+        _f(b, "mulf.s", ("f", 1.0 / v1), "r1")
+        _clamp(b, "r1", 0.0, 1.0, "ch_l")
+        _f(b, "mulf.s", ("f", l1 - 1.0), "r1")
+        _f(b, "mulf.s", ("f", l2 - l1), "r8")
+        _f(b, "addf.s", "r8", "r1")
+        _f(b, "addf.s", ("f", 1.0), "r1")               # R1 = L
+        _f(b, "divf.s", "r4", "r1")
+        b.emit("mov.w reg,abs", "r1", c["LEANK"])
+        _f(b, "mulf.s", "r1", "r2")
+        b.emit("mov.w reg,abs", "r2", c["LEANT"])
+        ptr = lambda st: self.k["tones"] + st * self.k["records"]
+        for name, st in (("PN", 0), ("PM", 1), ("PF", 2)):
+            b.emit("mov.w imm,abs", ptr(st), c[name])
+        b.emit("mov.w imm,abs", F(1.0), c["WCUR"])
+        if self.LEVEL:
+            if self.cover:
+                b.emit("cmp.b imm,abs", 0, self.UC)
+                b.branch("be", "ch_open")
+                b.emit("mov.w imm,abs", 0, c["AGLOW"])  # under cover: no lit rain, no afterglow
+                b.branch("br", "ch_done")
+                b.label("ch_open")
+            b.emit("mov.w abs,reg", self.LEVEL, "r0")
+            b.emit("movz.bw abs(reg),reg", self.LIT, "r0", "r0")
+            b.emit("cmp.w imm,reg", 0, "r0")
+            b.branch("be", "ch_glow")
+            for name in ("PN", "PM", "PF"):
+                b.emit("mov.w imm,abs", ptr(3), c[name])
+            b.emit("mov.w imm,abs", F(t.lit_width), c["WCUR"])
+            b.emit("mov.w imm,abs", t.afterglow, c["AGLOW"])
+            b.branch("br", "ch_done")
+            b.label("ch_glow")
+            b.emit("cmp.w imm,abs", 0, c["AGLOW"])
+            b.branch("be", "ch_done")
+            b.emit("sub.w imm,abs", 1, c["AGLOW"])
+            for name, st in (("PN", 3), ("PM", 0), ("PF", 1)):
+                b.emit("mov.w imm,abs", ptr(st), c[name])
+            b.label("ch_done")
+
     def scale(self, b: Block, q: str) -> None:
         """R11 = g = max(1, z / ZG) (R3 = z); the slant column SLV g follows."""
         b.emit("mov.w reg,reg", "r3", "r11")
@@ -581,6 +758,12 @@ class Rain:
             b.branch("br", q + "post")
         else:
             _f(b, "subf.s", ("f", FALL), "r2")
+            _f(b, "subf.s", ("abs", c["ZST"]), "r3")       # along the lean: FALL down, ZST nearer
+            _f(b, "cmpf.s", ("f", ZNEAR), "r3")             # too near, or out of the view's top as it comes nearer: placed again
+            b.branch("blt", q + "relaunch_any")
+            self.lim(b, "r4", YTOP)
+            _f(b, "cmpf.s", "r4", "r2")
+            b.branch("bgt", q + "relaunch_any")
             _f(b, "addf.s", ("f", WIND), "r1")
             b.emit("mov.w reg,reg", "r3", "r4")
             _f(b, "mulf.s", ("abs", c["DTH"]), "r4")
@@ -597,10 +780,12 @@ class Rain:
             _f(b, "addf.s", "r4", "r1")
             _f(b, "addf.s", "r4", "r1")
             b.label(q + "w2")
-            self.lim(b, "r4", YBOT)                     # out of the bottom: back to the top
+            self.lim(b, "r4", YBOT)                     # out of the bottom: back to the top (moving: placed again in the view)
             _f(b, "negf.s", "r4", "r4")
             _f(b, "cmpf.s", "r4", "r2")
             b.branch("bge", q + "post")
+            b.emit("cmp.w imm,abs", 0, c["MOVE"])
+            b.branch("bne", q + "relaunch_any")
         # The relaunch and the landing loop below have no bound of their own, only the guard (each relaunch and each landing a
         # unit): the prototype's behaviour (spike 48). A cluster relaunched with all its drops already under the ground lands them
         # and is relaunched again; the most placements of one cluster in one pass seen: 2 (fix round 1, 150 s RAIN on Big Forest
@@ -610,6 +795,23 @@ class Rain:
         self.newz(b)
         self.place(b)
         self.lim(b, "r2", YTOP)
+        if not prime:                                   # a moving cluster placed again: inside the view, nearer at speed
+            b.branch("br", q + "post")
+            b.label(q + "relaunch_any")
+            emit_guard_time(b, late)
+            self.rnd(b, "r3")                           # z = ZMIN + (ZFV - ZMIN) r
+            b.emit("mov.w abs,reg", c["ZFV"], "r0")
+            _f(b, "subf.s", ("f", ZMIN), "r0")
+            _f(b, "mulf.s", "r0", "r3")
+            _f(b, "addf.s", ("f", ZMIN), "r3")
+            self.place(b)
+            self.rnd(b, "r2")                           # y = z (YTOP + place_up - (YTOP + YBOT) r^place_top_power)
+            b.emit("mov.w reg,reg", "r2", "r0")
+            for _ in range(self.t.place_top_power - 1):
+                _f(b, "mulf.s", "r0", "r2")
+            _f(b, "mulf.s", ("f", -(YTOP + YBOT)), "r2")
+            _f(b, "addf.s", ("f", YTOP + self.t.place_up), "r2")
+            _f(b, "mulf.s", "r3", "r2")
         b.label(q + "post")
         b.emit("mov.w reg,disp[reg]", "r1", 0, "r6")
         b.emit("mov.w reg,disp[reg]", "r2", 4, "r6")
@@ -637,6 +839,9 @@ class Rain:
         b.emit("mov.w abs,reg", c["SLV"], "r4")
         _f(b, "mulf.s", "r11", "r4")
         b.label(q + "land")                             # the next-lowest drop's bottom against the ground plane
+        if not prime:                                   # moving: no landing (the splashes come by rule, `synthetic`)
+            b.emit("cmp.w imm,abs", 0, c["MOVE"])
+            b.branch("bne", q + "landed_done")
         emit_guard_time(b, late)                        # each landing a unit (the drops landed so far stay counted)
         b.emit("mov.w disp[reg],reg", 24, "r6", "r8")
         b.emit("cmp.w imm,reg", NDROP, "r8")
@@ -686,39 +891,18 @@ class Rain:
                 b.emit("cmp.w imm,abs", 0, cover_cell(self.lay, "NOSPLASH"))
                 b.branch("bne", q + "land")
             emit_guard_time(b, late)                    # the spawn its own unit (a late landing leaves no splash)
-            b.emit("mov.w abs,reg", c["SPW"], "r0")     # spawn: W = M^T (v - t) into the ring's next entry
-            b.emit("shl.w imm,reg", 4, "r0")
-            b.emit("add.w imm,reg", self.POOL, "r0")
-            _f(b, "subf.s", ("abs", m(9)), "r20")
-            _f(b, "subf.s", ("abs", m(10)), "r19")
-            _f(b, "subf.s", ("abs", m(11)), "r18")
-            for kk in range(3):
-                _dot(b, ("r20", "r19", "r18"), (m(3 * kk), m(3 * kk + 1), m(3 * kk + 2)), "r9", "r15")
-                b.emit("mov.w reg,disp[reg]", "r9", 4 * kk, "r0")
-            b.emit("cmp.w imm,disp[reg]", 0, 12, "r0")    # the ring's slot dead: one more alive (J2's live count)
-            b.branch("bne", q + "sp_was_live")
-            b.emit("add.w imm,abs", 1, c["SPLIVE"])
-            b.label(q + "sp_was_live")
-            b.emit("mov.w imm,disp[reg]", 1, 12, "r0")
-            b.emit("add.w imm,abs", 1, c["SPAWNS"])
-            b.emit("mov.w abs,reg", c["SPW"], "r0")
-            b.emit("add.w imm,reg", 1, "r0")
-            b.emit("cmp.w imm,reg", NSP, "r0")
-            b.branch("blt", q + "spw_ok")
-            b.emit("mov.w imm,reg", 0, "r0")
-            b.label(q + "spw_ok")
-            b.emit("mov.w reg,abs", "r0", c["SPW"])
+            self.spawn(b, q)
             b.branch("br", q + "land")
         b.label(q + "landed_done")
         if prime:
             b.emit("add.w imm,abs", 1, c["PRIMED"])
-        else:                                           # the budget, then the cluster (variant k: records - 7k, polygon + k stride)
+        else:                                           # the budget, then the cluster (variant k: records - RPD k, polygon + k stride)
             if cover:
                 b.emit("cmp.w imm,reg", 0, "r13")       # the cover hid it (or drew it drop by drop)
                 b.branch("bne", q + "next")
             b.emit("mov.w disp[reg],reg", 24, "r6", "r8")
             b.emit("mov.w reg,reg", "r8", "r9")
-            b.emit("mul.w imm,reg", 7, "r9")
+            b.emit("mul.w imm,reg", RPD, "r9")
             b.emit("mov.w abs,reg", REC_COUNT, "r0")
             b.emit("add.w imm,reg", k["records"], "r0")
             b.emit("sub.w reg,reg", "r9", "r0")
@@ -726,20 +910,26 @@ class Rain:
             b.branch("bgt", q + "trim")
             b.emit("mov.w reg,abs", "r0", REC_COUNT)
             b.emit("add.w imm,abs", 1, c["DRAWN"])
-            b.emit("mov.w imm,disp[reg]", 0xB, 0, "r5")  # the matrix: x (g, 0, tilt), y (SLV g, g, 0), z (0, 0, g), t (x, y, z)
-            b.emit("mov.w reg,disp[reg]", "r11", 4, "r5")
+            # the matrix: x (W g, 0, tilt), y (SLV g K, g K, g T), z (0, 0, W g), t (x, y, z); W = WCUR, K = LEANK, T = LEANT
+            b.emit("mov.w imm,disp[reg]", 0xB, 0, "r5")
+            b.emit("mov.w reg,reg", "r11", "r9")
+            _f(b, "mulf.s", ("abs", c["WCUR"]), "r9")
+            b.emit("mov.w reg,disp[reg]", "r9", 4, "r5")
             b.emit("mov.w imm,disp[reg]", 0, 8, "r5")
             b.emit("mov.w disp[reg],disp[reg]", 16, "r6", 12, "r5")
-            b.emit("mov.w reg,disp[reg]", "r4", 16, "r5")
-            b.emit("mov.w reg,disp[reg]", "r11", 20, "r5")
-            for off in (24, 28, 32):
+            for off, src, kc in ((16, "r4", "LEANK"), (20, "r11", "LEANK"), (24, "r11", "LEANT")):
+                b.emit("mov.w reg,reg", src, "r0")
+                _f(b, "mulf.s", ("abs", c[kc]), "r0")
+                b.emit("mov.w reg,disp[reg]", "r0", off, "r5")
+            for off in (28, 32):
                 b.emit("mov.w imm,disp[reg]", 0, off, "r5")
-            b.emit("mov.w reg,disp[reg]", "r11", 36, "r5")
+            b.emit("mov.w reg,disp[reg]", "r9", 36, "r5")
             b.emit("mov.w reg,disp[reg]", "r1", 40, "r5")
             b.emit("mov.w reg,disp[reg]", "r2", 44, "r5")
             b.emit("mov.w reg,disp[reg]", "r3", 48, "r5")
             b.emit("mov.w imm,disp[reg]", 1, 52, "r5")
-            b.emit("mov.w imm,disp[reg]", k["tex"], 56, "r5")
+            self.band(b, "r3", "r9", q + "bd")          # the colours: the band of the cluster's depth
+            b.emit("mov.w reg,disp[reg]", "r9", 56, "r5")
             b.emit("mul.w imm,reg", k["shape_words"], "r8")
             b.emit("add.w disp[reg],reg", 12, "r6", "r8")
             b.emit("mov.w reg,disp[reg]", "r8", 60, "r5")
@@ -753,6 +943,98 @@ class Rain:
         b.emit("sub.w imm,reg", 1, "r7")
         b.emit("cmp.w imm,reg", 0, "r7")
         b.branch("bne", q + "loop")
+
+    def band(self, b: Block, rz: str, dst: str, q: str) -> None:
+        """dst = this pass's colour pointer for view depth rz: PN nearer than CUTA, PM nearer than CUTB, else PF."""
+        c = self.c
+        b.emit("mov.w abs,reg", c["PN"], dst)
+        _f(b, "cmpf.s", ("abs", c["CUTA"]), rz)
+        b.branch("blt", q)
+        b.emit("mov.w abs,reg", c["PM"], dst)
+        _f(b, "cmpf.s", ("abs", c["CUTB"]), rz)
+        b.branch("blt", q)
+        b.emit("mov.w abs,reg", c["PF"], dst)
+        b.label(q)
+
+    def synthetic(self, b: Block) -> None:
+        """The splash rule (moving: the drops no longer land): SPADD a pass (splash_rate while MOVE, else 0), its fractions summed in
+        SPACC; each whole one a unit after the guard: none after a late pass (LATEF) nor while the camera is under cover (the cover's
+        mode 2 or 3), else placed as a landing's: x uniform within LAT sideways, z uniform from ZDRAW to splash_range ahead, y on the
+        car's ground plane at that depth (G0V + TV z: the plane v0.4's landings test, what keeps it on the road), outside the car's
+        box (`carbox`); near a tunnel or roof with the camera outside (the cover's mode 1) only on the camera's side of the nearest
+        mouth's plane by the cover's margin (its PL . v + d over MG: what keeps it out of cover, as the cover keeps v0.4's landing
+        clusters there); spawned into the ring as world coordinates (M^T (v - t))."""
+        c = self.c
+        _f(b, "movf.s", ("abs", c["SPACC"]), "r0")
+        _f(b, "addf.s", ("abs", c["SPADD"]), "r0")
+        b.emit("mov.w reg,abs", "r0", c["SPACC"])
+        b.label("syn_loop")
+        emit_guard_time(b, "late")
+        _f(b, "movf.s", ("abs", c["SPACC"]), "r0")
+        _f(b, "cmpf.s", ("f", 1.0), "r0")
+        b.branch("blt", "syn_done")
+        _f(b, "subf.s", ("f", 1.0), "r0")
+        b.emit("mov.w reg,abs", "r0", c["SPACC"])
+        b.emit("cmp.w imm,abs", 0, c["LATEF"])
+        b.branch("bne", "syn_loop")
+        if self.cover:                                  # under cover (modes 2, 3): none
+            b.emit("cmp.w imm,abs", 1, cover_cell(self.lay, "MODE"))
+            b.branch("bgt", "syn_loop")
+        self.rnd(b, "r20")
+        _f(b, "mulf.s", ("f", 2 * LAT), "r20")
+        _f(b, "subf.s", ("f", LAT), "r20")              # xd
+        self.rnd(b, "r18")
+        _f(b, "mulf.s", ("f", self.t.splash_range - ZDRAW), "r18")
+        _f(b, "addf.s", ("f", ZDRAW), "r18")             # zd
+        b.emit("mov.w reg,reg", "r18", "r19")
+        _f(b, "mulf.s", ("abs", c["TV"]), "r19")
+        _f(b, "addf.s", ("abs", c["G0V"]), "r19")        # yd: on the car's ground plane
+        self.carbox(b, "r20", "r18", "syn_loop", "syn_cb")
+        if self.cover:                                  # mode 1: on the camera's side of the nearest mouth's plane only
+            from vrtools.arcade.weather import cover
+            pl = cover_cell(self.lay, "PL")
+            b.emit("cmp.w imm,abs", 1, cover_cell(self.lay, "MODE"))
+            b.branch("bne", "syn_open")
+            b.emit("mov.w reg,reg", "r20", "r0")
+            _f(b, "mulf.s", ("abs", pl), "r0")
+            for reg, k in (("r19", 1), ("r18", 2)):
+                b.emit("mov.w reg,reg", reg, "r9")
+                _f(b, "mulf.s", ("abs", pl + 4 * k), "r9")
+                _f(b, "addf.s", "r9", "r0")
+            _f(b, "addf.s", ("abs", pl + 12), "r0")
+            _f(b, "cmpf.s", ("f", cover.MG), "r0")
+            b.branch("ble", "syn_loop")
+            b.label("syn_open")
+        self.spawn(b, "syn_")
+        b.branch("br", "syn_loop")
+        b.label("syn_done")
+
+    def spawn(self, b: Block, q: str) -> None:
+        """A splash at view (R20, R19, R18) into the ring's next entry as world coordinates W = M^T (v - t); SPLIVE, SPAWNS, SPW kept
+        (R0, R9, R15 used)."""
+        c = self.c
+        b.emit("mov.w abs,reg", c["SPW"], "r0")
+        b.emit("shl.w imm,reg", 4, "r0")
+        b.emit("add.w imm,reg", self.POOL, "r0")
+        _f(b, "subf.s", ("abs", m(9)), "r20")
+        _f(b, "subf.s", ("abs", m(10)), "r19")
+        _f(b, "subf.s", ("abs", m(11)), "r18")
+        for kk in range(3):
+            _dot(b, ("r20", "r19", "r18"), (m(3 * kk), m(3 * kk + 1), m(3 * kk + 2)), "r9", "r15")
+            b.emit("mov.w reg,disp[reg]", "r9", 4 * kk, "r0")
+        b.emit("cmp.w imm,disp[reg]", 0, 12, "r0")    # the ring's slot dead: one more alive (J2's live count)
+        b.branch("bne", q + "sp_was_live")
+        b.emit("add.w imm,abs", 1, c["SPLIVE"])
+        b.label(q + "sp_was_live")
+        b.emit("mov.w imm,disp[reg]", 1, 12, "r0")
+        b.emit("add.w imm,abs", 1, c["SPAWNS"])
+        b.emit("mov.w abs,reg", c["SPW"], "r0")
+        b.emit("add.w imm,reg", 1, "r0")
+        b.emit("cmp.w imm,reg", NSP, "r0")
+        b.branch("blt", q + "spw_ok")
+        b.emit("mov.w imm,reg", 0, "r0")
+        b.label(q + "spw_ok")
+        b.emit("mov.w reg,abs", "r0", c["SPW"])
 
     def splashes(self, b: Block, done: str) -> None:
         """The splash loop (after the clusters: the guards trim it first), then to `done`."""
@@ -969,15 +1251,18 @@ class Rain:
         b.emit("mov.w imm,reg", self.CL, "r6")
         if self.cover:                                  # stage 3: the clusters the cover lets the rain walk (60; 24 under the pits
             b.emit("mov.w abs,reg", cover_cell(self.lay, "WALK"), "r7")    # roof's curtain: the others keep their state)
-            b.emit("mov.w imm,reg", F(1.0e9), "r12")    # no cover on a cluster: no cap, drawn by the rain
-            b.emit("mov.w imm,reg", 0, "r13")
         else:
             b.emit("mov.w imm,reg", self.t.clusters, "r7")
+        self.choose(b, "late")                          # the pass's choices (late: R5 the list, R7 the clusters, none done)
+        if self.cover:
+            b.emit("mov.w imm,reg", F(1.0e9), "r12")    # no cover on a cluster: no cap, drawn by the rain
+            b.emit("mov.w imm,reg", 0, "r13")
         b.emit("mov.w abs,reg", c["G0V"], "r14")        # the landing's ground: the car's
         b.emit("mov.w abs,reg", c["TV"], "r10")
         b.emit("mov.w imm,abs", 0, c["DRAWN"])
         b.emit("mov.w abs,abs", REC_COUNT, c["REC_IN"])
         self.clusters(b, "c_", prime=False, late="late")
+        self.synthetic(b)
         self.splashes(b, "listout")
         b.label("late")                                 # late: the clusters not reached keep their state, not drawn
         b.emit("add.w imm,abs", 1, c["LATE"])
@@ -1022,7 +1307,19 @@ class Rain:
 
 
 def cells(tune: RainTune) -> tuple[tuple[str, int], ...]:
-    return (("state", 0x80), ("clusters", 32 * tune.clusters), ("pool", 16 * NSP))
+    return (("state", 4 * len(STATE_NAMES)), ("clusters", 32 * tune.clusters), ("pool", 16 * NSP))
+
+
+def lit_table() -> bytes:
+    """Per lightning LEVEL (lightning.LEVELS, padded to 8) 1 when it is a flash (lightning.FLASH_OF_LEVEL not 0: the sky flashes and
+    the white-out; the bolt alone is none): the lit rain's passes."""
+    from vrtools.arcade.weather import lightning
+    return bytes(1 if f else 0 for f in lightning.FLASH_OF_LEVEL).ljust(8, b"\0")
+
+
+def tex(addr: int) -> int:
+    """The colour pointer of the program ROM's halfword at `addr` (the renderer reads colour words there)."""
+    return 0x40000 + (addr - V60_PROGRAM) // 2
 
 
 def module(rs: RomSet, tune: RainTune, fault_spin: int = 0, fault_keep_grade: bool = False) -> carrier.Module:
@@ -1034,17 +1331,15 @@ def module(rs: RomSet, tune: RainTune, fault_spin: int = 0, fault_keep_grade: bo
     leaves the grade in the colour RAM; False in every build."""
     from vrtools.arcade.directory import decode_directory
     from vrtools.arcade.weather import layout
-    objs, size, records, faces, table = drop_objects()
+    objs, size, records, faces, table = drop_objects(tune)
     sobjs = splash_objects(tune.splash_frames)
     ssize = len(sobjs[0])
     if any(len(o) != ssize for o in sobjs):
         raise PatchError("the splash objects are not one size")
-    drops, sp = colour_words(rs, faces, tune.splash_frames)
+    tones, sp = tone_words(rs, faces, tune), splash_words(rs, tune.splash_frames)
     poly = layout.block("rain objects").start
-    colours = layout.block("rain colours").start
     k = {"poly0": poly // 4, "shape_words": size // 4, "records": records, "sp_poly": (poly + len(objs) * size) // 4,
-         "sp_words": ssize // 4, "tex": 0x40000 + (colours - V60_PROGRAM) // 2}
-    k["sp_tex"] = k["tex"] + len(drops)
+         "sp_words": ssize // 4, "tones": tex(layout.block("rain tones").start), "sp_tex": tex(layout.block("rain colours").start)}
     skies = {e: course_sky(rs, e) for e in range(len(decode_directory(rs)))}
 
     def course_data(e):
@@ -1056,8 +1351,10 @@ def module(rs: RomSet, tune: RainTune, fault_spin: int = 0, fault_keep_grade: bo
         bank, src, n, cols = skies[e]
         return {"own": (bank, src, 2 * n)}
     return carrier.Module(
-        name="rain", code=lambda lay: Rain(lay, k, tune, fault_spin, fault_keep_grade).block(), cells=cells(tune), tables=(("drops", table),),
+        name="rain", code=lambda lay: Rain(lay, k, tune, fault_spin, fault_keep_grade).block(), cells=cells(tune),
+        tables=(("drops", table), ("lit", lit_table())),
         data=(("overcast", table_bytes(overcast_table())), ("boot", table_bytes(boot_table()))),
         course_data=course_data, course_copies=course_copies,
-        rom=(("rain objects", b"".join(objs) + b"".join(sobjs)), ("rain colours", struct.pack(f"<{len(drops) + len(sp)}H", *drops, *sp))),
+        rom=(("rain objects", b"".join(objs) + b"".join(sobjs)), ("rain tones", struct.pack(f"<{len(tones)}H", *tones)),
+             ("rain colours", struct.pack(f"<{len(sp)}H", *sp))),
         start="start", frame="frame", release="release", entries=("rand", "shape"))

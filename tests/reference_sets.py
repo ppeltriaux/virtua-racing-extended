@@ -20,6 +20,8 @@ REFERENCE_SETS = {
     "VR_P75_SET": ("the owner's approved joined storm prototype (out/p75storm, spike 75)",
                    "LOCAL ONLY: a throwaway spike build kept on the owner's machine; nobody else can rebuild it"),
     "VR_MAIN_SET": ("main without Phase 32 (Phases 29 and 31 merged, add9799)", "`python -m vrtools build` from a checkout of add9799"),
+    "VR_V04_SET": ("the released v0.4's set (its falling rain: the streaming rain's tests compare their fill and splash rate with it)",
+                   "`python -m vrtools build` from a checkout of v0.4's source, 19ac53c (main at 8798404 builds the same set)"),
 }
 
 

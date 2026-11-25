@@ -64,11 +64,11 @@ import math
 import struct
 
 from vrtools.arcade.patch import PatchError
-from vrtools.arcade.romset import V60_PROGRAM, RomSet
+from vrtools.arcade.romset import RomSet
 from vrtools.arcade.v60asm import Block
 from vrtools.arcade.weather import carrier, cover_geom
 from vrtools.arcade.weather.carrier import BUDGET, REC_COUNT, emit_guard_time
-from vrtools.arcade.weather.tune import CoverTune
+from vrtools.arcade.weather.tune import CoverTune, RainTune
 
 CAM = 0x501B00
 PY = 0x400D22                           # the player's car's y (rain.PY)
@@ -158,14 +158,16 @@ def A(addr):
     return ("abs", addr)
 
 
-def single_drop_objects() -> tuple[list[bytes], int, int]:
-    """The rain's 8 shapes' boxes one by one, sorted by their bottom as the drop table (40 objects, padded to one stride): (objects,
-    stride, records each)."""
+def single_drop_objects(rt: RainTune) -> tuple[list[bytes], int, int]:
+    """The rain's 8 shapes' drops one by one (the rain's crossed strips at its width and head share, v0.4.1), sorted by their bottom
+    as the drop table (40 objects, padded to one stride): (objects, stride, records each). The colour words are the first of the
+    rain's colour table's set for the drop's band (a single drop's records are the full object's first: head, tail, jump, head,
+    tail)."""
     from vrtools.arcade.weather import rain
     objs = []
-    for meta in rain.shapes():
+    for meta in rain.shapes(width=rt.width):
         for bx in sorted(meta, key=lambda bx: bx[1] - bx[3] / 2):
-            objs.append(rain.cluster_object([rain.box(*bx)]))
+            objs.append(rain.cluster_object([rain.strips(*bx, rt.head)]))
     stride = (max(len(o[0]) for o in objs) + 3) & ~3
     recs = {o[1] for o in objs}
     if len(recs) != 1:
@@ -173,13 +175,14 @@ def single_drop_objects() -> tuple[list[bytes], int, int]:
     return [o[0] + b"\0" * (stride - len(o[0])) for o in objs], stride, recs.pop()
 
 
-def drop_table() -> bytes:
-    """Per shape and drop (in bottom order): its centre x, y, half width across (a (|cos| + |sin|)) and half height (4 floats)."""
+def drop_table(rt: RainTune) -> bytes:
+    """Per shape and drop (in bottom order): its centre x, y, half width across and half height (4 floats); the crossed strips' half
+    width across is w / 2 whatever the view (v0.4's turned boxes: a (|cos| + |sin|))."""
     from vrtools.arcade.weather import rain
     out = b""
-    for meta in rain.shapes():
+    for meta in rain.shapes(width=rt.width):
         for x, y, w, h, th in sorted(meta, key=lambda bx: bx[1] - bx[3] / 2):
-            out += struct.pack("<4f", x, y, w / 2 * (abs(math.cos(th)) + abs(math.sin(th))), h / 2)
+            out += struct.pack("<4f", x, y, w / 2, h / 2)
     return out
 
 
@@ -196,6 +199,7 @@ class Cover:
         self.PDT = lay.table("cover", "drops")
         self.CL = lay.cell("rain", "clusters")
         self.SLV = rain.cell(lay, "SLV")
+        self.R = {n: rain.cell(lay, n) for n in ("LEANK", "LEANT", "PN", "PM", "PF", "CUTA", "CUTB")}   # the rain's pass choices
         self.RAND = lay.label("rain", "rand")
         self.SHAPE = lay.label("rain", "shape")
 
@@ -852,6 +856,8 @@ class Cover:
         b.emit("mov.w reg,abs", "r19", c["PDS"])
         b.emit("mov.w reg,abs", "r20", c["PDH"])
         fop(b, "mulf.s", ("f", KM), "r17")               # the cluster's spread at the opening
+        b.emit("mov.w reg,reg", "r17", "r11")            # v0.4.1: its height spread at the opening, the rain's streaks this
+        fop(b, "mulf.s", A(self.R["LEANK"]), "r11")      # pass (LEANK: 1 at rest; R11, g, is set again before the rain uses it)
         b.emit("mov.w disp[reg],reg", cover_geom.MOUTH_SMIN, "r9", "r4")    # wholly outside the opening: hidden
         fop(b, "subf.s", "r17", "r4")
         fop(b, "cmpf.s", "r4", "r19")
@@ -861,10 +867,10 @@ class Cover:
         fop(b, "cmpf.s", "r4", "r19")
         b.branch("bgt", "s_hide2")
         b.emit("mov.w disp[reg],reg", cover_geom.MOUTH_H, "r9", "r4")
-        fop(b, "addf.s", "r17", "r4")
+        fop(b, "addf.s", "r11", "r4")
         fop(b, "cmpf.s", "r4", "r20")
         b.branch("bgt", "s_hide2")
-        b.emit("mov.w reg,reg", "r17", "r4")
+        b.emit("mov.w reg,reg", "r11", "r4")
         fop(b, "negf.s", "r4", "r4")
         fop(b, "cmpf.s", "r4", "r20")                    # wholly under the road at the opening
         b.branch("blt", "s_hide2")
@@ -872,6 +878,9 @@ class Cover:
         # the end (long quads keyed by their far end) need care
         b.emit("mov.w reg,reg", "r3", "r0")
         fop(b, "subf.s", ("f", KDEPTH), "r0")
+        fop(b, "movf.s", A(self.R["LEANT"]), "r4")       # v0.4.1: the leaning streaks reach nearer by the cluster's spread x LEANT
+        fop(b, "mulf.s", ("f", 2.31 * GCAP_SIL), "r4")
+        fop(b, "subf.s", "r4", "r0")
         fop(b, "cmpf.s", A(c["KCOV"]), "r0")
         b.branch("ble", "s_edges")
         b.emit("mov.w imm,abs", 1, c["PDMODE"])
@@ -906,7 +915,7 @@ class Cover:
         fop(b, "cmpf.s", "r4", "r19")
         b.branch("bgt", "s_drops")
         b.emit("mov.w disp[reg],reg", cover_geom.MOUTH_H, "r9", "r4")
-        fop(b, "subf.s", "r17", "r4")
+        fop(b, "subf.s", "r11", "r4")
         fop(b, "subf.s", ("f", HM_SIL), "r4")
         fop(b, "cmpf.s", "r4", "r20")
         b.branch("bgt", "s_drops")
@@ -1043,13 +1052,16 @@ class Cover:
     def pd(self, b: Block) -> None:
         """PD57: a pits-roof curtain cluster on an edge, drawn drop by drop. In R1-R3 (the cluster), R4 (slant x g), R11 (g), R5 (the
         list), R6 (the cluster); PDL/PDS/PDH its lam, s*, h*. A drop j at (cx, cy) in the cluster is d = cx (g, 0, tilt) + cy (slant
-        g, g, 0) in view space; its lateral and height in the mouth's frame move by t = S.d, th = H.d, its crossing by lam t, lam th.
+        g K, g K, g T) in view space (v0.4.1: the rain's leaning y column this pass, K / T its LEANK / LEANT: (slant g, g, 0) at rest);
+        its lateral and height in the mouth's frame move by t = S.d, th = H.d, its crossing by lam t, lam th; its half height in the
+        margins is hy K (the streak's length this pass; its lean in depth is not tested: the crossing is the centre's). Drawn as the
+        rain draws a cluster: the leaning matrix and the colour set of the cluster's band (the rain's PN / PM / PF by CUTA / CUTB).
         Each drop a unit (the guard before it). Keeps R1-R7 R10 R11; uses R0 R8 R9 R12-R20."""
         c, k = self.c, self.k
         fr = c["FR"]
         b.label("pd")
         self._cst(b)
-        for ax, bx_, base in (("r14", "r15", fr + 16), ("r16", "r17", fr + 32)):   # As = g Sx + tilt Sz, Bs = sg Sx + g Sy (and H)
+        for ax, bx_, base in (("r14", "r15", fr + 16), ("r16", "r17", fr + 32)):   # As = g Sx + tilt Sz, Bs = K (sg Sx + g Sy) + g T Sz
             b.emit("mov.w reg,reg", "r11", ax)
             fop(b, "mulf.s", A(base), ax)
             fop(b, "movf.s", D(CL_TILT, "r6"), "r12")
@@ -1059,6 +1071,11 @@ class Cover:
             fop(b, "mulf.s", A(base), bx_)
             b.emit("mov.w reg,reg", "r11", "r12")
             fop(b, "mulf.s", A(base + 4), "r12")
+            fop(b, "addf.s", "r12", bx_)
+            fop(b, "mulf.s", A(self.R["LEANK"]), bx_)
+            b.emit("mov.w reg,reg", "r11", "r12")
+            fop(b, "mulf.s", A(self.R["LEANT"]), "r12")
+            fop(b, "mulf.s", A(base + 8), "r12")
             fop(b, "addf.s", "r12", bx_)
         b.emit("mov.w disp[reg],reg", CL_LANDED, "r6", "r13")   # j from the landed count
         b.label("pd_loop")
@@ -1089,9 +1106,10 @@ class Cover:
         fop(b, "addf.s", "r20", "r19")                   # s_j, clear of the corridor walls by its half width
         b.emit("mov.w abs,reg", c["PDE"], "r0")
         fop(b, "movf.s", D(PD_HY, "r0"), "r12")
+        fop(b, "mulf.s", A(self.R["LEANK"]), "r12")
         fop(b, "mulf.s", ("f", SMAX), "r12")
         fop(b, "addf.s", D(PD_HX, "r0"), "r12")
-        fop(b, "mulf.s", "r11", "r12")                   # g (hx + 0.3 hy)
+        fop(b, "mulf.s", "r11", "r12")                   # g (hx + 0.3 hy K)
         fop(b, "addf.s", ("f", 0.05), "r12")
         b.emit("mov.w disp[reg],reg", cover_geom.MOUTH_PMIN, "r9", "r0")
         fop(b, "addf.s", "r12", "r0")
@@ -1111,6 +1129,7 @@ class Cover:
         fop(b, "mulf.s", "r11", "r12")                   # lam g
         b.emit("mov.w abs,reg", c["PDE"], "r0")
         fop(b, "movf.s", D(PD_HY, "r0"), "r19")
+        fop(b, "mulf.s", A(self.R["LEANK"]), "r19")
         fop(b, "mulf.s", ("f", SMAX), "r19")
         fop(b, "addf.s", D(PD_HX, "r0"), "r19")
         fop(b, "mulf.s", "r12", "r19")
@@ -1125,7 +1144,8 @@ class Cover:
         b.branch("bgt", "pd_next")
         b.emit("mov.w abs,reg", c["PDE"], "r0")
         fop(b, "mulf.s", D(PD_HY, "r0"), "r12")
-        fop(b, "addf.s", ("f", HM_SIL), "r12")           # the vertical margin: lam g hy
+        fop(b, "mulf.s", A(self.R["LEANK"]), "r12")
+        fop(b, "addf.s", ("f", HM_SIL), "r12")           # the vertical margin: lam g hy K
         b.emit("mov.w disp[reg],reg", cover_geom.MOUTH_H, "r9", "r0")
         fop(b, "subf.s", "r12", "r0")
         fop(b, "cmpf.s", "r0", "r18")
@@ -1139,20 +1159,30 @@ class Cover:
         b.branch("bgt", "pd_done")
         b.emit("mov.w reg,abs", "r0", REC_COUNT)
         b.emit("add.w imm,abs", 1, c["PDCOUNT"])
-        b.emit("mov.w imm,disp[reg]", 0xB, 0, "r5")       # the matrix: as the rain's cluster
+        b.emit("mov.w imm,disp[reg]", 0xB, 0, "r5")       # the matrix: as the rain's cluster (its width factor is 1 under cover)
         b.emit("mov.w reg,disp[reg]", "r11", 4, "r5")
         b.emit("mov.w imm,disp[reg]", 0, 8, "r5")
         b.emit("mov.w disp[reg],disp[reg]", CL_TILT, "r6", 12, "r5")
-        b.emit("mov.w reg,disp[reg]", "r4", 16, "r5")
-        b.emit("mov.w reg,disp[reg]", "r11", 20, "r5")
-        for off in (24, 28, 32):
+        for off, src, kc in ((16, "r4", "LEANK"), (20, "r11", "LEANK"), (24, "r11", "LEANT")):
+            b.emit("mov.w reg,reg", src, "r0")
+            fop(b, "mulf.s", A(self.R[kc]), "r0")
+            b.emit("mov.w reg,disp[reg]", "r0", off, "r5")
+        for off in (28, 32):
             b.emit("mov.w imm,disp[reg]", 0, off, "r5")
         b.emit("mov.w reg,disp[reg]", "r11", 36, "r5")
         b.emit("mov.w reg,disp[reg]", "r1", 40, "r5")
         b.emit("mov.w reg,disp[reg]", "r2", 44, "r5")
         b.emit("mov.w reg,disp[reg]", "r3", 48, "r5")
         b.emit("mov.w imm,disp[reg]", 1, 52, "r5")
-        b.emit("mov.w imm,disp[reg]", k["tex"], 56, "r5")
+        b.emit("mov.w abs,reg", self.R["PN"], "r0")      # the colours: the set of the cluster's band, as the rain's
+        fop(b, "cmpf.s", A(self.R["CUTA"]), "r3")
+        b.branch("blt", "pd_band")
+        b.emit("mov.w abs,reg", self.R["PM"], "r0")
+        fop(b, "cmpf.s", A(self.R["CUTB"]), "r3")
+        b.branch("blt", "pd_band")
+        b.emit("mov.w abs,reg", self.R["PF"], "r0")
+        b.label("pd_band")
+        b.emit("mov.w reg,disp[reg]", "r0", 56, "r5")
         b.emit("mov.w disp[reg],reg", CL_SHAPE, "r6", "r0")
         b.emit("shl.w imm,reg", -3, "r0")
         b.emit("add.w reg,reg", "r13", "r0")
@@ -1208,21 +1238,23 @@ def cells(clusters: int) -> tuple[tuple[str, int], ...]:
     return (("under_cover", 1), ("state", STATE_BYTES), ("cst", CSTSZ * clusters))
 
 
-def module(rs: RomSet, tune: CoverTune, clusters: int = 60, twin: bool = False, fault: str | None = None) -> carrier.Module:
+def module(rs: RomSet, tune: CoverTune, rain: RainTune | None = None, twin: bool = False, fault: str | None = None) -> carrier.Module:
     """The cover as a carrier module: its code, cells, the single-drop table (image), each course's cover table (course data: from
-    cover_geom.tables, marched from `rs`'s faces) and the 40 single-drop objects (polygon ROM). `clusters`: the rain's. `twin` is
+    cover_geom.tables, marched from `rs`'s faces) and the 40 single-drop objects (polygon ROM). `rain`: the rain's tune (its
+    clusters, the drops' width and head share: facts of the rain's, which the cover hides and draws drop by drop; the defaults when
+    None). `twin` is
     for the pixel tests only: the curtain never drawn (everything else the same); False in every build. `fault` ("uc0": under_cover
     stuck at 0; "ignore": the rain never consults the cover) plants a fault for the tests that must catch it (fix round 1, M6);
     None in every build."""
     from vrtools.arcade.directory import decode_directory
     from vrtools.arcade.weather import layout
-    objs, stride, recs = single_drop_objects()
+    rain = RainTune() if rain is None else rain
+    clusters = rain.clusters
+    objs, stride, recs = single_drop_objects(rain)
     poly = layout.block("cover objects").start
-    colours = layout.block("rain colours").start
-    k = {"clusters": clusters, "sd_poly": poly // 4, "sd_words": stride // 4, "sd_records": recs,
-         "tex": 0x40000 + (colours - V60_PROGRAM) // 2}
+    k = {"clusters": clusters, "sd_poly": poly // 4, "sd_words": stride // 4, "sd_records": recs}
     tabs = {e: cover_geom.table_bytes(cover_geom.tables(rs, e), tune.near) for e in range(len(decode_directory(rs)))}
     return carrier.Module(
-        name="cover", code=lambda lay: Cover(lay, k, tune, twin, fault).block(), cells=cells(clusters), tables=(("drops", drop_table()),),
+        name="cover", code=lambda lay: Cover(lay, k, tune, twin, fault).block(), cells=cells(clusters), tables=(("drops", drop_table(rain)),),
         course_data=lambda e: {"table": tabs[e]}, rom=(("cover objects", b"".join(objs)),),
         frame="frame", release="release", entries=("cluster",))

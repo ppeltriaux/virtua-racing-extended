@@ -48,7 +48,9 @@ up by one on the first pass of every strike that happens, its timeline's first p
 distant by the strike's distance against BANDS, set on that same pass and HELD unchanged until the first pass of the next strike that
 happens: never cleared, not at the strike's end, not by a re-strike, not by an aborted attempt; a strike under cover happens, so it
 sets both). Both 0 at each load (the carrier zeroes the module cells); both read correctly as a byte or a halfword at their address.
-The sound tests its guard first and may read the band a pass or more later: the hold is for it. It reads `under_cover` (the module `cover`'s byte: 1 on a pass whose
+The sound tests its guard first and may read the band a pass or more later: the hold is for it. v0.4.1: the rain reads `LEVEL` (a
+word of `state`: this pass's level, written on every pass at `apply` before the rain runs; 0 at the load) for its lit rain, a flash
+where FLASH_OF_LEVEL is not 0 (weather/rain.py's table `lit`; carrier.READ_AFTER_WRITE: the lightning before the rain). It reads `under_cover` (the module `cover`'s byte: 1 on a pass whose
 camera is under cover) and, by name, the rain's state cells (its grade's progress, its random word), its grey sky, the course's own
 sky and its overcast table."""
 from __future__ import annotations

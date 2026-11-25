@@ -1516,3 +1516,45 @@ the worst pass measured on the twenty RAIN races 17.70 ms.
 - **The rain's state words** gained SPLIVE and LV at the end in round 2 (the live splash count and this pass's alive slots before
   a late trip; 29 words in the 128-byte `state` cell). The sound's `late` cell counts the passes it ran on late ("sent on a late
   pass"; it sends all the same).
+
+## 31. The streaming rain (v0.4.1: `weather/rain.py`, `weather/cover.py`, `weather/layout.py`, `weather/tune.py`)
+
+The rain as Pascal drove and approved it on 25 Nov 2026 (docs/superpowers/specs/2026-11-25-streaming-rain-design.md); every value a
+field of `RainTune`. What changed against §25, §26 and §30 (generated from the layout as §30, out/p88/scripts/ramtable.py):
+
+- **The drop objects** (polygon ROM, "rain objects" 0xfda424): 8 shapes x 5 variants, each drop two crossed flat strips (`strips`):
+  the first across x (normal (0, 0, -1)), the second across z (normal (1, 0, 0)); each strip its seed edge at the drop's bottom (a
+  jump record J), its head quad up to `head` x h (H) and its tail quad to the top (T); every record NOCULL (0x4000) | ZMAX, flag 12
+  from the second; the drops a quarter of v0.4's width (`width` 0.25, w = 0.25 x 0.035..0.05), their heights and places v0.4's (seed
+  45; the drop table unchanged). The full object 29 records (6 a drop less the first seed), its variants 29, 23, 17, 11, 5; 1 224
+  bytes each (shape s, variant k at word 0x3f6909 + (5 s + k) x 306): 48 960 bytes for the 40 (v0.4: 56 960), then the 12 splash
+  objects (unchanged, 7 488 bytes, at word 0x3f6909 + 40 x 306 = 0x3f98d9): 56 448 of the block's 64 448, 8 000 free.
+- **The colour table** (program ROM, the new layout block "rain tones" 0x2be560, 0x100 bytes, 232 used, in the erased run after
+  "screen pieces 3" and below the direction screen's block): four sets of 29 words, a word per record of the full object (H the
+  set's head tone, T its tail tone, J the next record's): set 0 near (colour pointer 0x9f2b0), 1 mid (0x9f2cd), 2 far (0x9f2ea), 3
+  lit (0x9f307). The tones are picked from the polygon palette's near-neutral entries only (under the grade the channels within 2,
+  R <= G <= B): near 124 / 834 ((29, 30, 31) / (27, 28, 29)), mid 872 / 713 ((25, 26, 26) / (22, 23, 24)), far 713 / 199 ((22, 23,
+  24) / (19, 20, 20)), lit 6 / 6 ((31, 31, 31)). "rain colours" (0x28ff80) keeps the 12 splash words alone (24 bytes, colour pointer
+  0x87fc0).
+- **The rain's state cell** (0x5206a4, 43 words, 172 bytes; v0.4: 29 words in 128): after LV, MOVE ZST LEANK LEANT ZFV SPADD SPACC
+  AGLOW PN PM PF WCUR CUTA CUTB (`rain.STATE_NAMES`): MOVE 1 while the car's km/h >= `splash_kmh`; ZST = FALL tan(lean); LEANK /
+  LEANT the drop's y column's scale and depth share (L / sqrt(1 + t^2), t L / sqrt(1 + t^2)); ZFV the far depth a moving cluster
+  comes back at; SPADD / SPACC the splash rule's splashes this pass and their running sum; AGLOW the afterglow's passes left; PN /
+  PM / PF this pass's colour pointers of the near, mid and far bands; WCUR the width factor (1, or `lit_width` on a flash pass);
+  CUTA / CUTB the band cuts (view depths: ZFV x `band_cuts`). The clusters 0x520750, the splash ring 0x520ed0; the module cells end
+  at 0x521180 (4 224 of 7 936).
+- **The rain's tables** (image): `drops` 0x526ccc (320 bytes, unchanged), `lit` 0x526e0c (8 bytes: 1 for the lightning's flash
+  levels 1-4, lightning.FLASH_OF_LEVEL not 0). Its code 6 644 bytes (v0.4: 4 794) at 0x524780; the cover's 6 167 (v0.4: 5 982); the
+  image 19 988 of the bank-3 block's 20 480.
+- **The matrix of a drawn cluster** (the rain's; the cover's single drops the same at width 1): x (g W, 0, tilt), y (SLV g K, g K,
+  g T), z (0, 0, g W), the translation its view position; W = WCUR, K = LEANK, T = LEANT, g the scale max(1, z / 14); the colour
+  pointer PN nearer than CUTA, PM nearer than CUTB, else PF.
+- **The cover's single drops** ("cover objects" 0xfe9fe4): the rain's strips one by one (40 objects of 264 bytes, 5 records: H T J
+  H T, the first five words of a set), 10 560 bytes of 12 160; their table's half width across is w / 2 (v0.4's turned boxes: a
+  (|cos| + |sin|)), its half height v0.4's, scaled by LEANK in the margins.
+- **The pits roof's whole clusters** (cover, mode 3 under the ROOFED box): the cluster's height spread at the opening is lam x KM x
+  LEANK (v0.4: lam x KM) and the depth its drops reach nearer than its centre KDEPTH + 2.31 x GCAP_SIL x LEANT, so a cluster whose
+  leaning streaks would cross the opening's edge or come in front of the end structure is drawn drop by drop.
+- **The splash rule** (rain, `synthetic`, MOVE 1): SPACC += SPADD each pass; each whole one: none after a late pass (LATEF) or with
+  the cover's MODE 2 or 3; x uniform in +-12, z uniform in 3..splash_range, y = G0V + TV z; outside the car's box; with MODE 1 only
+  where the cover's PL . (x, y, z) + d is over MG (1 unit); then the ring's next slot as a landing's splash.

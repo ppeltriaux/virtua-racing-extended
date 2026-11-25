@@ -65,7 +65,7 @@ def test_the_carrier_blocks(romset_zip, saturn_cue):
     layout.check(dry)
     mine = {b.name: b for b in layout.blocks() if b.owner in ("carrier", "rain") and b.space != "ram"}
     assert set(mine) == {"storm stub", "storm image", "storm data", "storm course data", "rain objects", "rain colours",
-                         "the scenery call"}
+                         "rain tones", "the scenery call"}                       # v0.4.1: the drops' colour table, "rain tones"
     assert mine["storm stub"].start == 0xFFF120 and mine["the scenery call"].start == carrier.HOOK_SITE   # after the vector table
     s1 = _stage1(romset_zip, saturn_cue)
     _, rep = carrier.build(s1, carrier.default_modules(s1))
@@ -561,10 +561,11 @@ def test_the_room_table(romset_zip, saturn_cue):
     s1 = _stage1(romset_zip, saturn_cue)
     _, rep = carrier.build(s1, carrier.default_modules(s1))
     used = {name: u for name, _, _, _, u in layout.room(out, rep)}
-    objs, sobjs = rain.drop_objects()[0], rain.splash_objects(6)
+    from vrtools.arcade.weather.tune import RainTune
+    objs, sobjs = rain.drop_objects(RainTune())[0], rain.splash_objects(6)
     assert used["storm stub"] == rep["stub"][1] and used["storm image"] == rep["image"][1] == used["storm RAM image"]
     assert used["storm data"] == 2 * 96 * 128 and used["storm course data"] == rep["course_data_end"] - layout.block("storm course data").start
-    assert used["rain objects"] == len(b"".join(objs + sobjs)) and used["rain colours"] == 2 * (34 + 12)
+    assert used["rain objects"] == len(b"".join(objs + sobjs)) and used["rain colours"] == 2 * 12 and used["rain tones"] == 2 * 4 * 29
     assert used["storm RAM cells"] == rep["layout"].carrier["cells_end"] - STORM_RAM[0] and used["storm RAM data"] == rep["data_end"] - DATA[0]
     assert used["the scenery call"] == 6 and all(u <= size for _, _, _, size, u in layout.room(out, rep))
 
@@ -987,9 +988,9 @@ def test_each_module_receives_its_own_tune(monkeypatch):
     extra = {}
     try:
         from vrtools.arcade.weather import cover
-        monkeypatch.setattr(cover, "module", lambda rs, tune, clusters, *a, **k: (got.setdefault("cover", tune),
-                                                                                   extra.setdefault("clusters", clusters),
-                                                                                   C.Module("cover", None))[2])
+        monkeypatch.setattr(cover, "module", lambda rs, tune, rain_tune, *a, **k: (got.setdefault("cover", tune),
+                                                                                    extra.setdefault("rain", rain_tune),
+                                                                                    C.Module("cover", None))[2])
     except ImportError:                                 # before the cover's merge
         pass
     mods = C.default_modules(object(), probe)
@@ -998,7 +999,8 @@ def test_each_module_receives_its_own_tune(monkeypatch):
     for n, t in got.items():
         assert t is probe.of(n), (n, t)
     if "cover" in got:
-        assert extra["clusters"] == probe.rain.clusters  # the rain's cluster count, a fact of the rain the cover's tables are made for
+        assert extra["rain"] is probe.rain               # the rain's facts the cover is made for (its cluster count; v0.4.1: the
+                                                         # drops' width and head share, its single drops' objects)
     seen = {}
     monkeypatch.setattr(screen, "install", lambda rs, tune: seen.setdefault("screen", tune))
     monkeypatch.setattr(C, "install", lambda rs, converted=None, tunes=None, modules=None: seen.setdefault("carrier", tunes) and rs)
@@ -1050,18 +1052,20 @@ def test_the_reload_branch_on_a_forced_state(storm_runs):
 
 # --- build-time checks (the final review's W6) ----------------------------------------------------------------------------------
 def test_the_readers_come_after_their_writers():
-    """carrier.READ_AFTER_WRITE: the rain after the cover (it reads MODE / WALK / NOSPLASH), the lightning after the cover
-    (`under_cover`), the sound after the lightning (strike_seq / strike_band of the same pass); a list against it is refused by
-    lay_out (so by build) naming both; the join's order passes; a list without one of the pair is not concerned."""
+    """carrier.READ_AFTER_WRITE: the rain after the cover (it reads MODE / WALK / NOSPLASH, v0.4.1 `under_cover`), the lightning after
+    the cover (`under_cover`), the sound after the lightning (strike_seq / strike_band of the same pass), v0.4.1 the rain after the
+    lightning (its LEVEL: the lit rain); a list against it is refused by lay_out (so by build) naming both; the join's order passes;
+    a list without one of the pair is not concerned."""
     from types import SimpleNamespace as M
     join = [M(name=n) for n in ("cover", "lightning", "rain", "handling", "sound")]
     carrier.check_order(join)
-    assert carrier.READ_AFTER_WRITE == (("cover", "rain"), ("cover", "lightning"), ("lightning", "sound"))
+    assert carrier.READ_AFTER_WRITE == (("cover", "rain"), ("cover", "lightning"), ("lightning", "sound"), ("lightning", "rain"))
     for order, pair in ((("rain", "cover"), "cover must come before rain"), (("lightning", "cover"), "cover must come before lightning"),
-                        (("cover", "sound", "lightning"), "lightning must come before sound")):
+                        (("cover", "sound", "lightning"), "lightning must come before sound"),
+                        (("cover", "rain", "lightning"), "lightning must come before rain")):
         with pytest.raises(PatchError, match=pair):
             carrier.lay_out([M(name=n) for n in order])
-    carrier.check_order([M(name="rain"), M(name="lightning")])
+    carrier.check_order([M(name="sound"), M(name="rain")])
 
 
 def test_a_rain_tune_below_the_covers_roof_clusters_is_refused():

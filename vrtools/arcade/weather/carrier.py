@@ -93,7 +93,15 @@ no storm unit is long: read it as the game's own part running late, not a storm 
     its guard test to its last access of its cells (storm_makeup.lua's VR_MAKEUP_SCELLS, Metropolis and Bay Bridge reverse RAIN)
     7.0 us idle (8.0 on a late pass), 14.5 a rain word, 18.5-21.5 a thunder word, 25-29 us a thunder and a rain word on one pass
     (32 at most; the game's vblank handler, when it lands inside, adds its own ~190-240 us, as in any unit). The joined build's longest unit between two guard tests over the twenty races: 151 us (Bay Bridge
-    reverse; lightning_log.lua's G lines), its longest unit in flight at the count's move 80 us (B lines). The release runs only at the attract's
+    reverse; lightning_log.lua's G lines), its longest unit in flight at the count's move 80 us (B lines). v0.4.1 (the streaming
+    rain: its pass choices, `rain.choose`, a unit of their own; the leaning matrix; the splash rule), re-measured on the release build
+    (out/p88: the twenty races of the last run, storm_makeup.lua on Metropolis RAIN): the work before the first guard test 5 us (the
+    cover's, unchanged); the longest unit between two guard tests 147 us (Big Forest and Alpine), the longest unit in flight at the
+    count's move 84 us (Bay Bridge), the longest natural tail 64 us (Metropolis both ways), the tail forced in the first module on
+    every 5th show pass 126.6 us at most (TAIL_US 160); the busiest pass 17.61 ms (Bay Bridge), the cap kept at 17.9. While the
+    car moves (MOVE 1) the landing loop's guard test is skipped (no drop lands), so a cluster's motion, its scale and its drawing
+    (the leaning matrix, the band's colour pointer) are one unit between the cluster loop's test and the next cluster's: within the
+    147 us longest unit measured above (lightning_log.lua's G lines over the twenty races). The release runs only at the attract's
     opening scenery call, a pass of the game's own scene load (two vblanks and more: 44.7 ms in a DRY game): never in a race
     (Release, below). A later module's release must stay within RELEASE_US_MAX with the rain's, or be split;
   - THE WET HANDLING'S ROUTINES (weather/handling.py, the join): entered from the game's own physics at its eight hook sites on
@@ -530,8 +538,10 @@ def _align(a: int, n: int = 4) -> int:
 # THE READERS AFTER THEIR WRITERS (the final review's W6): a module that reads another's cells in the same pass comes after it in
 # the frame order: (writer, reader). The rain reads the cover's MODE / WALK / NOSPLASH (written before the cover's first guard, so
 # even a late pass leaves them right); the lightning reads the cover's `under_cover`; the sound's triggers read the lightning's
-# strike_seq / strike_band of this pass. A module list against this rule is refused when both are present.
-READ_AFTER_WRITE = (("cover", "rain"), ("cover", "lightning"), ("lightning", "sound"))
+# strike_seq / strike_band of this pass; v0.4.1: the rain reads the lightning's LEVEL (its lit rain on this pass's flash) and the
+# cover's `under_cover`. (The cover reads the rain's SLV and pass choices only inside the rain's per-cluster call, after the rain
+# made them: no order of the frame routines.) A module list against this rule is refused when both are present.
+READ_AFTER_WRITE = (("cover", "rain"), ("cover", "lightning"), ("lightning", "sound"), ("lightning", "rain"))
 
 
 def check_order(modules: list[Module]) -> None:
@@ -656,9 +666,9 @@ def install(rs: RomSet, converted: list | None = None, tunes=None, modules: list
 
 def _cover_factory(rs: RomSet, converted, tunes) -> Module:
     from vrtools.arcade.weather import cover
-    # its tables from rs's faces; the rain's cluster count, a fact of the rain (its clusters are what the cover hides), not a tune
-    # of the cover's
-    return cover.module(rs, tunes.cover, tunes.rain.clusters)
+    # its tables from rs's faces; the rain's tune for its facts (its cluster count: the clusters are what the cover hides; v0.4.1:
+    # the drops' width and head share, which the cover's single drops are made with), not a tune of the cover's
+    return cover.module(rs, tunes.cover, tunes.rain)
 
 
 def _lightning_factory(rs: RomSet, converted, tunes) -> Module:

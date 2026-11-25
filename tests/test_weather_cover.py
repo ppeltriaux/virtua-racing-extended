@@ -31,9 +31,10 @@ METROPOLIS, ALPINE, BAY_BRIDGE = 6, 3, 1
 # out/p70/tmp/cover_3.pkl, cover_1.pkl (19 Nov 2026); every other course 4 bytes (no stretch).
 TABLE_DIGESTS = {METROPOLIS: (1128, "6e5759b9c7f1dd6c"), ALPINE: (712, "ec5450345c77aee1"), BAY_BRIDGE: (392, "90a6ca4a05bb06e6")}
 NO_TABLE = (4, "df3f619804a92fdb")
-# spike 68's single drops and their table (spike/p57_rain.py's single_drop_objects and drop_table, seed 45)
-SINGLE_DROPS = (40, 304, 6, "b17508620d7b9262")
-DROP_TABLE = "7c5e3cac85c3a355"
+# The single drops and their table (seed 45). Re-pinned for the streaming rain (v0.4.1): the rain's crossed strips at a quarter of
+# v0.4's width (spike 68's boxes were 40, 304, 6, "b17508620d7b9262"; their table "7c5e3cac85c3a355")
+SINGLE_DROPS = (40, 264, 5, "60c8094ea603db69")
+DROP_TABLE = "cf68218e96c281e9"
 
 
 # ---- static ---------------------------------------------------------------------------------------------------------------------
@@ -108,17 +109,25 @@ def test_the_pits_roof_is_checked_against_the_faces(romset_zip, saturn_cue):
         cover_geom.check_pits_roof(cover_geom.Caster(moved))
 
 
-def test_the_single_drops_are_the_prototypes():
-    """The 40 single-drop objects (the rain's 8 shapes' boxes one by one, in bottom order: one 304-byte object of 6 records each)
-    and their table (centre, half width across, half height) are spike 68's bytes; a single box's six records take the drop
-    colour sequence's first six faces (L H F R J T), so the rain's colour words serve them."""
+def test_the_single_drops_are_the_rains():
+    """The 40 single-drop objects (the rain's 8 shapes' drops one by one, in bottom order, as the rain draws them since v0.4.1: two
+    crossed strips at the rain's width and head share, one 264-byte object of 5 records each) and their table (centre, half width
+    across, half height); a single drop's five records take the colour table's first five words of a set (H T J H T), so the set of
+    the cluster's band serves them; the table's half heights are v0.4's (the length is the rain's matrix's, this pass)."""
     from vrtools.arcade.weather import rain
-    objs, stride, recs = cover.single_drop_objects()
+    from vrtools.arcade.weather.tune import RainTune
+    rt = RainTune()
+    objs, stride, recs = cover.single_drop_objects(rt)
     assert (len(objs), stride, recs, hashlib.sha256(b"".join(objs)).hexdigest()[:16]) == SINGLE_DROPS
-    assert hashlib.sha256(cover.drop_table()).hexdigest()[:16] == DROP_TABLE and len(cover.drop_table()) == 40 * 16
-    _, _, _, faces, _ = rain.drop_objects()
-    one = rain.cluster_object([rain.box(*rain.shapes()[0][0])])[2]
-    assert one == faces[:6] == ["L", "H", "F", "R", "J", "T"]
+    tab = cover.drop_table(rt)
+    assert hashlib.sha256(tab).hexdigest()[:16] == DROP_TABLE and len(tab) == 40 * 16
+    _, _, _, faces, _ = rain.drop_objects(rt)
+    one = rain.cluster_object([rain.strips(*rain.shapes(width=rt.width)[0][0], rt.head)])[2]
+    assert one == faces[:5] == ["H", "T", "J", "H", "T"]
+    import struct as st
+    halves = [st.unpack_from("<4f", tab, 16 * k) for k in range(40)]
+    assert all(abs(hx - w / 2) < 1e-6 for (_, _, hx, _), (_, _, w, _, _) in
+               zip(halves, [bx for m in rain.shapes(width=rt.width) for bx in sorted(m, key=lambda b: b[1] - b[3] / 2)]))
 
 
 def test_the_cover_code_disassembles(romset_zip, saturn_cue):
@@ -187,7 +196,7 @@ def test_a_stale_pass_is_excused_only_where_the_released_game_shows_it():
 
 
 # ---- the register contract between the rain and the cover (fix round 1, F1) -----------------------------------------------------
-_OPN = {"reg": 1, "imm": 1, "abs": 1, "disp[reg]": 2, "[reg]": 1}
+_OPN = {"reg": 1, "imm": 1, "abs": 1, "disp[reg]": 2, "[reg]": 1, "abs(reg)": 2}   # abs(reg): v0.4.1, the rain's `lit` table
 
 
 def _rw(form: str, args) -> tuple[set, set]:
@@ -200,7 +209,7 @@ def _rw(form: str, args) -> tuple[set, set]:
         i += _OPN[k]
     reads, writes = set(), set()
     for j, (k, a) in enumerate(ops):
-        if k == "disp[reg]":
+        if k in ("disp[reg]", "abs(reg)"):
             reads.add(a[1])
         elif k == "[reg]":
             reads.add(a[0])
@@ -647,7 +656,8 @@ class CoverSession:
         """rain_records.lua's polygon ranges: the rain's and the cover's objects, the first splash object, the first single drop."""
         from vrtools.arcade.weather import layout, rain
         lo, hi = layout.block("rain objects"), layout.block("cover objects")
-        objs, size, _, _, _ = rain.drop_objects()
+        from vrtools.arcade.weather.tune import RainTune
+        objs, size, _, _, _ = rain.drop_objects(RainTune())
         return {"VR_RECS_POLY": f"{lo.start // 4:x}:{(hi.start + hi.size) // 4:x}",
                 "VR_RECS_SPLASH": f"{(lo.start + len(objs) * size) // 4:x}", "VR_RECS_SINGLE": f"{hi.start // 4:x}"}
 
@@ -929,15 +939,46 @@ def _snaps(wd: Path) -> list[Path]:
 _RAIN_RGB: dict = {}
 
 
+def lit_frames(wd: Path) -> set:
+    """The video frames of a run whose picture can hold a lit rain (v0.4.1; the review's fix round 1, F3): each pass with the rain's
+    WCUR over 1 or its afterglow running (the storm log's W lines: storm_env watches them third and fourth) and the 5 frames after."""
+    import struct as st
+    from vrtools.mame.runner import parse_storm_log
+    if not (wd / "storm.txt").exists():                 # a run without the storm's log: the negative control's set (the rain
+        return set()                                    # alone, no lightning: no lit rain)
+    log = parse_storm_log(wd / "storm.txt")
+    out = set()
+    for f, v in log.watches.items():
+        if len(v) >= 4 and (st.unpack("<f", st.pack("<I", v[2]))[0] != 1.0 or v[3]):
+            out.update(range(f, f + 6))
+    return out
+
+
+def rain_colours_lit(rs) -> np.ndarray:
+    """`rain_colours` with the lit set's white: the colours on a frame of `lit_frames`."""
+    from vrtools.arcade.weather import rain
+    from vrtools.arcade.weather.tune import RainTune
+    pal, P = rain.polygon_palette(rs), rain.overcast_params()
+    e = pal[rain.tone_picks(rs, RainTune())[3][0]]
+    v = [min(255, rain.xlat_value((e >> (5 * k)) & 31, 64, P[k])) >> 3 for k in range(3)]
+    return np.array(sorted({tuple(c) for c in rain_colours(rs)} | {tuple((x << 3) | (x >> 2) for x in v)}))
+
+
 def rain_colours(rs) -> np.ndarray:
     """The colours the rain's drops and splashes show on screen (n x 3): their colour words' palette entries through the overcast grade
-    at full intensity (the words' mode), as MAME's 5-bit output expands them to 8 bits."""
+    at full intensity (the words' mode), as MAME's 5-bit output expands them to 8 bits. v0.4.1: the near, mid and far tone sets; not
+    the lit set (the palette's brightest white, 255 255 255: the game's own sparks, spray and HUD map draw it too, and differ between
+    a set and its twin with the timing; the lit rain is never drawn under cover: gate2 measured spot s5's 2 027 px of "leak" all in
+    that white). On the frames whose pass had the lit rain (flash or afterglow: `lit_frames`, a camera outside near a tunnel) the
+    measures take `rain_colours_lit`, so a lit streak over a tunnel's inside is seen (the review's fix round 1, F3)."""
     from vrtools.arcade.weather import rain
     key = id(rs)
     if key not in _RAIN_RGB:
         pal, P = rain.polygon_palette(rs), rain.overcast_params()
-        _, _, _, faces, _ = rain.drop_objects()
-        drops, splashes = rain.colour_words(rs, faces, 6)
+        from vrtools.arcade.weather.tune import RainTune
+        _, _, records, faces, _ = rain.drop_objects(RainTune())
+        drops = rain.tone_words(rs, faces, RainTune())[:3 * records]          # near, mid, far (rain.SETS' order; the lit set left out)
+        splashes = rain.splash_words(rs, 6)
         out = set()
         for w in set(drops + splashes):
             e = pal[w & 0x3FF]
@@ -997,12 +1038,12 @@ def leak(cs: CoverSession, entry: int, set_run, twin_run) -> tuple[int, int, int
     ka, kb = _k_rows(set_run.wd), _k_rows(twin_run.wd)
     sa, sb = _snaps(set_run.wd), _snaps(twin_run.wd)
     oa, ob = len(sa) - len(ka), len(sb) - len(kb)
-    colours = rain_colours(cs.rate.out)
+    colours, colours_lit, lit = rain_colours(cs.rate.out), rain_colours_lit(cs.rate.out), lit_frames(set_run.wd)
     faces = interior_faces(cs.rate.out, entry)
     per = {lag: {} for lag in LAGS}
     wetf = {}
     for f in sorted(set(ka) & set(kb)):
-        rain = rain_pixels(sa[ka[f][0] - 1 + oa], sb[kb[f][0] - 1 + ob], colours)
+        rain = rain_pixels(sa[ka[f][0] - 1 + oa], sb[kb[f][0] - 1 + ob], colours_lit if f in lit else colours)
         wetf[f] = bool(rain.any())
         for lag in LAGS:
             if f + lag not in ka or _cut([ka[g][1] for g in range(min(f, f + lag), max(f, f + lag) + 1) if g in ka]):
@@ -1038,6 +1079,8 @@ def coverage(set_run, twin_run, colours: np.ndarray, cell: float = 0.5, keep=Non
     ka, kb = _k_rows(set_run.wd), _k_rows(twin_run.wd)
     sa, sb = _snaps(set_run.wd), _snaps(twin_run.wd)
     oa, ob = len(sa) - len(ka), len(sb) - len(kb)
+    lit = lit_frames(set_run.wd)                         # v0.4.1: `colours` and its lit white on a lit frame (`rain_colours`)
+    colours_lit = np.array(sorted({tuple(c) for c in colours} | {(255, 255, 255)}))
     frames = [f for f in sorted(set(ka) & set(kb)) if keep is None or keep(ka[f][1])]     # `keep`: the frames whose camera it accepts
     op0 = roof_opening(ka[frames[0]][1])
     assert op0 is not None, ("the spot's camera looks through no end of the roof", camera_pos(ka[frames[0]][1]))
@@ -1055,7 +1098,7 @@ def coverage(set_run, twin_run, colours: np.ndarray, cell: float = 0.5, keep=Non
         if f + 2 not in ka:
             continue
         cands = [ka[g][1] for g in (f + 2, f + 1, f, f - 1, f - 2) if g in ka]
-        rain = rain_pixels(sa[ka[f][0] - 1 + oa], sb[kb[f][0] - 1 + ob], colours, car)
+        rain = rain_pixels(sa[ka[f][0] - 1 + oa], sb[kb[f][0] - 1 + ob], colours_lit if f in lit else colours, car)
         fit = None
         for m in cands:
             op = roof_opening(m)
@@ -1156,8 +1199,15 @@ COVERED = [pytest.param(e, r, id=f"{n}{'_reverse' if r else ''}") for (e, r) in 
 # change that moves the passes' time or the generator's use: the join, a new module before the rain, a fix in the cover) and the
 # prototype comparison, seeded the same, re-run and recorded in the findings beside the new figure.
 LEAK_TRIP = 1.5
-OWN_LEAKS = {(METROPOLIS, True): (912, 61), (ALPINE, False): (1490, 84), (ALPINE, True): (1048, 59), (BAY_BRIDGE, True): (40, 6),
-             (BAY_BRIDGE, False): (123, 32), (METROPOLIS, False): (8, 3)}
+OWN_LEAKS = {(METROPOLIS, True): (318, 21), (ALPINE, False): (1404, 173), (ALPINE, True): (194, 7), (BAY_BRIDGE, True): (376, 17),
+             (BAY_BRIDGE, False): (71, 8), (METROPOLIS, False): (966, 74)}
+# Re-pinned for the streaming rain (v0.4.1, the re-pin rule's cause: its leaning streaks, up to 9 times v0.4's length, cross an
+# exit's edge where v0.4's short drops did not; the measure without the lit white, `rain_colours`): this build's maxima over SEEDS
+# (out/p88/gate2, 25 Nov; per seed px / worst): Metropolis normal 336/17, 966/74, 330/34 (the pits roof's exit: one long streak over
+# the wall right of the opening at 123 km/h, 74 px, out/p88/stills/metro_roof_leak.png); Metropolis reverse 245/8, 205/11, 318/21;
+# Alpine 287/21, 1404/173, 791/98; Alpine reverse 194/5, 92/4, 138/7; Bay Bridge normal 56/7, 71/8, 44/5; Bay Bridge reverse 12/2,
+# 376/17, 202/10. Worse than v0.4's on three: Metropolis normal (8/3), Alpine's worst frame (84) and Bay Bridge
+# reverse (40/6); better on the other three. v0.4's pins, for the record:
 # (the maxima over SEEDS of fix round 2's measure run, out/p80c/fr2a, 19 Nov: per seed 0 / 0x9e3779b9 / 0x2468ace1, px and worst:
 # Metropolis reverse 388/28, 594/61, 902/56; Alpine 1490/84, 168/14, 139/8; Alpine reverse 851/27, 1048/59, 794/45; Bay Bridge
 # reverse 13/3, 20/4, 40/6; Bay Bridge normal 0, 0, 123/32 (4fe3bec's code on the third seed: 123/32; the prototype seeded the
@@ -1368,8 +1418,9 @@ OWN_SPOT_CELLS = {"s3": (32, 36)}       # fix round 1's measure run: 32, 34, 32 
 # s3's leak outside the opening (the session lead's pin ruling, 19 Nov): the maximum over SEEDS of this build's own, 0, 1 288 and
 # 2 250 px; at most LEAK_TRIP times it; every other spot 0. 4fe3bec's code on seed 0x9e3779b9: 2 910 px; the prototype on its
 # own trajectory: 3 308 (the findings). The re-pin rule applies.
-OWN_SPOT_LEAK = {"s3": 2278}            # the join: 2 250 -> 2 278 (out/p80j/cover2: 0, 1 288, 2 278 px; the re-pin rule's cause:
-                                        # the lightning before the rain; the prototype's 3 308 stands, as above)
+OWN_SPOT_LEAK = {"s3": 2586}            # the join: 2 250 -> 2 278 (out/p80j/cover2: 0, 1 288, 2 278 px; the re-pin rule's cause:
+                                        # the lightning before the rain; the prototype's 3 308 stands, as above); v0.4.1: 2 278 ->
+                                        # 2 586 (the streaming rain; out/p88/gate2: 2 586, 2 214, 1 801 px, without the lit white)
 
 
 @pytest.mark.parametrize("spot", list(SPOTS))

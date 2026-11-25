@@ -11,6 +11,7 @@ strikes in the RAIN race matrix (tests/test_weather_rain.py's runs, which carry 
 The MAME runs of this module are made together at the first test that needs one (`light_runs`), VR_MAME_JOBS (default 2) at a time."""
 import hashlib
 import os
+import statistics
 import struct
 import threading
 from concurrent.futures import ThreadPoolExecutor
@@ -56,6 +57,23 @@ MID_SVC = (f"{MID_FRAME}:Service Mode:10;" + ";".join(f"{MID_FRAME + 100 + 40 * 
            f"{MID_FRAME + 3640}:VR1 (Red):8;{MID_FRAME + 3700}:VR4 (Green):8")   # the rain's SVC_INPUT, moved: MEMORY TEST, then EXIT
 MID_EXIT = MID_FRAME + 3700
 MID_RESET = MID_FRAME + 1                # MAME's soft reset at the white-out pass's frame end
+# v0.4.1, the lit rain (the streaming rain's design point 6: on a strike's sky flash every streak the palette's brightest white and
+# three times as wide): it changes only the rain's colour words and width, never palette RAM or the colour RAM, so the flash rule's
+# measure (`observed_flash`) cannot see it; these show it adds no flash onset from the picture itself (rain_pixels.lua's mean
+# relative luminance of the picture at every race frame on the stress runs; its key-coloured copy, LIT_KEY, its share).
+PIC_STEP = 0.10                         # a picture flash: its mean relative luminance up this much over its lowest of the last
+PIC_BACK = 8                            # PIC_BACK frames, and a fall of as much before the next one (WCAG's general flash, over the
+                                        # whole picture)
+PIC_MATCH = 3                           # video frames: a picture flash this near one of the lightning's onsets is that onset
+LIT_SHARE_MAX = 0.12                    # the lit streaks' share of the picture on a flash frame, a reported bound (fix round 1: the
+                                        # ten courses' maxima 0.058-0.109, Surfers Road highest; the first bound, 0.10, PIC_STEP, was
+                                        # passed on Surfers Oval 0.106 and Surfers Road 0.109). The lit streaks switch on only on the
+                                        # lightning's own flash passes (test_the_lit_rain_on_the_stress_runs): the evidence that they
+                                        # add no onset; this share says how much of the picture they are then
+SCENE_KEY_MAX = 600                     # a course's own pixels in the lit set's key colour (magenta) on the frames without a lit rain
+                                        # (fix round 1: Pacific Coast 514 at most, its race's first minute, Big Forest 278, the others
+                                        # 0-2; the lit-key run's own pass-by-pass check shows no lit pass there: the scene's)
+RAIN_WATCH = ("WCUR", "AGLOW", "PN", "PM", "PF")   # the rain's cells on the stress runs' W lines, after the sound's nthunder
 
 
 # ---- the log (lightning_log.lua: vrtools.mame.runner.light_env / parse_light_log) -------------------------------------------
@@ -466,7 +484,15 @@ class LightSession:
 
     def build(self, kind) -> tuple[Path, carrier.Layout]:
         """kind: "stress" (the cover, the lightning with the stress tune, the rain, the sound's triggers), "dense" (stress + DENSE only),
-        "refused" (stress, every foot cell refused: no placement finds a valid foot)."""
+        "refused" (stress, every foot cell refused: no placement finds a valid foot), "litkey" (stress, the rain's lit set in
+        magenta: v0.4.1's lit streaks counted on the picture)."""
+        if kind == "litkey":
+            st, lay = self.build("stress")
+            with self._set_lock:
+                if kind not in self.sets:
+                    from tests.test_weather_streaming import KEYS, recolour, tone_addrs
+                    self.sets[kind], self.lays[kind] = recolour(st, self.base / kind, {a: KEYS["magenta"] for a in tone_addrs(3)}), lay
+                return self.sets[kind], self.lays[kind]
         with self._set_lock:
             if kind not in self.sets:
                 from tests.test_tgp_build import _build
@@ -482,13 +508,15 @@ class LightSession:
         wd = self.base / "runs" / "_".join(str(k) for k in key)
         wd.mkdir(parents=True, exist_ok=True)
         setkind = {"stress": "stress", "dense": "dense", "end": "stress", "refused": "refused", "svc_mid": "stress",
-                   "reset_mid": "stress"}[kind] if kind != "vis" else f"vis_{key[1]}"
+                   "reset_mid": "stress", "litkey": "litkey"}[kind] if kind != "vis" else f"vis_{key[1]}"
         build, lay = self.build(setkind)
-        entry = key[1] if kind == "stress" else METROPOLIS if kind == "vis" else 0
+        entry = key[1] if kind in ("stress", "litkey") else METROPOLIS if kind == "vis" else 0
         env = self.rate._env(wd, entry, False)
+        from vrtools.arcade.weather import rain
+        watch = [lay.cell('sound', 'nthunder')] + [rain.cell(lay, n) for n in RAIN_WATCH]
         env.update({"VR_FRAME_LOG": str(wd / "frames.txt"), "VR_RATE_LOG": str(wd / "rate.txt"), "VR_STALE_LOG": str(wd / "stale_list.txt"),
                     "VR_STORM_LOG": str(wd / "storm.txt"), "VR_STORM_RAIN": f"{lay.cell('rain', 'state'):x}", "VR_STORM_FRAMES": "1",
-                    "VR_RAIN": "1", **light_env(lay, wd), "VR_STORM_WATCH": f"{lay.cell('sound', 'nthunder'):x}"})
+                    "VR_RAIN": "1", **light_env(lay, wd), "VR_STORM_WATCH": ",".join(f"{a:x}" for a in watch)})
         seconds = STRESS_SECONDS
         if kind == "end":
             env.pop("VR_HOLD_CLOCK", None)
@@ -513,11 +541,18 @@ class LightSession:
             env["VR_HOLD_CLOCK"] = "1"
             if kind == "refused":
                 seconds = REFUSED_SECONDS
+            if kind in ("stress", "litkey"):            # v0.4.1: the picture (its luminance; on litkey also the lit streaks' key)
+                env.update({"VR_EXTRA_LUA": str(LUA_DIR / "rain_pixels.lua"), "VR_RPIX_LOG": str(wd / "rpix.txt"),
+                            "VR_RPIX_KEYS": "1" if kind == "litkey" else "0"})
         run_mame(LUA_DIR / "autoplay.lua", seconds, wd, build, env=env, timeout=5400)
         r = Run(wd, finish=kind not in ("end", "svc_mid", "reset_mid"))
         r.storm = parse_storm_log(wd / "storm.txt")
         r.light, r.gaps = parse_light_log(wd / "light.txt")
         r.entry = entry
+        if (wd / "rpix.txt").exists():
+            from vrtools.mame.runner import parse_rain_pixels
+            r.pix = parse_rain_pixels(wd / "rpix.txt")
+        r.rain = {f: dict(zip(RAIN_WATCH, v[1:])) for f, v in r.storm.watches.items() if len(v) > len(RAIN_WATCH)}
         return r
 
     def prefetch(self, keys):
@@ -553,7 +588,11 @@ def light_keys(items) -> list:
             "test_no_strike_where_no_foot_is_valid": lambda p: [("refused",)],
             "test_the_test_menu_in_the_middle_of_a_strike": lambda p: [("svc_mid",), ("stress", 0)],
             "test_a_soft_reset_in_the_middle_of_a_strike": lambda p: [("reset_mid",), ("stress", 0)],
-            "test_the_bolt_shows_on_metropolis": lambda p: [("vis", "key"), ("vis", "twin")]}
+            "test_the_bolt_shows_on_metropolis": lambda p: [("vis", "key"), ("vis", "twin")],
+            "test_the_picture_holds_the_flash_rule_under_stress": lambda p: [("stress", p["entry"])],
+            "test_no_lit_rain_under_cover": lambda p: [("stress", e) for e in COVER_ENTRIES],
+            "test_the_lit_streaks_share_of_a_flash_pass": lambda p: [("litkey", p["entry"])],
+            "test_the_lit_rain_on_the_stress_runs": lambda p: [("stress", p["entry"])]}
     keys = []
     for i in items:
         name = getattr(i, "originalname", None) or getattr(i, "name", "")
@@ -625,6 +664,121 @@ def test_the_flash_rule_under_stress(light_runs, entry):
     assert crowded(on) == [], crowded(on)[:3]
     assert interface_errors(r.light) == [], interface_errors(r.light)[:5]
     assert r.light[-1].seq == last["NSTRIKE"] and {p.band for p in r.light if p.seq} <= {1, 2, 3}
+
+
+def picture_onsets(pix) -> list[int]:
+    """The picture's flash onsets in rain_pixels.lua's lines: a rise of the mean relative luminance by PIC_STEP over its lowest of
+    the last PIC_BACK frames, counted once until it has fallen PIC_STEP below its peak (a rise after a fall, the rule's definition);
+    after a fall the lowest is taken from the frames since that fall only (a white-out falling to a bright sky is one flash, as the
+    rule counts the lightning's levels 4 then 2; gate1 counted its next frame again on Surfers Road). The frames out of the race,
+    which the logger skips, break the sequence."""
+    out, high, peak, recent, last = [], False, 0.0, [], None
+    for p in pix:
+        if last is not None and p.frame != last + 1:
+            high, recent = False, []
+        last = p.frame
+        if not high:
+            if recent and p.luminance - min(recent[-PIC_BACK:]) >= PIC_STEP:
+                out.append(p.frame)
+                high, peak = True, p.luminance
+        else:
+            peak = max(peak, p.luminance)
+            if peak - p.luminance >= PIC_STEP:
+                high, recent = False, []
+        recent.append(p.luminance)
+    return out
+
+
+def lit_frames(r) -> set:
+    """The video frames whose picture can hold a lit rain: each pass with the rain lit (WCUR over 1) or in its afterglow, and the
+    PIC_MATCH frames after it (the list a pass builds is shown on the frames after)."""
+    from vrtools.arcade.weather import rain  # noqa: F401
+    lit = {f for f, c in r.rain.items() if fbits(c["WCUR"]) != 1.0 or c["AGLOW"]}
+    return {f + d for f in lit for d in range(PIC_MATCH + 2)}
+
+
+@pytest.mark.parametrize("entry", STRESS_ENTRIES)
+def test_the_lit_rain_on_the_stress_runs(light_runs, entry):
+    """v0.4.1, the lit rain pass by pass on each course's stress run (a strike every 0.4-1.2 s; `lit_errors` of
+    test_weather_streaming.py): lit and three times as wide exactly on the passes the lightning's flash is up in the open, the
+    afterglow's length after it, nothing between strikes, nothing under cover. The flash and afterglow pass counts per course go to
+    the summary (the findings)."""
+    from tests.test_weather_streaming import lit_errors
+    r = light_runs.run("stress", entry)
+    flashes, glow, under, errs = lit_errors(r.rain, r.light, r.storm)
+    _summary(light_runs, f"lit passes {NAMES[entry]}", r, f", flash passes {flashes}, afterglow passes {glow}, under cover {under}, "
+                                                          f"errors {len(errs)}")
+    assert flashes > 20 and glow > 50 and errs == [], (NAMES[entry], flashes, glow, errs[:5])
+
+
+@pytest.mark.parametrize("entry", STRESS_ENTRIES)
+def test_the_picture_holds_the_flash_rule_under_stress(light_runs, entry):
+    """v0.4.1: the flash rule read from the picture itself, the lit rain in it (the stress runs of all ten courses): no picture flash
+    onset (`picture_onsets`) on a frame the rain is lit or glowing that is not one of the lightning's own onsets (within PIC_MATCH
+    frames of `observed_flash`'s): the lit rain adds no flash onset; and the storm's picture onsets (the lightning's own and any on a
+    lit frame) and the scene's own brightness changes (gate1: Surfers Road's at 4942, no strike and no lit rain on it) together never
+    more than three within WINDOW_FRAMES (the review's fix round 1: every picture onset counts). The lit streaks' share of the
+    picture on a flash frame is 0.058 to 0.109 by course (LIT_SHARE_MAX; over PIC_STEP on the two Surfers courses only), so this
+    measure would mostly not see an onset of the lit streaks alone: it is NOT the evidence that the lit rain adds none. That evidence
+    is the pass-by-pass test, test_the_lit_rain_on_the_stress_runs: the rain is lit only on the passes the lightning's own flash is
+    up, on all ten courses."""
+    r = light_runs.run("stress", entry)
+    pic = picture_onsets(r.pix)
+    light = onsets(observed_flash(r.light, light_runs.rate.out, entry, r.storm))
+    lit = lit_frames(r)
+    near = lambda f: any(abs(f - g) <= PIC_MATCH + 2 for g in light)
+    added = [f for f in pic if f in lit and not near(f)]
+    storm = [f for f in pic if f in lit or near(f)]
+    scene = [f for f in pic if f not in storm]
+    lum = [p.luminance for p in r.pix]
+    _summary(light_runs, f"picture {NAMES[entry]}", r, f", picture onsets {len(pic)} (the storm's {len(storm)}, the scene's "
+                                                       f"{len(scene)} at {scene}), the lightning's {len(light)}, on lit frames not "
+                                                       f"the lightning's {len(added)}, luminance {min(lum):.3f}-{max(lum):.3f}")
+    assert len(r.pix) > 3000 and crowded(pic) == [] and added == [], (crowded(pic)[:3], added[:5], "the scene's onsets", scene)
+
+
+def test_no_lit_rain_under_cover(light_runs):
+    """v0.4.1 (design point 6: "nothing under cover"): on the stress runs through Metropolis's and Alpine's tunnels and the roof by
+    the pits, no pass with the cover's under_cover set has the rain lit or glowing (WCUR 1, AGLOW 0, the near set); in the open the
+    lit rain shows."""
+    from vrtools.arcade.weather import layout, rain
+    near = rain.tex(layout.block("rain tones").start)
+    under = lit_open = 0
+    for e in COVER_ENTRIES:
+        r = light_runs.run("stress", e)
+        early, last = set(), 0                         # passes the guard stopped before the rain's choices: its last pass's kept
+        for sp in r.storm.passes:
+            if sp.late > last and sp.drawn == 0:
+                early.add(sp.frame)
+            last = sp.late
+        for p in r.light:
+            c = r.rain.get(p.frame)
+            if c is None or p.frame in early:
+                continue
+            if p.cover == 1 and c["PN"]:
+                under += 1
+                assert fbits(c["WCUR"]) == 1.0 and c["AGLOW"] == 0 and c["PN"] == near, (NAMES[e], p.frame, c)
+            elif fbits(c["WCUR"]) != 1.0:
+                lit_open += 1
+    assert under > 50 and lit_open > 20, (under, lit_open)
+
+
+@pytest.mark.parametrize("entry", STRESS_ENTRIES)
+def test_the_lit_streaks_share_of_a_flash_pass(light_runs, entry):
+    """v0.4.1: the lit streaks' share of the picture (each course's stress run with the rain's lit set in magenta) on the frames of a
+    flash pass (the scene's own magenta not taken off: an upper bound): at most LIT_SHARE_MAX (reported with its mean); on the
+    other frames no more than the scene's own (SCENE_KEY_MAX; nothing between strikes is test_the_lit_rain_on_the_stress_runs'
+    pass by pass). Under PIC_STEP: the picture test cannot see an onset of the lit streaks alone."""
+    r = light_runs.run("litkey", entry)
+    from tests.test_weather_streaming import lit_errors
+    assert lit_errors(r.rain, r.light, r.storm)[3] == [], (NAMES[entry], "a lit pass outside the lightning's flash on the lit-key run")
+    lit = lit_frames(r)
+    area = 496 * 384
+    on = [sum(p.magenta) / area for p in r.pix if p.frame in lit]
+    off = [sum(p.magenta) for p in r.pix if p.frame not in lit]
+    _summary(light_runs, f"lit streaks {NAMES[entry]}", r, f", flash frames {len(on)}, share max {max(on, default=0):.4f} mean "
+                                           f"{statistics.mean(on) if on else 0:.4f}, pixels on other frames max {max(off, default=0)}")
+    assert len(on) > 100 and max(on) <= LIT_SHARE_MAX and max(off) <= SCENE_KEY_MAX, (len(on), max(on, default=0), max(off, default=0))
 
 
 def test_the_rule_cuts_a_denser_pattern(light_runs):

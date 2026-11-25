@@ -1787,3 +1787,80 @@ Totals of the 25 F, 1 X and 15 E: a 6 F and the 15 E (one cause), b 1, c 18 F an
 
 Re-measured on the merged head (Task 8's Metropolis aim, the load's mask): the cover's Metropolis pins and the two lightning tests
 in part 2 (above). The owner has not driven the merged head's bytes; out/p80j/play2 is its play set.
+
+## Streaming rain (v0.4.1, 25 Nov 2026; branch `phase88-streaming-rain`)
+
+The rain Pascal drove on spike 87 (`out/p87/play_fx3`) and approved ("ok i think we r good, let s publish this update, update the
+website rain video with this one and make a release"), built properly: `docs/superpowers/specs/2026-11-25-streaming-rain-design.md`.
+Measured on the release build (1f5106e; the last run on 47e05d0: `out/p88/last-run.log`, 655 passed, all twenty races).
+
+**Per race** (the RAIN matrix: 150 s, the autopilot, the clock held; the cap 17.9 ms; no stale list on any):
+
+| race | busiest ms | rain late passes | trims budget cl/sp | trims late cl/sp | after the move / unit in flight / tail us | longest unit us |
+|---|---|---|---|---|---|---|
+| Big Forest | 17.52 | 75 | 0/0 | 151/248 | 88 / 40 / 52 | 147.0 |
+| Bay Bridge | 17.61 | 241 | 0/0 | 807/849 | 132 / 84 / 62 | 126.5 |
+| Acropolis | 17.47 | 45 | 0/9 | 9/94 | 89 / 39 / 60 | 127.0 |
+| Alpine | 17.52 | 3 | 0/0 | 1/0 | 83 / 36 / 52 | 147.0 |
+| Amazon Falls | 15.47 | 0 | 0/0 | 0/0 | - | 127.0 |
+| Diablo Canyon | 17.46 | 2 | 0/0 | 24/1 | 82 / 34 / 52 | 108.5 |
+| Metropolis | 17.57 | 132 | 0/0 | 160/30 | 137 / 76 / 64 | 115.5 |
+| Pacific Coast | 17.51 | 2 | 0/0 | 25/36 | 70 / 22 / 52 | 128.0 |
+| Surfers Oval | 16.33 | 0 | 0/0 | 0/0 | - | 108.5 |
+| Surfers Road | 16.05 | 0 | 0/0 | 0/0 | - | 125.5 |
+| Big Forest reverse | 16.98 | 0 | 950/1359 | 0/0 | - | 125.5 |
+| Bay Bridge reverse | 17.60 | 139 | 0/0 | 474/91 | 130 / 83 / 61 | 125.5 |
+| Acropolis reverse | 17.47 | 36 | 0/0 | 84/101 | 90 / 38 / 52 | 128.0 |
+| Alpine reverse | 17.51 | 8 | 0/0 | 55/55 | 88 / 40 / 52 | 128.0 |
+| Amazon Falls reverse | 15.66 | 0 | 0/0 | 0/0 | - | 127.0 |
+| Diablo Canyon reverse | 17.52 | 15 | 0/0 | 52/80 | 88 / 36 / 52 | 108.5 |
+| Metropolis reverse | 17.56 | 125 | 0/0 | 174/8 | 137 / 76 / 64 | 126.5 |
+| Pacific Coast reverse | 17.45 | 2 | 0/0 | 24/21 | 65 / 16 / 52 | 111.5 |
+| Surfers Oval reverse | 16.09 | 0 | 0/0 | 0/0 | - | 126.5 |
+| Surfers Road reverse | 17.46 | 3 | 0/0 | 34/29 | 78 / 28 / 52 | 125.5 |
+
+**Splashes a second** (each course's rate race against v0.4's set, `VR_V04_SET`, on the same line): Big Forest 85.4 (v0.4 79.0,
+1.08), Bay Bridge 76.2 (75.8, 1.01), Acropolis 79.6 (78.8, 1.01), Alpine 71.7 (70.7, 1.01), Amazon Falls 80.7 (83.2, 0.97), Diablo
+Canyon 81.1 (79.2, 1.02), Metropolis 61.2 (60.2, 1.02), Pacific Coast 81.5 (79.4, 1.03), Surfers Oval 80.5 (82.2, 0.98), Surfers
+Road 80.8 (80.7, 1.00). (gate1, before the rule splashed near cover: Metropolis 0.86.)
+
+**The picture on Big Forest's taped race** (v0.4's set recorded it, this tree's replayed it; the fill and the band shares are
+measured on this one race, as the brief's test asks, not per course): the fill against v0.4's (every drop in
+one key colour) at 130-170 km/h total 1.05, thirds top 0.64 / middle 1.16 / bottom 107.7 (v0.4's rain hardly reaches the bottom
+third); at top speed total 1.24, thirds 0.98 / 1.09 / 64.2. The top third at 130-170 km/h is under the lead's first 0.7: the
+approved look measures so (spike 87's play_fx3 0.66); floor 0.6 by the session lead's ruling. Band shares near / mid / far: 0.54 /
+0.31 / 0.15 at 130-170 km/h, 0.24 / 0.41 / 0.35 at top speed. The lean measured from the rain's cells: 30.5 degrees at 100 km/h,
+41.4 at 150, 55.8 at 250 (length 1.73, 2.10, 5.93). At rest: 157 countdown passes, 775 landings, 134 splashes spawned.
+
+**The lit rain**: on the taped race 14 flash passes and 48 afterglow passes, every one as the rule says. The stress runs (a strike
+every 0.4-1.2 s) on all ten courses: the lightning's onsets shown 69-78 a run, never four in a second; the picture's own flash
+onsets (rain_pixels.lua's mean relative luminance) 23-36 a run, none on a lit frame that is not the lightning's own, the storm's
+never four in a second (the scene's own: 0-2 a run). The lit streaks' share of the picture on a flash frame (Big Forest stress, the lit
+set in magenta): at most 0.084, mean 0.011. No lit rain under cover (Metropolis and Alpine stress runs).
+Fix round 1 (the review): on the ten stress runs every picture onset counted, the scene's included (the scene's own: Bay Bridge 3662,
+Metropolis 4016 and 4378, Surfers Road 4942), never four in a second; the lit rain checked pass by pass on each (lit and wide only on
+the lightning's flash passes in the open, the afterglow after it, nothing under cover; 0 errors), flash / afterglow / under-cover
+passes: Big Forest 115 / 414 / 0, Bay Bridge 122 / 444 / 52, Acropolis 122 / 438 / 0, Alpine 119 / 426 / 165, Amazon Falls 122 /
+441 / 0, Diablo Canyon 124 / 432 / 0, Metropolis 90 / 318 / 324, Pacific Coast 121 / 432 / 0, Surfers Oval 129 / 462 / 0, Surfers
+Road 118 / 432 / 0. The lit streaks' share on a flash frame, the maximum (mean) per course: Big Forest 0.084 (0.011), Bay Bridge
+0.074 (0.008), Acropolis 0.083 (0.012), Alpine 0.058 (0.012), Amazon Falls 0.085 (0.012), Diablo Canyon 0.071 (0.012), Metropolis
+0.067 (0.013), Pacific Coast 0.095 (0.012), Surfers Oval 0.106 (0.012), Surfers Road 0.109 (0.012): over the first bound (0.10,
+the picture measure's step) on the two Surfers courses; the picture measure cannot see an onset of the lit streaks alone at this
+share, so the evidence that they add none is the pass-by-pass check (they light only on the lightning's own flash passes).
+
+**The cover** (three trajectories, the taped games): the exits' leak px / worst frame: Metropolis normal 966 / 74 (v0.4: 8 / 3),
+Metropolis reverse 318 / 21 (912 / 61), Alpine 1 404 / 173 (1 490 / 84), Alpine reverse 194 / 7 (1 048 / 59), Bay Bridge 71 / 8
+(123 / 32), Bay Bridge reverse 376 / 17 (40 / 6); the pits roof's six spots: coverage 97.2-100 %, leak 0 but s3 (1 801-2 586 px;
+v0.4: 2 278 at most). The measures leave the lit white out (`rain_colours`) but on the frames whose pass had the lit rain (fix
+round 1: the figures unchanged, no lit streak over a tunnel's inside). The prototype's side of the cover's comparisons was not run
+again: it depends only on the prototype's set and the taped DRY games, neither changed by v0.4.1, so its figures stand. The three
+worse exits ship as a known issue (the session lead's ruling; the public README says so; the fix is the follow-ups' first item).
+
+**The contract** (storm_makeup.lua on Metropolis RAIN, the release build): while the car moves the landing loop's guard is skipped,
+so a cluster's motion, scale and drawing are one unit, within the longest unit measured between two guard tests, 147 us over the
+twenty races (lightning_log.lua's G lines); the scenery routine's return to the first guard test 5 us;
+the natural tails at most 63.5 us (in the cover); the tail forced in the first module on every 5th show pass 105-127 us (TAIL_US
+160); the sound's trigger 7 us idle, 20-21.5 us a thunder.
+
+**Room**: the rain's objects 56 448 of 64 448 bytes (8 000 free; v0.4 all of it); "rain tones" 232 of 256; "rain colours" 24 of
+96; the cover's objects 10 560 of 12 160; the storm image 19 988 of 20 480; module cells 4 224 of 7 936.

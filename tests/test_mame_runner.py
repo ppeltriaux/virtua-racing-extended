@@ -492,7 +492,7 @@ def test_a_missing_reference_set_skips_or_fails(tmp_path, monkeypatch):
     the variable and how the set is built; with VR_REQUIRE_REFERENCE_SETS=1 it fails instead; one that holds vr.zip is returned."""
     from _pytest.outcomes import Failed, Skipped
     from tests.reference_sets import REFERENCE_SETS, reference_set
-    assert set(REFERENCE_SETS) == {"VR_PRE_WEATHER_SET", "VR_RELEASED_SET", "VR_P75_SET", "VR_MAIN_SET"}
+    assert set(REFERENCE_SETS) == {"VR_PRE_WEATHER_SET", "VR_RELEASED_SET", "VR_P75_SET", "VR_MAIN_SET", "VR_V04_SET"}
     monkeypatch.delenv("VR_REQUIRE_REFERENCE_SETS", raising=False)
     monkeypatch.delenv("VR_P75_SET", raising=False)
     with pytest.raises(Skipped, match=r"VR_P75_SET is not set: .*LOCAL ONLY"):

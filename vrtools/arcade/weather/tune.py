@@ -44,11 +44,47 @@ class RainTune:
     drops: the falling drops, in `clusters` clusters of 5 (each cluster one of 8 shapes of 5 boxes): 300 in 60.
     splash_range: a drop landing deeper than this (view units, about 1.06 m) leaves no splash: 35 (Pascal, of drops ending without
     one: "it look like they're floating").
-    splash_frames: logic frames a splash lasts, one stage a frame (the stage shapes are drawn for 6)."""
+    splash_frames: logic frames a splash lasts, one stage a frame (the stage shapes are drawn for 6).
+
+    The streaming rain (v0.4.1; docs/superpowers/specs/2026-11-25-streaming-rain-design.md, as Pascal drove it in spike 87 and
+    approved it: "ok i think we r good, let s publish this update, update the website rain video with this one and make a release"):
+    lean_kmh, lean_max_deg: the drops' axis leans toward the direction of travel by atan(km/h / lean_kmh), at most lean_max_deg
+      (170, 60: 30 degrees at 100 km/h, 41 at 150, 50 at 200, 56 at 250); the clusters move along it.
+    width: the drops' width against v0.4's (0.25: a one-pixel line at most depths).
+    head: the leading share of a streak drawn one tone brighter (0.35: "yes it s good").
+    length_kmh, length: the streak's length factor, 1 at rest, length[0] at length_kmh[0] and length[1] from length_kmh[1] (2.1 at
+      150 km/h, 9.0 from 330), linear between.
+    place_depth, place_top_power, place_up: where a moving drop that left the view comes back: a depth spread evenly from the
+      volume's near limit to place_depth[0] at length_kmh[0] and below, place_depth[1] from length_kmh[1] (16 -> 8 units), at a
+      height biased to the view's top (1 - (top + bottom) r^power below top + place_up, as shares of the depth).
+    band_cuts: the depth shading's band cuts as shares of that far depth (0.33, 0.55).
+    tones: the six depth tones' targets under the overcast grade: near head, near tail, mid head, mid tail, far head, far tail
+      (v0.4's white to the overcast's grey, never blue: "this is wrong, the water is blue"); each near-neutral (the channels within
+      2 of each other, R <= G <= B, v0.4's white's own cast).
+    lit_tone, lit_width, afterglow: on a strike's sky flash every streak lit_tone and lit_width times as wide; for afterglow passes
+      after it each band one tone brighter at its normal width.
+    splash_kmh, splash_rate: at or under splash_kmh the drops land and splash as in v0.4; above it they do not land and the splashes
+      come by rule, splash_rate a pass (v0.4's rate at race speeds)."""
     drops: int = 300
     clusters: int = 60
     splash_range: float = 35.0
     splash_frames: int = 6
+    lean_kmh: float = 170.0
+    lean_max_deg: float = 60.0
+    width: float = 0.25
+    head: float = 0.35
+    length_kmh: tuple = (150.0, 330.0)
+    length: tuple = (2.1, 9.0)
+    place_depth: tuple = (16.0, 8.0)
+    place_top_power: int = 3
+    place_up: float = 0.10
+    band_cuts: tuple = (0.33, 0.55)
+    tones: tuple = ((29, 30, 31), (27, 28, 29), (25, 26, 26), (22, 23, 24), (22, 23, 24), (19, 20, 20))
+    lit_tone: tuple = (31, 31, 31)
+    lit_width: float = 3.0
+    afterglow: int = 6
+    splash_kmh: float = 27.0
+    splash_rate: float = 2.85
 
     def __post_init__(self):
         if not 1 <= self.clusters <= 60 or self.drops != 5 * self.clusters:   # the cells hold 60; a cluster is 5 drops
@@ -57,6 +93,33 @@ class RainTune:
             raise ValueError(f"splash_range {self.splash_range}: over 3, at most 45")
         if self.splash_frames != 6:
             raise ValueError(f"splash_frames {self.splash_frames}: the splash's stage shapes are drawn for 6")
+        if not 50.0 <= self.lean_kmh <= 500.0 or not 0.0 < self.lean_max_deg <= 70.0:   # never flat: "it should be like in the video
+            raise ValueError(f"lean {self.lean_kmh} km/h, at most {self.lean_max_deg} degrees: 50..500, over 0 and at most 70")
+        if not 0.1 <= self.width <= 1.0 or not 0.1 <= self.head <= 0.9:
+            raise ValueError(f"width {self.width} (0.1..1), head {self.head} (0.1..0.9)")
+        (v1, v2), (l1, l2) = self.length_kmh, self.length
+        if not (0.0 < v1 < v2 <= 400.0 and 1.0 <= l1 <= l2 <= 16.0):
+            raise ValueError(f"length {self.length} at {self.length_kmh} km/h: 0 < v1 < v2 <= 400, 1 <= l1 <= l2 <= 16")
+        d1, d2 = self.place_depth
+        if not (3.6 < d2 <= d1 <= 45.0 and 1 <= self.place_top_power <= 4 and 0.0 <= self.place_up <= 0.3):
+            raise ValueError(f"place_depth {self.place_depth} (3.6 < far2 <= far1 <= 45), power {self.place_top_power} (1..4), "
+                             f"up {self.place_up} (0..0.3)")
+        c1, c2 = self.band_cuts
+        if not 0.0 < c1 < c2 < 1.0:
+            raise ValueError(f"band_cuts {self.band_cuts}: 0 < a < b < 1")
+        if len(self.tones) != 6 or not all(_neutral(t) for t in self.tones) or not _neutral(self.lit_tone):
+            raise ValueError(f"tones {self.tones} / lit {self.lit_tone}: six, each near-neutral (0..31, the channels within 2, "
+                             f"R <= G <= B): \"this is wrong, the water is blue\"")
+        if not 1.0 <= self.lit_width <= 4.0 or not 0 <= self.afterglow <= 30:
+            raise ValueError(f"lit_width {self.lit_width} (1..4), afterglow {self.afterglow} (0..30 passes)")
+        if not 0.0 <= self.splash_kmh <= 60.0 or not 0.0 <= self.splash_rate <= 6.0:
+            raise ValueError(f"splash_kmh {self.splash_kmh} (0..60), splash_rate {self.splash_rate} (0..6 a pass)")
+
+
+def _neutral(t) -> bool:
+    """A near-neutral tone target: three channels 0..31, within 2 of each other, R <= G <= B (v0.4's white's own cast)."""
+    return (isinstance(t, tuple) and len(t) == 3 and all(isinstance(c, int) and 0 <= c <= 31 for c in t)
+            and t[0] <= t[1] <= t[2] and t[2] - t[0] <= 2)
 
 
 @dataclass(frozen=True)
