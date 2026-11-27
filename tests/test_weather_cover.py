@@ -698,7 +698,9 @@ class CoverSession:
         def make(k):
             try:
                 r = self._make(k)
-            except Exception as e:                     # noqa: BLE001 (raised again by `run`)
+            except (Exception, pytest.skip.Exception, pytest.fail.Exception) as e:   # noqa: BLE001 (raised again by `run`;
+                # Phase 90: a run that skips or fails at its start, the released run without VR_RELEASED_SET, now ends only the tests
+                # reading it: its skip escaped the prefetch, the session was never kept and every later test built one again)
                 with self._lock:
                     self.failed[k] = e
                 return
@@ -717,6 +719,8 @@ class CoverSession:
 
     def run(self, *key):
         from vrtools.mame.runner import parse_storm_log
+        if key in self.failed and isinstance(self.failed[key], pytest.skip.Exception):
+            pytest.skip(f"the run {key}: {self.failed[key].msg}")
         if key in self.failed:
             raise AssertionError(f"the run {key} failed: {self.failed[key]!r}") from self.failed[key]
         if key not in self.runs:
@@ -759,10 +763,19 @@ _COVER: dict = {}
 def cover_runs(request, storm_runs) -> CoverSession:   # noqa: F811 (the fixture)
     key = id(storm_runs)
     if key not in _COVER:
-        s = CoverSession(storm_runs)
-        s.prefetch(cover_keys(request.session.items))
+        try:
+            s = CoverSession(storm_runs)
+            s.prefetch(cover_keys(request.session.items))
+        except (Exception, pytest.skip.Exception, pytest.fail.Exception) as e:
+            _COVER[key] = e        # Phase 90: a construction that failed (or skipped) is not made again by every later test
+            raise
         _COVER[key] = s
-    return _COVER[key]
+    s = _COVER[key]
+    if isinstance(s, pytest.skip.Exception):
+        pytest.skip(f"the cover session skipped in an earlier test: {s.msg}")
+    if isinstance(s, BaseException):
+        raise RuntimeError(f"the cover session failed in an earlier test: {s!r}") from s
+    return s
 
 
 # ---- the measures -------------------------------------------------------------------------------------------------------------

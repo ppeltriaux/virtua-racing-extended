@@ -1,6 +1,6 @@
 """The select panels' name lettering (Phase 21): the white letters the three original panels carry on their overlay
 (layer A, rows 148-166: 2-px strokes, 1-px dark outline, 6 x 14, I 2 wide), cut from the user's ROM at build time,
-plus N M U V Z drawn in the same style (the seven new names need them). Recon §1."""
+plus N M U V Z drawn in the same style (the seven new names need them), and W (pack 2's BELTWAY). Recon §1."""
 from __future__ import annotations
 
 import numpy as np
@@ -23,6 +23,7 @@ NEW_LETTERS: dict[str, tuple[str, ...]] = {
     "V": ("##..##",) * 10 + (".####.", ".####.", "..##..", "..##.."),
     "Z": ("######", "######", "....##", "...###", "...##.", "..###.", "..##..", ".###..", ".##...", "###...", "##....",
           "##....", "######", "######"),
+    "W": ("##...##",) * 8 + ("##.#.##", "##.#.##", "#######", "#######", "###.###", "##...##"),   # Phase 90: BELTWAY (M upside down)
 }
 
 

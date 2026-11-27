@@ -55,13 +55,15 @@ def _other_files(path: Path) -> tuple[list[str], list[str]]:
     return missing, bad
 
 
-def check_inputs(roms: Path, saturn: Path, out: Path, plans: list[CoursePlan] = COURSES) -> Report:
+def check_inputs(roms: Path, saturn: Path | None, out: Path, plans: list[CoursePlan] = COURSES) -> Report:
     """What a build needs, in order: the ROM directory with a good `vr.zip` (the two extra zips are a warning), the
-    Saturn disc with every planned course file, and an output directory that is not the ROM directory."""
+    Saturn disc with every planned course file, and an output directory that is not the ROM directory. Phase 90: a set with no
+    Saturn course (the PS2 courses' set) needs no Saturn disc: with no `plans`, `saturn` may be None and is not read."""
     from vrtools.saturn.iso import Iso2352, IsoError
     problems: list[str] = []
     notes: list[str] = []
-    roms, saturn, out = Path(roms), Path(saturn), Path(out)
+    roms, out = Path(roms), Path(out)
+    saturn = Path(saturn) if saturn is not None else None
     if not roms.is_dir():
         problems.append(f"ROM directory {roms} does not exist (it must hold vr.zip, model1io.zip and m1comm.zip)")
     elif not (roms / "vr.zip").is_file():
@@ -86,7 +88,11 @@ def check_inputs(roms: Path, saturn: Path, out: Path, plans: list[CoursePlan] = 
                 notes.append(f"{roms / name}: present (copied beside the output)")
             else:
                 notes.append(f"warning: {roms / name} is missing — the build does not need it, MAME does to run the set")
-    if not saturn.is_file():
+    if not plans:
+        pass                                            # the PS2 courses' set: nothing of the Saturn disc is read
+    elif saturn is None:
+        problems.append("the Saturn courses' set needs the Saturn disc (--saturn or $VR_SATURN_CUE)")
+    elif not saturn.is_file():
         problems.append(f"Saturn cue {saturn} does not exist (the .cue of Virtua Racing (Europe), its .bin beside it)")
     else:
         track = _disc_track(saturn)
@@ -159,13 +165,27 @@ def apply_tune(plans: list[CoursePlan], tune: dict[str, dict[str, float | int]])
     return [dataclasses.replace(p, **tune[p.name]) if p.name in tune else p for p in plans]
 
 
+def tune_plans(pack: str = "saturn") -> list:
+    """The plans `--tune` may name for the chosen pack: pack 1's seven Saturn courses, or the other pack's visible courses (fix round
+    1, I2: `--tune ISLAND:pace=1.1` reaches pack 2's Island; its hidden copies follow their course)."""
+    if pack == "saturn":
+        return list(COURSES)
+    from vrtools.arcade import pack as packs
+    return [p for p in packs.PACKS[pack].slots if not isinstance(p, packs.Hidden)]
+
+
 def build(roms: Path, saturn: Path, out: Path, tune: dict[str, dict[str, float | int]] | None = None,
-          smoke: bool = False, seconds: int = SMOKE_SECONDS, weather: bool = True, weather_tunes=None) -> int:
+          smoke: bool = False, seconds: int = SMOKE_SECONDS, weather: bool = True, weather_tunes=None,
+          pack: str = "saturn", ps2: Path | None = None) -> int:
     """Check the inputs, convert the seven courses into the user's set, write out/vr.zip (the input set's extra
     members copied through), copy the two extra zips, write out/build-report.txt. 0 when done; 1 when the inputs
     fail the check (its lines printed); 2 when a course does not fit (PatchError names it); 3 when the smoke test
     fails. `weather` False (--no-weather): the set without the COURSE WEATHER screen, as before the weather feature.
-    `weather_tunes` (a weather.tune.Tunes; the design's defaults when None: the command line sets none): the weather's tunes."""
+    `weather_tunes` (a weather.tune.Tunes; the design's defaults when None: the command line sets none): the weather's tunes.
+    Phase 90: `pack` "ps2" (--pack ps2) builds pack 2 (`arcade.pack`): the PS2 disc `ps2` (--ps2) checked too, the set written to
+    `out` like pack 1's; pack 1 ("saturn", the default) is built exactly as before."""
+    if pack != "saturn":
+        return build_pack_set(roms, saturn, out, pack, ps2, tune, weather=weather, weather_tunes=weather_tunes)
     report = check_inputs(roms, saturn, out)
     if not report.ok:
         print("\n".join(report.lines))
@@ -196,6 +216,59 @@ def build(roms: Path, saturn: Path, out: Path, tune: dict[str, dict[str, float |
     return rc
 
 
+def build_pack_set(roms: Path, saturn: Path, out: Path, name: str, ps2: Path | None, tune=None, weather: bool = True,
+                   weather_tunes=None) -> int:
+    """Phase 90: another pack than pack 1 (`arcade.pack.PACKS`), as `build` does pack 1: 1 when an input fails its check (the PS2
+    disc too), 2 when a course does not fit."""
+    from vrtools.arcade import pack as packs
+    from vrtools.convert.geometry import ConvertError
+    from vrtools.ps2 import Ps2ReadError
+    from vrtools.saturn.iso import IsoError
+    plan = packs.PACKS[name]
+    saturn_plans = [p for p in plan.slots if isinstance(p, CoursePlan)]
+    report = check_inputs(roms, saturn, out, saturn_plans)
+    lines = list(report.lines)
+    ok = report.ok
+    if ps2 is None:
+        ok, lines = False, lines + ["problem: the PS2 courses' set needs the PS2 disc (--ps2 or $VR_PS2_DISC)"]
+    else:
+        problems, notes = packs.check_ps2(ps2, plan)
+        ok, lines = ok and not problems, lines + [f"problem: {p}" for p in problems] + notes
+    if not ok:
+        print("\n".join(lines))
+        print("not ready: fix the problems above")
+        return 1
+    if tune:
+        tuned = {p.name: p for p in apply_tune(tune_plans(name), tune)}
+        plan = dataclasses.replace(plan, slots=tuple(tuned.get(getattr(p, "name", None), p) for p in plan.slots))
+    rs = RomSet.from_zip(roms / "vr.zip")
+    before = tgp_budget(rs)
+    try:
+        patched, converted = packs.build_pack(rs, plan, ps2)
+        patched = packs.pack_set(patched, converted, plan, weather=weather, tunes=weather_tunes)
+    except (PatchError, ConvertError, packs.PackError, Ps2ReadError, IsoError) as e:      # a course that does not fit, or the
+        print(f"build failed: {e}")                                                     # disc's files not as this build reads
+        return 2
+    patched.to_zip(out / "vr.zip", source=roms / "vr.zip")
+    for extra in EXTRA_ZIPS:
+        if (roms / extra).is_file():
+            shutil.copy(roms / extra, out / extra)
+    lines = [f"the {'PS2' if name == 'ps2' else name} courses' set (--pack {name}): a wheel of {plan.menu} entries, battery RAM "
+             f"tag {plan.magic.rstrip(bytes(1)).decode('ascii')!r}"] + report_lines(before, tgp_budget(patched), converted, list(plan.slots), poly_left=poly_budget(patched),
+                                            directory=decode_directory(patched))
+    lines.append(run_line(out, name))
+    (out / "build-report.txt").write_text("\n".join(lines) + "\n", encoding="utf-8")
+    print("\n".join(lines))
+    return 0
+
+
+def run_line(out: Path, pack: str = "saturn") -> str:
+    """The report's `run:` line. Fix round 1, I3: a pack other than pack 1 runs with its own battery RAM folder (each pack's tag
+    clears the other's memory at boot, and MAME's default folder is shared), so its line names `-nvram_directory <out>/nvram`;
+    pack 1's line is as released."""
+    return f"run: mame vr -rompath {out}" + ("" if pack == "saturn" else f" -nvram_directory {Path(out) / 'nvram'}")
+
+
 def run_smoke(out: Path, entry: int = 3, seconds: int = SMOKE_SECONDS) -> tuple[bool, str]:
     """Drive converted `entry` in MAME for `seconds` with the autoplay script and report whether the set loaded
     that entry (the collision log's course words: menu index, template) and rendered at the arcade rate (27–29
@@ -224,29 +297,42 @@ def run_smoke(out: Path, entry: int = 3, seconds: int = SMOKE_SECONDS) -> tuple[
     return True, f"smoke test: entry {entry} {plan.name} loaded (course words {loaded}), render rate {min(rates)}–{max(rates)} switches per 57 frames in {seconds} s"
 
 
-def _paths(args: argparse.Namespace, parser: argparse.ArgumentParser) -> tuple[Path, Path, Path]:
+def _paths(args: argparse.Namespace, parser: argparse.ArgumentParser) -> tuple[Path, Path | None, Path]:
     roms = args.roms or config.rom_dir()
     saturn = args.saturn or config.saturn_cue()
     out = args.out or config._env_path("VR_OUT") or Path.cwd() / "out"
-    missing = [n for n, v in (("--roms (VR_ROMDIR)", roms), ("--saturn (VR_SATURN_CUE)", saturn)) if v is None]
+    ps2 = getattr(args, "pack", "saturn") == "ps2"                 # the PS2 courses' set reads no Saturn disc
+    missing = [n for n, v in (("--roms (VR_ROMDIR)", roms),) + ((("--saturn (VR_SATURN_CUE)", saturn),) if not ps2 else ())
+               if v is None]
     if missing:
         parser.error("missing " + ", ".join(missing))
-    return Path(roms).resolve(), Path(saturn).resolve(), Path(out).resolve()   # MAME runs in a work directory: a relative rompath would not resolve
+    return (Path(roms).resolve(), Path(saturn).resolve() if saturn is not None and not ps2 else None,
+            Path(out).resolve())   # MAME runs in a work directory: a relative rompath would not resolve
 
 
 def _parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(prog="vrtools", description="Saturn Virtua Racing courses in the Model 1 arcade ROM set (stock MAME 0.289).")
+    p = argparse.ArgumentParser(prog="vrtools", description="Virtua Racing Extended: the Saturn courses (or, with --pack ps2, the PS2 courses) "
+                                                         "in the Model 1 arcade ROM set (stock MAME 0.289).")
     sub = p.add_subparsers(dest="command", required=True)
-    for name, help_ in (("check", "verify the ROM set, the Saturn disc and the output directory"),
-                        ("build", "build the ten-course set from your own vr.zip and Saturn disc")):
+    for name, help_ in (("check", "verify the inputs of a set: the ROM set, the Saturn disc (the Saturn courses' set) or the "
+                                  "PS2 disc (the PS2 courses' set), and the output directory"),
+                        ("build", "build a set from your own vr.zip: the Saturn courses' set (with your Saturn disc, the "
+                                  "default) or the PS2 courses' set (--pack ps2, with your PS2 disc)")):
         s = sub.add_parser(name, help=help_)
         s.add_argument("--roms", type=Path, help="directory with vr.zip, model1io.zip, m1comm.zip (default: $VR_ROMDIR)")
-        s.add_argument("--saturn", type=Path, help="the Saturn 'Virtua Racing (Europe).cue', its .bin beside it (default: $VR_SATURN_CUE)")
+        s.add_argument("--saturn", type=Path, help="the Saturn courses' set only: the Saturn 'Virtua Racing (Europe).cue', its "
+                                                   ".bin beside it (default: $VR_SATURN_CUE)")
+        s.add_argument("--pack", choices=("saturn", "ps2"), default="saturn",
+                       help="which set: saturn (the Saturn courses' set, the default) or ps2 (the PS2 courses' set: Island, "
+                            "Mountain and Beltway with the arcade's three; needs --ps2, not --saturn)")
+        s.add_argument("--ps2", type=Path, help="the PS2 courses' set only: the PS2 disc 'Sega Ages 2500 Series Vol. 8: Virtua "
+                                                "Racing FlatOut' (Japan): its .cue (the .bin beside it), the .bin, or a "
+                                                "plain .iso (default: $VR_PS2_DISC)")
         s.add_argument("--out", type=Path, help="output directory for the built set (default: $VR_OUT or ./out)")
         if name == "build":
             s.add_argument("--tune", action="append", default=[], metavar="COURSE:KEY=VALUE,...",
                            help='per-course knobs, e.g. "AMAZON FALLS:pace=0.9,laps=4" (keys: laps 1..7, time_factor, pace)')
-            s.add_argument("--smoke", action="store_true", help="after the build, drive the first converted course in MAME (headless, 60 emulated seconds) to prove the set loads and renders")
+            s.add_argument("--smoke", action="store_true", help="the Saturn courses' set only: after the build, drive the first converted course in MAME (headless, 60 emulated seconds) to prove the set loads and renders")
             s.add_argument("--no-weather", action="store_true",
                            help="build without the COURSE WEATHER screen (the set as before the weather feature, for comparisons)")
             s.add_argument("--seconds", type=int, default=SMOKE_SECONDS,
@@ -261,6 +347,17 @@ def main(argv: list[str] | None = None) -> int:
     parser = _parser()
     args = parser.parse_args(argv)
     roms, saturn, out = _paths(args, parser)
+    if args.command == "check" and args.pack != "saturn":
+        from vrtools.arcade import pack as packs
+        from vrtools.ps2.disc import ps2_disc
+        plan = packs.PACKS[args.pack]
+        report = check_inputs(roms, saturn, out, [p for p in plan.slots if isinstance(p, CoursePlan)])
+        ps2 = args.ps2 or ps2_disc()
+        problems, notes = packs.check_ps2(ps2, plan) if ps2 else (["the PS2 courses' set needs the PS2 disc (--ps2 or $VR_PS2_DISC)"], [])
+        print("\n".join(report.lines + [f"problem: {p}" for p in problems] + notes))
+        ok = report.ok and not problems
+        print("ok: ready to build" if ok else "not ready: fix the problems above")
+        return 0 if ok else 1
     if args.command == "check":
         report = check_inputs(roms, saturn, out)
         print("\n".join(report.lines))
@@ -268,12 +365,18 @@ def main(argv: list[str] | None = None) -> int:
         return 0 if report.ok else 1
     try:
         tune = parse_tune(args.tune)
-        apply_tune(COURSES, tune)
+        apply_tune(tune_plans(args.pack), tune)
     except ValueError as e:
         parser.error(str(e))
     if args.seconds < SMOKE_MIN_SECONDS:
         parser.error(f"--seconds {args.seconds}: at least {SMOKE_MIN_SECONDS} (the race starts about 28 s in; 0 would run MAME without end)")
-    return build(roms, saturn, out, tune, smoke=args.smoke, seconds=args.seconds, weather=not args.no_weather)
+    if args.pack != "saturn" and args.saturn:
+        print(f"note: --saturn is not read for the {args.pack} pack (it holds no Saturn course)")
+    if args.pack != "saturn" and args.smoke:
+        parser.error("--smoke drives the Saturn courses' set's first course; drive the PS2 courses' set with the project's run scripts")
+    from vrtools.ps2.disc import ps2_disc
+    return build(roms, saturn, out, tune, smoke=args.smoke, seconds=args.seconds, weather=not args.no_weather, pack=args.pack,
+                 ps2=(args.ps2 or ps2_disc()) if args.pack != "saturn" else None)
 
 
 if __name__ == "__main__":

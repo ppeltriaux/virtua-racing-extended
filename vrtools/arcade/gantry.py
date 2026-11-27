@@ -288,7 +288,7 @@ class Lettered:
     size: int                     # records in a lettering object (2 a letter)
 
 
-def install_checkpoint_lettering(rs: RomSet, address: int, objects: int) -> Lettered:
+def install_checkpoint_lettering(rs: RomSet, address: int, objects: int, depth: tuple[float, float] = CHECKPOINT_DEPTH) -> Lettered:
     """The checkpoint gantry list `objects` with its lettering readable from behind: 32 lettering objects in free polygon ROM
     (first fit) and, at program-ROM `address` (16-aligned, CHECKPOINT_LIST_BYTES, erased), a list whose frame k is the arcade's
     frame k followed by its lettering object. `rs` is written in place. Nothing of the arcade's is written: its list, its frames
@@ -296,7 +296,7 @@ def install_checkpoint_lettering(rs: RomSet, address: int, objects: int) -> Lett
     letters are not one colour word or the lettering is not found."""
     recs = frame_records(rs, objects)
     frames = [frame_quads(rs, r) for r in recs]
-    parts = gantry_parts(frames, CHECKPOINT_DEPTH)
+    parts = gantry_parts(frames, depth)
     table = colour_table(rs)
     check_lettering(frames, parts, table.entry)
     if address % 16:
@@ -318,3 +318,17 @@ def install_checkpoint_lettering(rs: RomSet, address: int, objects: int) -> Lett
     assert len(lst) == CHECKPOINT_LIST_BYTES
     write_program_blob(rs, address, lst)
     return Lettered(address, objects, tuple(placed), total, ltex, 2 * len(parts.letters))
+
+
+# --- Phase 90 (pack 2): the start gantry stored once ---
+# Pack 1 copies the start gantry's 32 frames whole (241 408 bytes) to add the letters behind the banner. Pack 2 needs that room for
+# the PS2 courses: there each frame keeps the ARCADE'S OWN OBJECT and gets a small lettering object after it in its record, as the
+# checkpoint gantries above (the room study's "start gantry stored once": 32 x 1 904 = 60 928 bytes, about 180 KB less). The same
+# letters, mirrored behind the same banner; the frames are the arcade's, which the converted copy reproduced record for record.
+
+
+def install_start_lettering(rs: RomSet, address: int) -> Lettered:
+    """The start gantry's list for the converted courses at program-ROM `address` (the block `install_start_gantry` would take):
+    frame k is the arcade's frame k followed by its letters mirrored behind the banner (`install_checkpoint_lettering` on the start
+    gantry's list, at its own letter depth)."""
+    return install_checkpoint_lettering(rs, address, START_GANTRY_OBJECTS, depth=LETTER_DEPTH)

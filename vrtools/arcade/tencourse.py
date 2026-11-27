@@ -24,7 +24,7 @@ from vrtools.arcade.course import BANK_SIZE, CODE_FREE, COURSE_BANK, WINDOW, cou
 from vrtools.arcade.course import segments as segments_of
 from vrtools.arcade.directory import (LOAD_SIZE, ORIGINALS, CourseEntry10, Directory, ReverseRecord, decode_directory, directory_layout,
                                       install_directory, maps_offset)
-from vrtools.arcade.panel import free_chars, install_panels, render_panel
+from vrtools.arcade.panel import BANK0_FREE, free_chars, install_panels, render_panel
 from vrtools.arcade.race import LEVELS, RACE_BLOB_BYTES, VARIANTS, CarEntry, RaceBlob, car_table, encode_race_blob, time_record
 from vrtools.arcade.race import checkpoints as checkpoints_at
 from vrtools.arcade.patch import (TILE_TABLE_BYTES, PatchError, copro_free_runs, install_collision, patch_course_tiles, poly_free_runs, write_data, write_program_blob,
@@ -421,7 +421,7 @@ BOOT_FREE = (0xFDC848, 0xFE0000)     # Phase 33 fix wave: the boot ROM's erased 
                                      # reads it but the test menu's MEMORY TEST, which sums the whole ROM (PC 0xfe0e81)
 
 
-def install_original_pictures(rs: RomSet, lay: dict[str, int]) -> tuple[list[int], list[int]]:
+def install_original_pictures(rs: RomSet, lay: dict[str, int], exclude=()) -> tuple[list[int], list[int]]:
     """Phase 33 fix waves (review C1, `origpic`): each original's direction-screen picture data. The three LOCK pieces (read
     every logic frame up to the race load) first, in BOOT_FREE, which is always mapped; then the DRAW pieces, first fit in what
     BOOT_FREE has left and then in what is STILL erased of bank 0 or the program ROM (`picture.free_runs` outside
@@ -430,7 +430,7 @@ def install_original_pictures(rs: RomSet, lay: dict[str, int]) -> tuple[list[int
     from vrtools.arcade.origpic import data_sizes, install_origpic, picture_data
     from vrtools.arcade.romset import V60_BOOT
     runs = [[BOOT_FREE[0], BOOT_FREE[1] - BOOT_FREE[0]]]
-    runs += [list(r) for r in free_runs(rs, picture_exclusions() + [(SPAWN_ROOM[0], SPAWN_ROOM[1] - SPAWN_ROOM[0])])]
+    runs += [list(r) for r in free_runs(rs, picture_exclusions() + [(SPAWN_ROOM[0], SPAWN_ROOM[1] - SPAWN_ROOM[0])] + list(exclude))]
     arts = range(len(ORIGINALS))
     sizes = [data_sizes(rs, art) for art in arts]
 
@@ -1142,15 +1142,38 @@ def report_lines(before: int, after: int, converted: list[Converted], plans: lis
     lines = [f"TGP budget: {before} words free before, {after} after" + ("" if poly_left is None else f"; polygon ROM left {poly_left} bytes")]
     for k, (plan, c) in enumerate(zip(plans, converted)):
         e = c.entry
-        lines.append(f"entry {3 + k} {e.name}: bank {e.bank}, header {e.header_base:#x}, TGP slot {e.tgp_slot}, tile table {e.tile_table:#x}, "
-                     f"lap {c.lap.length:.0f} units, scenery {c.report['quads']} quads in {c.report['cells']} cells ({c.report['polygon_bytes']} bytes; layers g0-g4, "
-                     f"terrain thinned {c.report.get('terrain_thinned', 0)} (terrain_thin {plan.terrain_thin})), "
-                     f"thinned {c.report['thinned']} (thin {plan.thin}), "
-                     f"race blob {e.race:#x} (laps {e.laps}, time x{plan.time_factor}, pace x{plan.pace}, banking {plan.banking}), spawn list {e.spawn_table:#x}, "
-                     f"coverage {c.report.get('coverage')}, HUD map {'shifted right (anticlockwise)' if c.report.get('map_shift') else 'as the game draws it'}, "
-                     f"off-course limit {e.off_course} frames"
-                     + (f", props {len(c.report['props'])} ({c.report['prop_faces']} faces)" if c.report.get("props") else ""))
-        if c.reverse is not None:
+        if e.hidden:                                                  # Phase 90 (pack 2): past the wheel's last band
+            lines.append(f"entry {3 + k} {e.name}: hidden (past the wheel's last band), a copy of entry {c.report.get('hidden_copy_of')}")
+            continue
+        if c.report.get("source") == "ps2":                          # Phase 90 (pack 2): a PS2 course (`ps2entry`)
+            far = c.report.get("far_copies")
+            lines.append(f"entry {3 + k} {e.name} (PS2 course {c.report['ps2_index']}): bank {e.bank}, header {e.header_base:#x}, "
+                         f"TGP slot {e.tgp_slot}, tile table {e.tile_table:#x}, lap {c.lap.length:.0f} units, {c.report['road_points']} road "
+                         f"points, scenery {c.report['records']} records in {c.report['cells']} cells ({c.report['polygon_bytes']} bytes; "
+                         f"roadside kept to {plan.upright_keep} units, merged {plan.merge}, "
+                         + (f"tiers (one-player mesh within, far cut, windows folded) {list(plan.tiers)} then the split-screen "
+                            f"mesh with far cut {plan.far_cut} and windows folded {plan.windows}" if plan.tiers else
+                            f"far cut {plan.far_cut}, windows folded {plan.windows}, one-player mesh within {plan.near_detail}")
+                         + "), far silhouettes "
+                         + (f"{far['copies']} faces, {far['bytes']} bytes" if far else "none")
+                         + f", collision {c.report['quads']} quads ({c.report['tgp_words']} TGP words), checkpoints {c.report['checkpoints']}, "
+                         f"covered {c.report['cover']}, pit quad {e.pit_quad}, race blob {e.race:#x} (laps {e.laps}, time x{plan.time_factor}, "
+                         f"pace x{plan.pace}), spawn list {e.spawn_table:#x}, HUD map "
+                         f"{'shifted right (anticlockwise)' if c.report.get('map_shift') else 'as the game draws it'}"
+                         + (f"; graded by cell: {c.report['graded']['tiers']} cells per tier (richest first), "
+                            f"{c.report['graded']['seam_faces']} seam faces, scenery records a frame {c.report['graded']['frame_records']}, "
+                            f"worst views {c.report['graded'].get('worst_views')}"
+                            if c.report.get("graded") else ""))
+        else:
+            lines.append(f"entry {3 + k} {e.name}: bank {e.bank}, header {e.header_base:#x}, TGP slot {e.tgp_slot}, tile table {e.tile_table:#x}, "
+                         f"lap {c.lap.length:.0f} units, scenery {c.report['quads']} quads in {c.report['cells']} cells ({c.report['polygon_bytes']} bytes; layers g0-g4, "
+                         f"terrain thinned {c.report.get('terrain_thinned', 0)} (terrain_thin {plan.terrain_thin})), "
+                         f"thinned {c.report['thinned']} (thin {plan.thin}), "
+                         f"race blob {e.race:#x} (laps {e.laps}, time x{plan.time_factor}, pace x{plan.pace}, banking {plan.banking}), spawn list {e.spawn_table:#x}, "
+                         f"coverage {c.report.get('coverage')}, HUD map {'shifted right (anticlockwise)' if c.report.get('map_shift') else 'as the game draws it'}, "
+                         f"off-course limit {e.off_course} frames"
+                         + (f", props {len(c.report['props'])} ({c.report['prop_faces']} faces)" if c.report.get("props") else ""))
+        if c.reverse is not None and getattr(plan, "of", None) is None:
             rec = directory[3 + k].reverse if directory is not None else None
             size = len(build_variant_blob(c.reverse.tables, WINDOW, WINDOW, WINDOW, WINDOW, c.reverse.pairs))   # the size alone
             lines.append(f"  entry {3 + k} reverse variant: "
@@ -1158,7 +1181,7 @@ def report_lines(before: int, after: int, converted: list[Converted], plans: lis
                             if rec else "")
                          + f"tables {size} bytes in bank {e.bank}, {len(set(c.reverse.pairs))} lines stored (pairs {c.reverse.pairs}), "
                          f"checkpoints {c.reverse.race.checkpoints}")
-        if c.report.get("far_copies"):                               # Phase 31 (prototype)
+        if c.report.get("far_copies") and c.report.get("source") != "ps2":   # Phase 31 (prototype)
             inst = c.report.get("far_installed") or {}
             lines.append(f"  entry {3 + k} far copies (Phase 31 prototype): " + ", ".join(
                 f"cell {cell} +{v['copied']} faces from cells {v['from']}" for cell, v in sorted(c.report["far_copies"].items()))
@@ -1298,7 +1321,8 @@ def install_reverse(rs: RomSet, entry: CourseEntry10, rev: Reversed, at: int, ra
 
 def ten_course_set(rs: RomSet, converted: list[Converted], placeholder: Converted | None = None,
                    panels: bool = True, reverse: bool = True, crew: bool = True, originals_reverse: bool = True,
-                   weather: bool = True, weather_tunes=None) -> RomSet:
+                   weather: bool = True, weather_tunes=None, menu: int = 10, magic: bytes | None = None,
+                   reserve_weather: bool = False) -> RomSet:
     """The directory for the three originals followed by `converted` (in order); remaining entries up to ten
     repeat `placeholder` (or the last converted course) under the remaining Saturn names. With `panels`, every
     non-original entry gets a generated select panel (its course outline and name on the host's frame). With `reverse`
@@ -1317,7 +1341,9 @@ def ten_course_set(rs: RomSet, converted: list[Converted], placeholder: Converte
     set as before Phase 33. Weather stage 1 (`weather`, with `panels`, `reverse` and `originals_reverse`: the screen chains through
     the direction screen and the originals' picture block): the COURSE WEATHER screen (`weather.install_weather`), the last writer;
     False gives the set as before the weather feature, byte for byte; `weather_tunes` (a weather.tune.Tunes, the defaults when None)
-    goes to it whole."""
+    goes to it whole. Phase 90 (packs): `menu`, the entries on the wheel (a converted entry past it is `hidden`: it takes the panel
+    and the picture of the entry it copies, and no reverse); `magic`, the battery RAM's magic (the pack's tag); `reserve_weather`,
+    the storm's bank-0 and program-ROM blocks kept out of the panels' and the pictures' reach (they are placed before it)."""
     from dataclasses import replace
     entries = [c.entry for c in converted]
     outlines = [c.centreline for c in converted]
@@ -1327,18 +1353,28 @@ def ten_course_set(rs: RomSet, converted: list[Converted], placeholder: Converte
         entries.append(replace(filler.entry, name=names.pop(0)))
         outlines.append(filler.centreline)
     out = rs
+    shown = [k for k, e in enumerate(entries) if not e.hidden]
+    copy_of = {k: next(j for j in shown if entries[j].name == e.name) for k, e in enumerate(entries) if e.hidden}
+    held = []
+    if reserve_weather:
+        from vrtools.arcade.weather import layout as weather_layout
+        held = [(b.start, b.size) for b in weather_layout.blocks() if b.space in ("bank0", "program")]
     if panels:
         pool = free_chars(rs)
-        rendered = [render_panel(rs, pool, o, e.name, HOST_OF_BANK[e.bank]) for e, o in zip(entries, outlines)]
-        out, addrs = install_panels(rs, rendered)
-        entries = [replace(e, panel_map=a, panel_b=b, art=HOST_OF_BANK[e.bank]) for e, (a, b) in zip(entries, addrs)]
+        rendered = [render_panel(rs, pool, outlines[k], entries[k].name, HOST_OF_BANK[entries[k].bank]) for k in shown]
+        tail = [a - 0x100000 - BANK0_FREE[0] for a, _ in held if 0x100000 + BANK0_FREE[0] <= a < 0x200000]
+        out, addrs = install_panels(rs, rendered, room=min(tail) if tail else None)
+        placed = dict(zip(shown, addrs))
+        entries = [replace(e, panel_map=placed[copy_of.get(k, k)][0], panel_b=placed[copy_of.get(k, k)][1], art=HOST_OF_BANK[e.bank])
+                   for k, e in enumerate(entries)]
     originals = list(ORIGINALS)
     bases = [c.picture for c in converted] + [filler.picture] * (len(entries) - len(converted))
     if panels and all(b is not None for b in bases):                # Phase 21: every entry's picture record
-        out, records = install_pictures(out, [e.name for e in entries], bases)
+        out, records = install_pictures(out, [entries[k].name for k in shown], [bases[k] for k in shown], exclude=held)
         originals = [replace(e, picture=r) for e, r in zip(originals, records)]
-        entries = [replace(e, picture=r) for e, r in zip(entries, records[3:])]
-    variants = [k for k, c in enumerate(converted) if c.reverse is not None] if reverse else []
+        mine = dict(zip(shown, records[3:]))
+        entries = [replace(e, picture=mine[copy_of.get(k, k)]) for k, e in enumerate(entries)]
+    variants = [k for k, c in enumerate(converted) if c.reverse is not None and not c.entry.hidden] if reverse else []
     firsts = list(range(len(ORIGINALS))) if reverse and originals_reverse else []
     if variants or firsts:                                                    # Phase 26: after the pictures (they take CODE_FREE's runs first-fit),
         out = install_dirscreen_block(out)                          # so the variants take what is left past everything else; stage 3:
@@ -1354,7 +1390,7 @@ def ten_course_set(rs: RomSet, converted: list[Converted], placeholder: Converte
     lay = directory_layout()
     check_backdrop_markers(out.data, backdrop_headers(entries) + [(o.reverse.entry.bank, o.reverse.entry.header_base)
                                                                   for o in originals if o.reverse is not None])
-    out = install_directory(out, with_spawn(originals + entries, lay), crew=crew)
+    out = install_directory(out, with_spawn(originals + entries, lay), crew=crew, menu=menu, magic=magic)
     if firsts:                                                      # Phase 33: no best time and the level word in an original's reverse race
         from vrtools.arcade.origrev import install_origrev
         check_reserved_blocks()
@@ -1366,7 +1402,8 @@ def ten_course_set(rs: RomSet, converted: list[Converted], placeholder: Converte
     if firsts:                                                      # Phase 33 stage 2: C.P. reads from behind; after the far copies, so
         install_checkpoint_lists(out, originals)                    # that they lie where they lie without it
         if panels:                                                  # fix wave (C1): an original's two-layer picture on the
-            install_original_pictures(out, lay)                     # direction screen; last of all, on what is still erased
+            install_original_pictures(out, lay, exclude=held)       # direction screen; last of all, on what is still erased
+                                                                    # (Phase 90: never on the storm's blocks, when reserved)
             from vrtools.arcade.weather import install_weather      # weather stage 1: the COURSE WEATHER screen, after it
             out = install_weather(out, converted, weather=weather, tunes=weather_tunes)
     return out
@@ -1387,13 +1424,14 @@ def install_far(rs: RomSet, c: Converted) -> tuple[RomSet, dict]:
     return out, report
 
 
-def install_pictures(rs: RomSet, names: list[str], bases: list) -> tuple[RomSet, list[int]]:
+def install_pictures(rs: RomSet, names: list[str], bases: list, exclude=()) -> tuple[RomSet, list[int]]:
     """Phase 21: the seven entries' pictures (`bases` lettered with `names`, quantised), the originals' maps and the ten
     picture records, placed in free runs of bank 0 and the program ROM (outside the directory's code area). Returns the
-    new RomSet and the ten record addresses (the three originals first)."""
+    new RomSet and the ten record addresses (the three originals first). `exclude` (Phase 90, pack 2): more (start, size) spans
+    the pictures must not take (the storm's blocks, placed later)."""
     out = dataclasses.replace(rs)
     masks = letters(rs)
-    runs = [list(r) for r in free_runs(rs, picture_exclusions())]
+    runs = [list(r) for r in free_runs(rs, picture_exclusions() + list(exclude))]
 
     def place(blob_of, size: int) -> int:
         for r in runs:

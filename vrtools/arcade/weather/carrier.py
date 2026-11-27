@@ -660,8 +660,27 @@ def _put(rs_parts: dict, space: str, addr: int, blob: bytes) -> None:
 
 def install(rs: RomSet, converted: list | None = None, tunes=None, modules: list[Module] | None = None) -> RomSet:
     """The carrier with `modules` (default: `default_modules(rs, tunes, converted)`) on `rs`, as a new set (see `build`). `tunes`: a
-    tune.Tunes (the defaults when None)."""
-    return build(rs, modules if modules is not None else default_modules(rs, tunes, converted))[0]
+    tune.Tunes (the defaults when None). The plan's hidden entries (`hidden_copies(converted)`) share their course's storage."""
+    return build(rs, modules if modules is not None else default_modules(rs, tunes, converted), copies=hidden_copies(converted))[0]
+
+
+def hidden_copies(converted: list | None) -> dict[int, int]:
+    """Phase 90 (fix round 1, C1): {menu entry: the entry it copies} for the plan's hidden entries (`pack.Hidden`, built by
+    `pack._hidden`: the entry flagged `hidden`, its report naming `hidden_copy_of`); {} for pack 1, which has none. The storm's
+    stored course data are shared by THIS, the plan, never by finding two entries' bytes equal."""
+    return {3 + k: c.report["hidden_copy_of"] for k, c in enumerate(converted or []) if getattr(c.entry, "hidden", False)}
+
+
+def shared_with(e: int, data, copies: dict[int, int] | None, kept: dict):
+    """The storage entry `e` shares, or None: only when the plan's `copies` names `e` a copy of entry j, and then `kept[j]`'s
+    storage (`kept` maps an entry to (its data, its storage)); PatchError when j is not kept yet or its data are not `data`. Two
+    entries whose data are merely equal never share (pack 1 never takes this path)."""
+    if e not in (copies or {}):
+        return None
+    j = copies[e]
+    if j not in kept or kept[j][0] != data:
+        raise PatchError(f"entry {e} copies entry {j}, but its storm course data are not entry {j}'s")
+    return kept[j][1]
 
 
 def _cover_factory(rs: RomSet, converted, tunes) -> Module:
@@ -673,7 +692,7 @@ def _cover_factory(rs: RomSet, converted, tunes) -> Module:
 
 def _lightning_factory(rs: RomSet, converted, tunes) -> Module:
     from vrtools.arcade.weather import lightning
-    return lightning.module(rs, tunes.lightning)
+    return lightning.module(rs, tunes.lightning, copies=hidden_copies(converted))
 
 
 def _rain_factory(rs: RomSet, converted, tunes) -> Module:
@@ -753,13 +772,16 @@ IRQ_ON = bytes.fromhex("1380f4fffffffff400000400")
 LOAD_SPIN_MAX = 200_000                 # TEST ONLY: `build(test_load_spin=)`'s largest loop count (about 90 ms)
 
 
-def build(rs: RomSet, modules: list[Module], table: list | None = None, test_load_spin: int = 0) -> tuple[RomSet, dict]:
+def build(rs: RomSet, modules: list[Module], table: list | None = None, test_load_spin: int = 0,
+          copies: dict[int, int] | None = None) -> tuple[RomSet, dict]:
     """The carrier and `modules` on `rs` (the weather screen installed: the blocks of weather/layout.py's owners "carrier" and the
     modules' still erased), as a new set and a report (where everything went). `table`: the layout table (default
     weather/layout.py's `blocks()`; checked with `layout.check_table`). PatchError when the hook site is not the game's
     `jsr FF8450`, a module's site holds other bytes than its original, a block overflows, is not erased or is not in the table.
     `test_load_spin` (TEST ONLY, 0 in every build): a delay loop of that many turns in the load right after the common list, while
-    bank 3 is still mapped, so that a vblank interrupt lands inside the load (the final review's W8 test)."""
+    bank 3 is still mapped, so that a vblank interrupt lands inside the load (the final review's W8 test). `copies` (Phase 90,
+    pack 2: `hidden_copies`): {entry: an earlier entry} whose stored course data the entry shares (PatchError unless they are the
+    same); none in pack 1."""
     if not (type(test_load_spin) is int and 0 <= test_load_spin <= LOAD_SPIN_MAX):
         raise PatchError(f"test_load_spin {test_load_spin!r}: an int 0..{LOAD_SPIN_MAX} (test only)")
     from vrtools.arcade.directory import decode_directory
@@ -798,14 +820,24 @@ def build(rs: RomSet, modules: list[Module], table: list | None = None, test_loa
             common += _records(bank, src, lay.data_at(m.name, name), n, f"{m.name} {name}", banks)
     per_entry = {}
     a = blk["storm course data"].start
-    for e, d in enumerate(dirs):
+    stored = {}                                         # Phase 90 (pack 2): a hidden entry of the plan (`copies`) shares the stored
+    for e, d in enumerate(dirs):                        # course data of the entry it copies; no other entry shares, whatever its data
         recs = []
+        whole = tuple((m.name, name, blob) for m in modules for name, blob in (m.course_data(e) if m.course_data else {}).items())
+        shared = shared_with(e, whole, copies, stored)
+        mine = []
         for m in modules:
             for name, blob in (m.course_data(e) if m.course_data else {}).items():
                 blob = blob + b"\xff" * (len(blob) % 2)
+                if shared is not None:
+                    at = shared[len(mine)]
+                    mine.append(at)
+                    recs += _records(3, at, lay.data_at(m.name, name), len(blob), f"{m.name} {name}", banks)
+                    continue
                 if a + len(blob) > blk["storm course data"].start + blk["storm course data"].size:
                     raise PatchError(f"the storm's course data do not fit their block at entry {e} {name}")
                 _put(parts, "bank3", a, blob)
+                mine.append(a)
                 recs += _records(3, a, lay.data_at(m.name, name), len(blob), f"{m.name} {name}", banks)
                 a = _align(a + len(blob), 16)
             for name, (bank, src, n) in (m.course_copies(e) if m.course_copies else {}).items():
@@ -821,6 +853,7 @@ def build(rs: RomSet, modules: list[Module], table: list | None = None, test_loa
                 else:
                     dst = lay.data_at(m.name, name)
                 recs += _records(bank, src, dst, n, f"{m.name} {name} (entry {e})", banks)
+        stored[e] = (whole, mine)
         per_entry[e] = b"".join(recs) + struct.pack("<I", 0)
     common_blob = b"".join(common) + struct.pack("<I", 0)
     # the modules' ROM blocks (erased blocks of their own; their bytes may be made from the settled Layout)

@@ -202,7 +202,7 @@ def attract_groups(d) -> list[list[int]]:
     by its reverse id when it has a reverse variant (Phase 27, L3); Phase 35: the original too (its id + ORIG_REVERSE_SHIFT
     straight after it)."""
     ids = ranking_ids(d)
-    hosted = [i for i, e in enumerate(d) if i >= 3 and e.race]
+    hosted = [i for i, e in enumerate(d) if i >= 3 and e.race and not getattr(e, "hidden", False)]
     own = original_reverse_ids(d)
     return [[k] + [k + ORIG_REVERSE_SHIFT] * (k + ORIG_REVERSE_SHIFT in own)
             + [x for i in hosted if d[i].template == k for x in [ids[i]] + ([i + REVERSE_ID_SHIFT] if d[i].reverse else [])]
@@ -571,7 +571,7 @@ def _arrays(rs: RomSet, d) -> dict[str, list[int]]:
     return out
 
 
-def ranking_image(rs: RomSet, d, base: int) -> bytes:
+def ranking_image(rs: RomSet, d, base: int, magic: bytes | None = None) -> bytes:
     """The image at `base` in the program ROM: the arrays, the pairs, the magic, the groups, the titles and the routines."""
     lay = ranking_layout(base)
     arr = _arrays(rs, d)
@@ -580,7 +580,10 @@ def ranking_image(rs: RomSet, d, base: int) -> bytes:
     img = b"".join(struct.pack(f"<{IDS}I", *arr[k], *reverse[k]) for k in ("bases", "slots"))
     img += b"".join(struct.pack(f"<{COURSES}I", *arr[k]) for k in ("counts", "records", "records_oper"))
     img += b"".join(struct.pack("<II", DEFAULT_NAMES, b) for b in arr["bases"])
-    img += NEW_MAGIC.ljust(20, b"\0")
+    magic = NEW_MAGIC if magic is None else magic
+    if len(magic) != len(NEW_MAGIC) or magic[-1:] != b"\0":
+        raise PatchError(f"a battery RAM magic of {len(NEW_MAGIC)} bytes ending in a zero byte, not {magic!r}")
+    img += magic.ljust(20, b"\0")
     for g in attract_groups(d):
         img += bytes([len(g), *g]).ljust(GROUP_BYTES, b"\0")
     names = [lay["names"] + NAME_BYTES * (r - 3) for r in range(3, COURSES)]

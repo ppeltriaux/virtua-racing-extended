@@ -1,7 +1,7 @@
 [project]
 name = "vrtools"
-version = "0.4.1"
-description = "Virtua Racing Extended: build the arcade Virtua Racing with the Saturn port's seven courses from your own copies"
+version = "0.5.0"
+description = "Virtua Racing Extended: build the arcade Virtua Racing with the Saturn port's seven courses, or the PS2 release's three, from your own copies"
 requires-python = ">=3.12"
 dependencies = ["numpy>=2"]
 

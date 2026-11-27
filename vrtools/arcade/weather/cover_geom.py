@@ -44,6 +44,12 @@ SEE0, SEE1, OPEN, ROOFED = 1, 2, 4, 8
 # The flagged stretches: (entry, first, last, ang, ext_split) marched from the faces; the pits roof (Metropolis 50-62) is measured
 MARCHED = ((METROPOLIS, 251, 311, 4.0, True), (ALPINE, 108, 146, 4.0, True), (BAY_BRIDGE, BAY_QUADS[0], BAY_QUADS[1], 4.0, True))
 PITS_ROOF = (50, 62)
+# Phase 90 (packs): the tables are the course's, not the menu entry's: MARCHED's entries are pack 1's, read as the names below, so a
+# course keeps its table wherever a pack puts it. A course of no Saturn or arcade name (a PS2 course of pack 2) is marched along its
+# own flagged stretches (`flagged_stretches`: its converter flags the tunnels and overpasses it finds).
+NAME_OF_ENTRY = {METROPOLIS: "METROPOLIS", ALPINE: "ALPINE", BAY_BRIDGE: "BAY BRIDGE"}
+KNOWN_NAMES = ("BIG FOREST", "BAY BRIDGE", "ACROPOLIS", "ALPINE", "AMAZON FALLS", "DIABLO CANYON", "METROPOLIS", "PACIFIC COAST",
+               "SURFERS OVAL", "SURFERS ROAD")
 PW, PHK, PHMAX, DEPTH = 10.0, 2.5, 25.0, 60.0     # a marched mouth's curtain: lateral beyond the opening, height k x H (at most),
                                                   # depth beyond the mouth (spike 57's PW, PHK/PHMAX and D)
 
@@ -335,13 +341,29 @@ def flagged_points(rs: RomSet, entry: int) -> list[int]:
     return sorted({s.road_point for s in segments(rs, course_entry_at(rs, e.bank, window_base=e.header_base)) if s.flag & 0x80})
 
 
+def flagged_stretches(points: list[int], gap: int = 2) -> list[tuple[int, int]]:
+    """Runs of flagged road points (closer than `gap` joined) as (first, last)."""
+    runs: list[list[int]] = []
+    for p in sorted(points):
+        if runs and p <= runs[-1][1] + gap:
+            runs[-1][1] = p
+        else:
+            runs.append([p, p])
+    return [(a, b) for a, b in runs]
+
+
 def tables(rs: RomSet, entry: int) -> tuple[Stretch, ...]:
     """The cover table of a menu entry: () for a course with no flagged stretch, else its stretches (Metropolis: the pits roof's road
     and lane, then the long tunnel; Alpine and Bay Bridge one each), marched from the set's faces. PatchError when the set's flags do
     not name the stretches the table knows or the pits roof is not drawn where measured."""
-    marched = [m for m in MARCHED if m[0] == entry]
+    from vrtools.arcade.directory import decode_directory
+    name = decode_directory(rs)[entry].name
     flagged = flagged_points(rs, entry)
-    known = [(f, l) for _, f, l, _, _ in marched] + ([PITS_ROOF] if entry == METROPOLIS else [])
+    marched = [m for m in MARCHED if NAME_OF_ENTRY[m[0]] == name]
+    if name not in KNOWN_NAMES:
+        marched = [(None, f, l, 4.0, True) for f, l in flagged_stretches(flagged)]
+    metropolis = name == "METROPOLIS"
+    known = [(f, l) for _, f, l, _, _ in marched] + ([PITS_ROOF] if metropolis else [])
     if not known:
         if flagged:
             raise PatchError(f"menu entry {entry}: tunnel-flagged road points {flagged[:4]}.. but no cover table for them")
@@ -354,7 +376,7 @@ def tables(rs: RomSet, entry: int) -> tuple[Stretch, ...]:
     tris, line = course_faces(rs, entry)
     c = Caster(tris)
     out = []
-    if entry == METROPOLIS:
+    if metropolis:
         check_pits_roof(c)
         out += list(pits_roof())
     for _, first, last, ang, split in marched:

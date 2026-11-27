@@ -421,12 +421,12 @@ MERGE_KEEP_ENDS = 3            # slices at each end of the lap that never merge:
 
 
 def merge_straights(slices: list[tuple[Quad16, tuple[Quad16 | None, Quad16 | None]]],
-                    keep_ends: int = MERGE_KEEP_ENDS) -> tuple[list[Quad16], list[Quad16], int]:
+                    keep_ends: int = MERGE_KEEP_ENDS, keep: set[int] | None = None) -> tuple[list[Quad16], list[Quad16], int]:
     """`slices` = (tarmac quad, (left verge, right verge)) in lap order. Chains of up to MERGE_MAX_RUN slices, each continuing
     the previous one (`_can_fuse`, found within the next MERGE_LOOKAHEAD entries because side-by-side strips
     interleave), whose heading changes by at most MERGE_MAX_TURN degrees in all, are fused into one tarmac quad
     (rear of the first, front of the last) and their verges alike. Output order = lap order of the chain heads.
-    Returns (tarmac, verges, slices removed)."""
+    Returns (tarmac, verges, slices removed). The slices in `keep` stay single (Phase 90: a PS2 slice split by a divider)."""
     tarmac: list[Quad16] = []
     verges: list[Quad16] = []
     used = [False] * len(slices)
@@ -436,7 +436,7 @@ def merge_straights(slices: list[tuple[Quad16, tuple[Quad16 | None, Quad16 | Non
         cum.append(cum[-1] + math.hypot(b[0].centre[0] - a[0].centre[0], b[0].centre[2] - a[0].centre[2]))
     total = cum[-1] + (math.hypot(slices[-1][0].centre[0] - slices[0][0].centre[0], slices[-1][0].centre[2] - slices[0][0].centre[2]) if n > 1 else 0.0)
     single = lambda i: (i < keep_ends or i >= n - keep_ends            # the lap's end slices stay as they are
-                        or cum[i] < MERGE_KEEP_UNITS or total - cum[i] < MERGE_KEEP_UNITS)
+                        or cum[i] < MERGE_KEEP_UNITS or total - cum[i] < MERGE_KEEP_UNITS or (keep is not None and i in keep))
     removed = 0
     for i in range(len(slices)):
         if used[i]:

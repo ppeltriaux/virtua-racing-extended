@@ -49,12 +49,39 @@ REC = {"chars": 0, "counts": 4, "normal": 8, "chosen": 12, "grey": 16, "map": 20
 # band routine, which keeps the last drawn index in 0x501942.
 
 
-def band_of(r10: int) -> int:
-    return sum(1 for t in BANDS if r10 >= t)
+MENU = 10                                                   # entries on the wheel (pack 1); a pack may show fewer (pack 2: six)
+UNREACHABLE = 0x7FFFFFFF                                    # a threshold R10 never reaches: the entries past it are off the wheel
 
 
-def first_of(index: int) -> int:
-    return max(0, min(7, index - 1))
+def bands_for(menu: int = MENU) -> tuple[int, ...]:
+    """The wheel's thresholds for `menu` entries (6..10): the released ten-entry wheel's bands (25.6 R10 units each, the travel
+    the owner's stick handles), the middle `menu` of them, so that every entry's band is as wide as on the ten-entry wheel and
+    the first and last entries begin as far inside the travel as the ten-entry wheel's third and eighth do, not at its ends:
+    with fewer entries spread over the whole travel (Phase 90's first six-entry wheel), the last band began where a
+    self-centring stick held right while its gas was pushed no longer reached ("my joystick lock one row before"). The rest of
+    the len(BANDS) thresholds are UNREACHABLE (the routines and the directory's layout keep their sizes)."""
+    if menu == MENU:
+        return BANDS
+    if not 6 <= menu < MENU:
+        raise ValueError(f"a wheel of {menu} entries (6..10)")
+    s = (MENU - menu) // 2
+    return BANDS[s:s + menu - 1] + (UNREACHABLE,) * (len(BANDS) - menu + 1)
+
+
+def wheel_for(entry: int, menu: int = MENU) -> int:
+    """The paddle value that selects entry `entry` of a wheel of `menu` entries: the ten-entry wheel's value for the band it
+    takes (WHEEL_FOR_ENTRY at the same offset as `bands_for`)."""
+    if not 0 <= entry < menu:
+        raise ValueError(f"entry {entry} is not on a wheel of {menu}")
+    return WHEEL_FOR_ENTRY[entry + (MENU - menu) // 2] if menu != MENU else WHEEL_FOR_ENTRY[entry]
+
+
+def band_of(r10: int, menu: int = MENU) -> int:
+    return sum(1 for t in bands_for(menu) if r10 >= t)
+
+
+def first_of(index: int, menu: int = MENU) -> int:
+    return max(0, min(menu - 3, index - 1))
 
 
 def visible_entries(index: int) -> tuple[int, int, int]:
@@ -62,15 +89,18 @@ def visible_entries(index: int) -> tuple[int, int, int]:
     return (f, f + 1, f + 2)
 
 
-def slot_of(index: int) -> int:
-    return index - first_of(index)
+def slot_of(index: int, menu: int = MENU) -> int:
+    """The window slot (0..2) the cursor stands on for entry `index` on a wheel of `menu` entries: the slot the window drawn by
+    `draw` (clamped at menu - 3) puts that entry in (Phase 90: computed for ten entries, the six-entry wheel's cursor stood on
+    Mountain's panel while Beltway was chosen: "i still unable to select beltway")."""
+    return index - first_of(index, menu) if index < menu else 1
 
 
-def encode_bands() -> bytes:
-    return b"".join(struct.pack("<i", t) for t in BANDS)
+def encode_bands(menu: int = MENU) -> bytes:
+    return b"".join(struct.pack("<i", t) for t in bands_for(menu))
 
 
-def select_routines(lay: dict[str, int]) -> dict[str, bytes]:
+def select_routines(lay: dict[str, int], menu: int = MENU) -> dict[str, bytes]:
     """`band` (R10 -> R11, redrawing the row when the band changed) and `draw` (the window for [0x501940]) at
     lay["band"], lay["draw"]; tables at lay["bands"], lay["slot_a"], lay["slot_b"], lay["select"], lay["load"]."""
     sel, load = lay["select"], lay["load"]
@@ -112,9 +142,9 @@ def select_routines(lay: dict[str, int]) -> dict[str, bytes]:
     b.branch("bge", "lo")
     b.emit("mov.w imm,reg", 0, "r9")
     b.label("lo")
-    b.emit("cmp.w imm,reg", 7, "r9")
+    b.emit("cmp.w imm,reg", menu - 3, "r9")                     # the window's first entry: at most the third from the end
     b.branch("ble", "hi")
-    b.emit("mov.w imm,reg", 7, "r9")
+    b.emit("mov.w imm,reg", menu - 3, "r9")
     b.label("hi")
     b.emit("mov.w imm,reg", 0, "r10")                           # slot
     b.label("slot")
@@ -149,7 +179,7 @@ def select_routines(lay: dict[str, int]) -> dict[str, bytes]:
         b.emit("pop reg", r)
     b.emit("rsr")
     draw = b.bytes()
-    return {"band": band, "draw": draw, "picture": _picture(lay), "start": _start(lay)}
+    return {"band": band, "draw": draw, "picture": _picture(lay), "start": _start(lay, menu)}
 
 
 def _copy(b: Block, src: str, dst: str, count: str, size: str, tag: str) -> None:
@@ -231,7 +261,7 @@ def _picture(lay: dict[str, int]) -> bytes:
     return b.bytes()
 
 
-def _start(lay: dict[str, int]) -> bytes:
+def _start(lay: dict[str, int], menu: int = MENU) -> bytes:
     """Jumped to from 0xfc27d6 (the START palette swap): each slot with a picture gets its chosen palettes if it shows
     [0x501940], else its grey ones; a slot holding an original also its layer-A set; then the game's cursor frame. Phase 26
     stage 3: first, with the COURSE DIRECTION screen's phase cell non-zero (the screen locked), `jmp dirdone` instead; the rest
@@ -252,9 +282,9 @@ def _start(lay: dict[str, int]) -> bytes:
     b.branch("bge", "lo")
     b.emit("mov.w imm,reg", 0, "r9")
     b.label("lo")
-    b.emit("cmp.w imm,reg", 7, "r9")
+    b.emit("cmp.w imm,reg", menu - 3, "r9")                     # the window's first entry: at most the third from the end
     b.branch("ble", "hi")
-    b.emit("mov.w imm,reg", 7, "r9")
+    b.emit("mov.w imm,reg", menu - 3, "r9")
     b.label("hi")
     b.emit("mov.w imm,reg", 0, "r10")
     b.label("slot")

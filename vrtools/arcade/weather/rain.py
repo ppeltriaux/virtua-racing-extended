@@ -397,6 +397,13 @@ def rgb555(r, g, b) -> int:
     return 0x8000 | (int(b) << 10) | (int(g) << 5) | int(r)
 
 
+def metropolis_entry(rs: RomSet) -> int:
+    """Phase 90 (packs): the menu entry of the course named METROPOLIS (its grey sky is its own), -1 when the set has none. Pack 1:
+    METROPOLIS (6)."""
+    from vrtools.arcade.directory import decode_directory
+    return next((k for k, e in enumerate(decode_directory(rs)) if e.name == "METROPOLIS"), -1)
+
+
 def grey_sky(cols: list[int], metropolis: bool) -> list[int]:
     """A course's backdrop colours greyed (spike 46: Metropolis's own blend; every other course desaturated first, Big Forest's
     formula); every 16th colour (transparent) and bit 15 kept."""
@@ -1341,10 +1348,11 @@ def module(rs: RomSet, tune: RainTune, fault_spin: int = 0, fault_keep_grade: bo
     k = {"poly0": poly // 4, "shape_words": size // 4, "records": records, "sp_poly": (poly + len(objs) * size) // 4,
          "sp_words": ssize // 4, "tones": tex(layout.block("rain tones").start), "sp_tex": tex(layout.block("rain colours").start)}
     skies = {e: course_sky(rs, e) for e in range(len(decode_directory(rs)))}
+    metro = metropolis_entry(rs)
 
     def course_data(e):
         bank, src, n, cols = skies[e]
-        grey = grey_sky(cols, e == METROPOLIS)
+        grey = grey_sky(cols, e == metro)
         return {"sky": struct.pack("<II", SKY_DST, n) + struct.pack(f"<{n}H", *grey)}
 
     def course_copies(e):

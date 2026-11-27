@@ -1299,7 +1299,7 @@ def course_blob(skies: bytes, grids: bytes) -> bytes:
 
 
 def module(rs: RomSet, tune: LightningTune, patterns=PATTERNS, fault: tuple = (), refuse_all: bool = False,
-           measure: str = "") -> carrier.Module:
+           measure: str = "", copies: dict[int, int] | None = None) -> carrier.Module:
     """Lightning as a carrier module: its code and cells; its tables in the image (the patterns and level tables, the direction and
     turn tables, the bolts' pointer table); its ROM (the 12 bolt objects packed in "lightning objects", their eight colour words in
     "lightning colours", and in "lightning data" (bank 3) the white-out table, then per course one blob: its three flash skies in
@@ -1307,7 +1307,9 @@ def module(rs: RomSet, tune: LightningTune, patterns=PATTERNS, fault: tuple = ()
     (`Module.copies`), the course's blob by one record an entry (`course_copies`). `patterns` is for one test only (a pattern
     denser than the rule allows: tests/test_weather_lightning.py); PATTERNS in every build. `fault` (FAULTS) and `refuse_all` (Big
     Forest's every foot cell refused, the grid not cropped: a placement there never finds a valid foot) are for tests only, off in
-    every build. `measure` (MEASURES) is the bolt-visibility test's, "" in every build."""
+    every build. `measure` (MEASURES) is the bolt-visibility test's, "" in every build. `copies` (Phase 90, pack 2:
+    `carrier.hidden_copies`): {entry: an earlier entry} whose blob the entry shares (PatchError unless the blobs are the same);
+    no other entry shares a blob, whatever its bytes (pack 1 has none)."""
     from vrtools.arcade.directory import decode_directory
     if measure not in ("",) + MEASURES:
         raise PatchError(f"lightning measure {measure!r}: one of {MEASURES} (test only) or none")
@@ -1326,10 +1328,11 @@ def module(rs: RomSet, tune: LightningTune, patterns=PATTERNS, fault: tuple = ()
     dblk = layout.block("lightning data")
     white = rain.table_bytes(whiteout_table())
     data = bytearray(white)
-    course_at = {}
+    course_at, placed = {}, {}
+    metro = rain.metropolis_entry(rs)
     for e in range(nent):
         bank, src, n, cols = rain.course_sky(rs, e)
-        grey = rain.grey_sky(cols, e == rain.METROPOLIS)
+        grey = rain.grey_sky(cols, e == metro)
         skies = b"".join(struct.pack(f"<{n}H", *flash_sky(grey, kk)) for kk in SKY_K)
         g, _ = grid_blob(rs, e)
         if refuse_all:                                  # TEST ONLY: Big Forest's whole grid refused (its occluders kept), the others
@@ -1338,7 +1341,12 @@ def module(rs: RomSet, tune: LightningTune, patterns=PATTERNS, fault: tuple = ()
             g = struct.pack("<6i", 0, 0, n_, n_, gs, gb) + bytes([GINV & 0xFF]) * (n_ * n_) + o8[:n_, :n_].tobytes()
             g += b"\0" * (-len(g) % 4)
         blob = course_blob(skies, g)
+        at = carrier.shared_with(e, blob, copies, placed)    # Phase 90 (pack 2): a hidden entry of the plan shares its course's blob
+        if at is not None:
+            course_at[e] = at
+            continue
         course_at[e] = (dblk.start + len(data), len(blob))
+        placed[e] = (blob, course_at[e])
         data += blob
     aim_at = {}                                         # task 8: a course's own aim range: its direction table after every blob
     for e, rng in tune.aim_by_entry:                    # (the other courses' blobs keep their places), copied over the image's

@@ -131,6 +131,11 @@ local snaps = {}                                              -- VR_SNAPS="1300,
 for f in string.gmatch(os.getenv("VR_SNAPS") or "1300,2400", "%d+") do snaps[tonumber(f)] = true end
 local snaps_after = {}                                        -- VR_SNAPS_AFTER_START="300,600": frames after the detected race start
 for f in string.gmatch(os.getenv("VR_SNAPS_AFTER_START") or "", "%d+") do snaps_after[tonumber(f)] = true end
+-- VR_SNAP_LOG (fix round 1b): one line per snapshot this script takes, "S <n> <frame> <frames after the race start, -1 before>",
+-- n from 1 = the n-th PNG of the snapshot folder. MAME's -str also writes its own snapshot at the run's end (the next number,
+-- not in this log): pick the pictures by this log, not by counting files.
+local snap_log = os.getenv("VR_SNAP_LOG") and io.open(os.getenv("VR_SNAP_LOG"), "w")
+local snap_n = 0
 
 -- The race start is detected, not timed: the frame the course loads at varies between MAME invocations
 -- (865..1605 seen). The wheel is held at the select position until then and centred one frame later.
@@ -202,7 +207,11 @@ emu.register_frame_done(function()
     local v = _G.vr_autopilot_wheel()
     if v then wheel:set_value(v) end
   end
-  if snaps[frame] or (race_start and snaps_after[frame - race_start]) then manager.machine.video:snapshot() end
+  if snaps[frame] or (race_start and snaps_after[frame - race_start]) then
+    manager.machine.video:snapshot()
+    snap_n = snap_n + 1
+    if snap_log then snap_log:write(string.format("S %d %d %d\n", snap_n, frame, race_start and frame - race_start or -1)); snap_log:flush() end
+  end
   if frame >= 1400 or (race_start and frame > race_start) then      -- floor the pedal from the race start (or 1400 at the latest)
     local throttle = 255
     if race_start and type(_G.vr_autopilot_throttle) == "function" then throttle = _G.vr_autopilot_throttle() end   -- the autopilot lifts in hairpins

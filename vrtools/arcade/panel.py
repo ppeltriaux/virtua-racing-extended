@@ -386,13 +386,15 @@ def render_panel(rs: RomSet, pool: CharPool, outline: list[tuple[float, float]],
     return Rendered(PanelMap(TILE_WORDS_BASE_B, 1, ROWS, COLS, words), b_map, chars, palettes)   # tile = char; word = 0x8000 | char
 
 
-def install_panels(rs: RomSet, panels: list[Rendered]) -> tuple[RomSet, list[tuple[int, int]]]:
+def install_panels(rs: RomSet, panels: list[Rendered], room: int | None = None) -> tuple[RomSet, list[tuple[int, int]]]:
     """Write the panels' characters, maps, a relocated select-upload list (old pairs + one per character run)
     and an extended palette block into bank 0's free tail; point the directory's phase-1 entry at them.
-    Returns the new RomSet and each panel's (A, B) window addresses."""
+    Returns the new RomSet and each panel's (A, B) window addresses. `room` (Phase 90, pack 2): the bytes of the tail they may take
+    (the whole tail when None; less to keep a block placed later in the tail, as the storm's screen graphics, out of reach)."""
     out = dataclasses.replace(rs)
-    start, room = BANK0_FREE
-    if any(b != 0xFF for b in rs.data[start:start + room]):
+    start, whole = BANK0_FREE
+    room = whole if room is None else min(room, whole)
+    if any(b != 0xFF for b in rs.data[start:start + whole]):
         raise PatchError("bank 0's free tail is not free")
     image = bytearray()
     def place(blob: bytes) -> int:                                 # window address of blob, 16-aligned

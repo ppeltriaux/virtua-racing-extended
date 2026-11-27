@@ -1,21 +1,27 @@
-# Virtua Racing Extended v0.4.1
+# Virtua Racing Extended v0.5
 
-Virtua Racing Extended is the 1992 Sega Model 1 arcade Virtua Racing with ten courses: its own three
-(Big Forest, Bay Bridge, Acropolis) and the seven the 1995 Saturn port added (Alpine, Amazon Falls,
-Diablo Canyon, Metropolis, Pacific Coast, Surfers Oval, Surfers Road). The seven are converted from
-the Saturn disc into the arcade game's own data formats and race on the arcade's engine in MAME: its
+Virtua Racing Extended is the 1992 Sega Model 1 arcade Virtua Racing with more courses, in two separate sets that the same
+tool builds. The first set has ten courses: the arcade's own three (Big Forest, Bay Bridge, Acropolis) and the seven the 1995
+Saturn port added (Alpine, Amazon Falls, Diablo Canyon, Metropolis, Pacific Coast, Surfers Oval, Surfers Road). The seven are
+converted from the Saturn disc into the arcade game's own data formats and race on the arcade's engine in MAME: its
 fifteen opponents, its time limits and checkpoints, its render rate. The three original courses keep
 their own course data byte for byte; since v0.3 they can also be raced in reverse. Since v0.4 every
-course can be raced in the rain (see "What's new in v0.4"). The project page, with videos and screenshots:
-https://continuearcade.com/virtua-racing-extended/
+course can be raced in the rain (see "What's new in v0.4").
+
+New in v0.5, the second set, **Virtua Racing Extended: PS2 Tracks**, has six courses: the arcade's three and the three the
+PS2 release added (Island, Mountain, Beltway), converted from the PS2 disc, in both directions and in the rain too (see "The
+second set: Virtua Racing Extended: PS2 Tracks"). The first set is unchanged: byte for byte v0.4.1's.
+
+The project page, with videos and screenshots: https://continuearcade.com/virtua-racing-extended/
 
 This repository is a patch: one command builds the game on your machine from your own copies of the
-arcade game and of the Saturn port. It holds none of either (see "What is in the patch").
+arcade game and of the Saturn port (and, for the second set, of the PS2 release). It holds none of them (see "What is in
+the patch").
 
-> **v0.4.1 is an early release, not a finished one.** All ten courses load and race, with opponents,
-> pit lanes, walls, checkpoints, the in-race map and a best-time table per course, all ten can be
-> raced in reverse and in the rain, but the tuning and the finish are still being worked on: see
-> "Known issues in v0.4.1" and "Planned".
+> **v0.5 is an early release, not a finished one.** In both sets every course loads and races, with opponents,
+> walls, checkpoints, the in-race map and a best-time table per course (and a pit lane wherever the course has one: all of the first set's but Bay Bridge; Big Forest, Acropolis and Island in the second), and every course can be raced in reverse and in the rain, but the tuning and the finish
+> are still being worked on (the PS2 courses' pace, time limits and race lengths are not tuned yet): see
+> "Known issues in v0.5" and "Planned".
 
 ## What you need
 
@@ -27,6 +33,8 @@ arcade game and of the Saturn port. It holds none of either (see "What is in the
 - **Your own copy of the Saturn port:** *Virtua Racing* for the Saturn, **the European release**, as
   a `.cue` with its `.bin` beside it. The US and Japanese discs are not supported yet (see "Planned");
   the build refuses them and names the file it could not find.
+- **For the second set, your own copy of the PS2 release** in place of the Saturn port: see "The second set: Virtua Racing
+  Extended: PS2 Tracks".
 - **Python 3.12 or later.**
 - **MAME 0.289** to play (and, optionally, to run the build's smoke test).
 - **Systems:** built and played on macOS (Apple silicon) with Homebrew's MAME 0.289. On **Windows** and Linux the
@@ -37,6 +45,8 @@ arcade game and of the Saturn port. It holds none of either (see "What is in the
 None of the game is included here, linked to, or sent on request.
 
 ## How to use it
+
+These steps build the first set (the Saturn courses); the second set's are in its own section below.
 
 ```sh
 git clone https://github.com/ppeltriaux/virtua-racing-extended.git
@@ -75,7 +85,7 @@ Windows: see "What you need".
 - MAME warns that some ROMs have the wrong checksums: they are the patched ones, that is expected.
 - Exit codes: 0 done, 1 an input is wrong, 2 a patch site did not match, 3 the smoke test failed.
 
-**In the game:** choose Practice; the course row scrolls through ten entries as you turn the wheel
+**In the game (the first set):** choose Practice; the course row scrolls through ten entries as you turn the wheel
 (steering left/right): BIG FOREST, BAY BRIDGE, ACROPOLIS, then ALPINE, AMAZON FALLS, DIABLO CANYON,
 METROPOLIS, PACIFIC COAST, SURFERS OVAL, SURFERS ROAD. Grand Prix is untouched.
 
@@ -94,11 +104,109 @@ before. A RAIN race saves no best time. Lightning flashes the picture: see the p
 **Best times:** each course keeps its own ranking table in the game's battery-backed RAM. On the first
 boot of the patched set the game finds its RAM laid out for three tables and initialises it for ten,
 so best times saved by the original set are reset once. Keep a copy of MAME's `nvram/vr` folder if
-you want them.
+you want them. The second set keeps its best times in a battery-RAM folder of its own (see its section).
 
 **Tuning (optional):** `--tune "AMAZON FALLS:pace=0.9,laps=4"` scales a course's opponents' pace
 (`pace`), its checkpoint time extensions (`time_factor`) and sets its race length (`laps`, 1 to 7);
 repeat `--tune` per course. The defaults are 5 laps and the values the build was tested with.
+
+## The second set: Virtua Racing Extended: PS2 Tracks
+
+The same tool builds a second, separate set: **Virtua Racing Extended: PS2 Tracks**. It holds six courses: the arcade's three
+(Big Forest, Bay Bridge, Acropolis) and the three the PS2 release added (Island, Mountain, Beltway), converted from your own
+PS2 disc. The seven Saturn courses stay in the first set, which is unchanged.
+
+Why two sets: MAME fixes the size of every ROM in the set, and the first set is full. Its polygon ROM has about 18.5 KB free,
+and a course needs 440 to 860 KB. In the second set, beside the three PS2 courses at their detail, no Saturn course fits, so it
+has six courses, not ten.
+
+**What you need:**
+
+- **Your own copy of the arcade game,** as for the first set (see "What you need").
+- **Your own copy of the PS2 release:** *Sega Ages 2500 Series Vol. 8: Virtua Racing FlatOut*, **the Japanese release**
+  (SLPM-62443). Give the tool the disc's `.cue` with its `.bin` beside it, the `.bin` itself, or a plain `.iso` of 2048-byte
+  sectors. The tool tells the forms apart by what is in the file, not by its name. `check` refuses any other release and names
+  what the disc boots.
+- **No Saturn disc.** This set reads nothing from it; `--saturn` is ignored here.
+
+**How to build and run it:** the first three lines of "How to use it" (the clone, the move into its folder, the virtual environment with the install) come first; this set needs none of that section's `--saturn` commands.
+
+```sh
+.venv/bin/vrtools check --pack ps2 --roms ~/roms/vr --ps2 ~/ps2/"Virtua Racing FlatOut (Japan).cue" --out ~/vr-ps2-tracks
+.venv/bin/vrtools build --pack ps2 --roms ~/roms/vr --ps2 ~/ps2/"Virtua Racing FlatOut (Japan).cue" --out ~/vr-ps2-tracks
+mame vr -rompath ~/vr-ps2-tracks -nvram_directory ~/vr-ps2-tracks/nvram
+```
+
+On **Windows** (PowerShell, after the same first three lines as there):
+
+```powershell
+.venv\Scripts\vrtools check --pack ps2 --roms C:\roms\vr --ps2 "C:\ps2\Virtua Racing FlatOut (Japan).cue" --out C:\vr-ps2-tracks
+.venv\Scripts\vrtools build --pack ps2 --roms C:\roms\vr --ps2 "C:\ps2\Virtua Racing FlatOut (Japan).cue" --out C:\vr-ps2-tracks
+C:\mame\mame.exe vr -rompath C:\vr-ps2-tracks -nvram_directory C:\vr-ps2-tracks\nvram
+```
+
+- `--ps2` defaults to `$VR_PS2_DISC`; `--roms` and `--out` work as for the first set.
+- **Give it a folder of its own.** Both sets are written as `vr.zip`, so building one into the other's folder replaces it.
+  Always pass `--out` for this set: without it both sets build into the same default folder (`$VR_OUT`, else `./out`) and the
+  later build replaces the earlier `vr.zip`.
+- **Run it with its own battery-RAM folder:** use the `run:` line the build prints (also in `build-report.txt`), which adds
+  `-nvram_directory <out>/nvram`. Each set marks the game's battery-backed RAM as its own, and at boot the game resets
+  the best-time tables it finds written by the other set: that way a best time never shows under the wrong
+  course. If both sets share MAME's default `nvram` folder, each one resets the other's best times. Measured in MAME, in
+  both directions: beyond the best-time tables and the mark itself, a boot on the other set's memory changes nothing that an
+  ordinary boot does not.
+- `--smoke` is not available for this set. `--tune` works as for the first set, with ISLAND, MOUNTAIN or BELTWAY as the course
+  name.
+- `build-report.txt` starts with a line naming the set: a wheel of six entries and its battery RAM tag.
+
+**In the game:** choose Practice; the course row scrolls through six entries as you turn the wheel: BIG FOREST, BAY BRIDGE,
+ACROPOLIS, ISLAND, MOUNTAIN, BELTWAY. The COURSE DIRECTION and COURSE WEATHER screens work as in the first set.
+
+**What a PS2 course has:**
+
+- the arcade's fifteen opponents, its checkpoints with their banners and time extensions, the in-race map, its own best-time
+  table, and a select picture in the PS2 course's own colours;
+- both directions, with Island's pit stop in both;
+- DRY and RAIN, with the storm as in the first set: no rain under Island's tunnels and Beltway's overpasses, and the lightning
+  never more than three full-screen flash onsets in any second (see the photosensitivity note in "What's new in v0.4").
+- **Tested:** with the test autopilot in MAME 0.289, on Island, Mountain and Beltway in both directions: DRY and RAIN at the
+  arcade's rate with no stale picture; races to their end with all fifteen opponents running and the checkpoints passed in
+  order; Island's pit stop both ways; an Island race to the game's own finish (the race clock held); a best time on Beltway
+  shown under BELTWAY after a restart; the flash rule in RAIN on each of the three courses (normal direction, on a build with the lightning's stress tune). The first set, built by the same tool, is checked to stay byte
+  for byte v0.4.1's. The project's owner drove earlier test builds of this set in MAME; the last changes (the select pictures
+  in colour, Island's pit stop in reverse) are checked by the tests (Island's reverse pit stop in MAME; the pictures' colours on the built pictures), not yet by a person's drive.
+
+**What it is not:**
+
+- **Not the PS2's whole picture.** The detail is capped by what the arcade draws in a frame. Near the road a course has the
+  PS2's own one-player detail wherever the frame allows it; farther out, and where the frame is full, it has the lighter
+  detail the PS2 uses for split-screen play. On three stretches of Beltway a few far buildings are left out for the rain's sake.
+- **No wider drawing distance:** on these courses it gives almost nothing, and it would change every course.
+- **No animals, boats, palms or birds** from the PS2: where they stand is not in the course files.
+- **Not the PS2's own race tables** (they are not in the course files either): the time limits and the opponents follow this
+  project's own rule.
+- **Beltway's split road:** just after the start a row of pylons divides the road. The opponents all pass it on one side, the
+  side the PS2's racing line takes; you can take either side.
+- **The select pictures:** their colours are the PS2's own, darker and less saturated than the Saturn courses' pictures; where
+  the PS2 models no land, the fill is this project's choice.
+- **No linked play** (two cabinets), as in the first set.
+
+## What's new in v0.5
+
+The first set is byte for byte v0.4.1's (a test compares each of its 43 files with the v0.4.1 build's): nothing changes for
+it, best times included. Everything new is the second set.
+
+- **A second set, Virtua Racing Extended: PS2 Tracks:** the arcade's three courses and the PS2 release's Island, Mountain and
+  Beltway on a six-entry course wheel, built from your own PS2 disc (*Sega Ages 2500 Series Vol. 8: Virtua Racing FlatOut*,
+  the Japanese release, SLPM-62443) with `vrtools build --pack ps2 --ps2 <disc>`. No Saturn disc is needed for it.
+- **Each PS2 course** has the arcade's fifteen opponents, checkpoints, the in-race map and its own best-time table, both
+  directions (Island's pit stop in both), and DRY or RAIN with the storm as in the first set. What it has, what it is not and
+  how it was tested: "The second set: Virtua Racing Extended: PS2 Tracks"; its known issues: "Known issues in v0.5".
+- **The PS2 disc in three forms:** its `.cue` with the `.bin` beside it, the `.bin` itself, or a plain `.iso` of 2048-byte
+  sectors. The tool tells them apart by what is in the file.
+- **Each set its own battery-RAM folder:** build the second set into a folder of its own and run it with the `run:` line the
+  build prints (`-nvram_directory <out>/nvram`); on the other set's memory the game resets the best times (measured: the
+  best-time tables and the set's mark only).
 
 ## What's new in v0.4.1
 
@@ -141,7 +249,7 @@ Each item says how it was tested. Upgrading from v0.3 keeps every best time alre
 ## What's new in v0.3
 
 Each item says how it was tested. The release build itself was tested in MAME with the test autopilot and has not
-been played by hand (see "Known issues in v0.4.1"). Upgrading from v0.2 or v0.2.1 keeps every best time already saved.
+been played by hand (see "Known issues in v0.5"). Upgrading from v0.2 or v0.2.1 keeps every best time already saved.
 
 - **The table you just raced comes first:** after a race you finish, the attract mode's first ranking page now shows
   the best-time table of the course and direction you just raced (normal or reverse, with or without a new best time),
@@ -182,7 +290,7 @@ The trees, the far buildings and the palms were tested in MAME with the test aut
 
 ## What's new in v0.2.1
 
-Built and tested with the test autopilot in MAME; not yet played by hand (see "Known issues in v0.4.1").
+Built and tested with the test autopilot in MAME; not yet played by hand (see "Known issues in v0.5").
 
 - **Best times for reverse races:** each of the seven converted courses keeps its four best reverse times, apart from
   its normal table. A reverse race that finishes at or under the fourth time asks for your name, as a normal race does,
@@ -252,7 +360,9 @@ Built and tested with the test autopilot in MAME; not yet played by hand (see "K
 
 The game the patch builds changes on those four courses only. v0.1.1 changed the tests only.
 
-## Known issues in v0.4.1
+## Known issues in v0.5
+
+**The first set** (v0.4.1's, unchanged):
 
 - **Weather:** at three tunnel exits (Metropolis's roof by the pits, Alpine, and Bay Bridge in reverse) a long streak of rain or
   two can reach into the opening just before the exit (more than in v0.4, since the streaks are long now); the other exits show
@@ -293,6 +403,21 @@ The game the patch builds changes on those four courses only. v0.1.1 changed the
   release will check them by checksum instead, so the patch holds no bytes of the program.
 - How the converted courses differ from the Saturn's, measured: `docs/deviations.md`.
 
+**The second set, Virtua Racing Extended: PS2 Tracks** (new in v0.5):
+
+- **Not tuned yet:** the opponents' pace, the time limits and the race lengths on Island, Mountain and Beltway follow this
+  project's rule (the arcade's tables scaled to each course's length), not play. `--tune ISLAND:pace=0.9` (and `time_factor`,
+  `laps`) changes them per course.
+- **Choosing a course with a control that jumps to its ends:** a thumbstick or pad mapped as the wheel's absolute axis reads
+  mostly left, centre and right, so only some of the six entries can be held long enough to choose. A wheel, or an analogue control
+  that can be held part-way, reaches all six (the first set's ten-entry wheel has the same limit with such a control). Details: `docs/spike/2026-11-phase90-ps2-disc-recon.md`, §14.
+  A stepping selection is planned.
+- **Not the PS2's whole picture:** the detail is capped by what the arcade draws in a frame; no animals, boats, palms or birds;
+  the PS2's own race tables are not used; where the PS2 models no land, the select pictures' fill is this project's choice. See
+  "What it is not" in the second set's section.
+- **Not yet driven by a person in its last form:** the project's owner drove earlier test builds of this set; the last changes
+  (the select pictures in colour, Island's pit stop in reverse) are checked by the tests (Island's reverse pit stop in MAME; the pictures' colours on the built pictures), not yet by a person's drive.
+
 ## Planned
 
 - **The Saturn port's other releases:** the **US** and **Japanese** discs (they lay their files out
@@ -302,16 +427,18 @@ The game the patch builds changes on those four courses only. v0.1.1 changed the
 - The remaining wall spots, and the difficulty per course from playtesting.
 - Diablo Canyon's colours.
 - The patch-site checks by checksum (see above).
+- The PS2 Tracks set: a stepping course selection (so that a control that jumps to its ends reaches every entry), and the
+  opponents' pace, time limits and race lengths on Island, Mountain and Beltway tuned by play.
 
 ## What is in the patch
 
-- the converter (`vrtools/`, Python): it reads the Saturn course files from your disc and writes the
+- the converter (`vrtools/`, Python): it reads the Saturn course files from your disc (for the second set, the PS2 course files) and writes the
   arcade's road, collision, scenery, opponents' lines, race tables, select panels, map and backdrop
-  for each new course into free space of your ROM set, then patches the program to offer ten courses and
+  for each new course into free space of your ROM set, then patches the program to offer ten courses (six in the second set) and
   adds "Extended" to the attract logo; since v0.4 it also writes the weather: its code for the main CPU and the sound
   board, its 3D objects, and the rain and thunder sounds, which it generates;
 - the MAME Lua scripts the tests drive the game with (`vrtools/mame/lua/`);
-- the tests (`tests/`): most need your ROM set and disc (`VR_ROMDIR`, `VR_SATURN_CUE`, see
+- the tests (`tests/`): most need your ROM set and disc (`VR_ROMDIR`, `VR_SATURN_CUE`, and `VR_PS2_DISC` for the second set, see
   `local.env.example`) and skip without them; the race tests need MAME 0.289;
 - the notes on the arcade's and the Saturn's data formats (`docs/formats/`), the research notes
   behind each step (`docs/spike/`), and the measured differences (`docs/deviations.md`);
@@ -325,7 +452,7 @@ ROM set or by the converter.
 
 ```sh
 .venv/bin/pip install -e '.[dev]'
-cp local.env.example local.env   # set the two paths, then: source local.env
+cp local.env.example local.env   # set the paths (VR_PS2_DISC for the second set), then: source local.env
 .venv/bin/pytest
 ```
 
@@ -341,8 +468,9 @@ autopilot drives (Alpine in Big Forest's slot, Diablo Canyon), whose old autopil
 This is a personal, non-commercial technical study; nothing is sold.
 
 - Virtua Racing, its code, art, sound and courses belong to Sega; the Saturn port and its courses to
-  Sega and Time Warner Interactive. This project is not affiliated with or endorsed by either; the
-  names are used only to say which games it concerns.
+  Sega and Time Warner Interactive; the PS2 release (*Sega Ages 2500 Series Vol. 8: Virtua Racing
+  FlatOut*) and its courses to Sega. This project is not affiliated with or endorsed by any of them;
+  the names are used only to say which games it concerns.
 - No ROM set, disc image, patched set or extracted game data is offered here or anywhere else, none
   is linked to, and nothing will be sent on request. Build it from your own lawfully obtained copies.
 - The code and documents in this repository are under the MIT licence (`LICENSE`), which covers them

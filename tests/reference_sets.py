@@ -37,3 +37,38 @@ def reference_set(var: str) -> Path:
     if os.environ.get(REQUIRE) == "1":
         pytest.fail(f"{msg} ({REQUIRE}=1: a missing reference set fails)", pytrace=False)
     pytest.skip(msg)
+
+
+def missing_input(msg: str) -> None:
+    """A gate's input that is not there (the original set, the Saturn disc, the PS2 disc): skip saying why; with
+    VR_REQUIRE_REFERENCE_SETS=1 (a release run checks everything or says why not) FAIL instead. Phase 90 (the re-review's 5a)."""
+    if os.environ.get(REQUIRE) == "1":
+        pytest.fail(f"{msg} ({REQUIRE}=1: a missing input fails)", pytrace=False)
+    pytest.skip(msg)
+
+
+def required_romset_zip() -> Path:
+    """The original set's vr.zip (VR_ROMDIR, as conftest's `romset_zip`), else `missing_input`."""
+    from vrtools import config
+    d = config.rom_dir()
+    if d is None or not (d / "vr.zip").is_file():
+        missing_input("set VR_ROMDIR to a directory containing vr.zip")
+    return d / "vr.zip"
+
+
+def required_saturn_cue() -> Path:
+    """The Saturn disc's .cue (VR_SATURN_CUE, as conftest's `saturn_cue`), else `missing_input`."""
+    from vrtools import config
+    p = config.saturn_cue()
+    if p is None or not p.is_file():
+        missing_input("set VR_SATURN_CUE to the Saturn disc .cue")
+    return p
+
+
+def required_ps2_disc() -> Path:
+    """The PS2 disc image (VR_PS2_DISC: its .cue or .bin), else `missing_input`."""
+    value = os.environ.get("VR_PS2_DISC")
+    if not value or not Path(value).is_file():
+        missing_input("set VR_PS2_DISC to the PS2 disc image (Sega Ages 2500 Vol. 8, its .cue)" if not value else
+                      f"VR_PS2_DISC={value} is not a file")
+    return Path(value)

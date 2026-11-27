@@ -67,7 +67,7 @@ from vrtools.arcade.race import CAR_TABLES, LAP_COUNT, race_blob_layout
 from vrtools.arcade.ranking import patch_ranking_sites, ranking_ids, ranking_image, ranking_layout, ranking_size
 from vrtools.arcade.romset import V60_PROGRAM, RomSet
 from vrtools.arcade.select import (BANDS, CHAR_RAM, DRAW_SITE, DRAW_SITE_LEN, SLOT_A, SLOT_B, SLOT_CHAR, SLOT_PAL, SLOT_X, SLOT_Y,
-                                   START_SITE, START_SITE_LEN, ZONES, ZONES_LEN, encode_bands, select_routines, slot_of)
+                                   START_SITE, START_SITE_LEN, ZONES, ZONES_LEN, MENU, encode_bands, select_routines, slot_of)
 from vrtools.arcade.v60asm import Block
 
 ENTRIES = 10
@@ -126,6 +126,8 @@ class CourseEntry10:
     map_obj: tuple[int, int, int] | None = None   # Phase 22b: the HUD map outline (polygon word address, tex, size); None = the host's
     pit_box: tuple[float, float, float, int] | None = None   # Phase 22i: where the pit sequence parks the car (x, y, z, heading 1/65536 turn); None = the host's
     reverse: ReverseRecord | None = None     # Phase 26: the variant `entry` serves on the menu path when the direction flag is set
+    hidden: bool = False      # Phase 90 (pack 2): an entry past the wheel's last band (never chosen; kept off the attract ranking).
+                              # Not encoded: the directory's records are the same with or without it
 
 
 @dataclass(frozen=True)
@@ -256,13 +258,14 @@ def directory_layout(code_base: int = CODE_FREE[0]) -> dict[str, int]:
     return lay
 
 
-def encode_directory(d: Directory, base: int) -> bytes:
+def encode_directory(d: Directory, base: int, menu: int = MENU) -> bytes:
     if len(d) != ENTRIES:
         raise PatchError(f"the directory has {len(d)} entries, {ENTRIES} are needed")
     for e in d:
         _check(e)
     ids = ranking_ids(d)                                          # Phase 22r: the ranking id in the data index word's second byte
-    sel = b"".join(struct.pack("<ffIiiI", SLOT_X[slot_of(i)], SLOT_Y, e.panel_map, -128 + 85 * slot_of(i), -128 + 85 * slot_of(i) + 84,
+    sel = b"".join(struct.pack("<ffIiiI", SLOT_X[slot_of(i, menu)], SLOT_Y, e.panel_map, -128 + 85 * slot_of(i, menu),
+                               -128 + 85 * slot_of(i, menu) + 84,
                                e.template | (ids[i] << 8))
                    for i, e in enumerate(d))
     load = b"".join(_load_record(e) for e in d)
@@ -675,16 +678,21 @@ def _routines(lay: dict[str, int]) -> dict[str, bytes]:
     return code
 
 
-def install_directory(rs: RomSet, d: Directory, code_base: int = CODE_FREE[0], crew: bool = True) -> RomSet:
+def install_directory(rs: RomSet, d: Directory, code_base: int = CODE_FREE[0], crew: bool = True, menu: int = MENU,
+                      magic: bytes | None = None) -> RomSet:
     """A new RomSet with the directory and routines at `code_base` and the three code sites routed through them. `crew` False
     (a switch for the tests only, stage 4 Task 5): the set without Task 5's crew change, the pit crew's four spawn sites left as
-    the original's and `figmirror` holding for the start figures only (padded: every address is the product's)."""
-    blob = encode_directory(d, code_base)
+    the original's and `figmirror` holding for the start figures only (padded: every address is the product's). Phase 90 (packs):
+    `menu`, the entries on the wheel (`select.bands_for`; the entries past it must be `hidden`); `magic`, the battery RAM's magic
+    (`ranking.NEW_MAGIC` when None): a pack's own magic is its tag, so a battery RAM saved by another pack is cleared at boot."""
+    if [e.hidden for e in d] != [k >= menu for k in range(len(d))]:
+        raise PatchError(f"a wheel of {menu} entries needs exactly the entries past it hidden")
+    blob = encode_directory(d, code_base, menu)
     lay = directory_layout(code_base)
     code = _routines(lay)
     image = bytearray(blob)
     assert code_base + len(image) == lay["bands"]
-    image += encode_bands() + struct.pack("<3I", *SLOT_A) + struct.pack("<3I", *SLOT_B) + bytes(FALLBACK) + b"\x00"
+    image += encode_bands(menu) + struct.pack("<3I", *SLOT_A) + struct.pack("<3I", *SLOT_B) + bytes(FALLBACK) + b"\x00"
     assert code_base + len(image) == lay["spawn"]
     image += bytes(4 * EMPTY_SPAWN_WORDS)
     assert code_base + len(image) == lay["pictures"]
@@ -695,12 +703,12 @@ def install_directory(rs: RomSet, d: Directory, code_base: int = CODE_FREE[0], c
     image += b"".join(_maps_record(e) for e in d)
     assert code_base + len(image) == lay["reverse"]
     image += struct.pack(f"<{ENTRIES}I", *(e.reverse.at if e.reverse else 0 for e in d))      # Phase 26
-    sel_code = select_routines(lay)
+    sel_code = select_routines(lay, menu)
     for name in ROUTINES + SELECT_ROUTINES:
         assert code_base + len(image) == lay[name], name
         image += code.get(name) or sel_code[name]
     assert code_base + len(image) == lay["ranking"]
-    image += ranking_image(rs, d, lay["ranking"])                # Phase 22r
+    image += ranking_image(rs, d, lay["ranking"], magic=magic)   # Phase 22r
     for name, routine in direction_routines(code_base + len(image), lay["pitbox"], crew=crew).items():     # Phase 26 (stage 4 Task 5:
                                                                                                           # the layout is the same)
         assert code_base + len(image) == lay[name], name

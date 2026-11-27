@@ -261,8 +261,6 @@ def convert_tiles(sat: SaturnCourse, rs: RomSet, course_index: int, groups: tupl
     With `far_copies` (Phase 31 prototype: silhouette.FarCopy) the objects, words and every other
     report key are what they are without them; report["far_cells"] holds the quads of the cells the copies change, for
     `farcopy.install_far_copies` to install after everything else, and report["far_copies"] their counts."""
-    from vrtools.arcade.colours import colour_table, free_runs, palette_from_rom
-    from vrtools.arcade.polyrom import encode_object
     from vrtools.convert.gates import GATE_GROUP, lettered_quads
     by_group = {g: course_quads(sat, groups=(g,)) for g in groups}
     copies = 0
@@ -302,25 +300,8 @@ def convert_tiles(sat: SaturnCourse, rs: RomSet, course_index: int, groups: tupl
         q = outside[0]
         raise ConvertError(f"{len(outside)} scenery quads leave the collision map (first centre "
                            f"({sum(p[0] for p in q.p) / 4:.0f}, {sum(p[2] for p in q.p) / 4:.0f})): the course needs a translation")
-    pal = palette_from_rom(rs, course_index)
-    run_start, run_len = free_runs(colour_table(rs))[0]
-    tex = run_start
-    objects: dict[int, tuple[bytes, object, int]] = {}
-    words: dict[int, int] = {}
-    capped = 0
-    capped_cells: set[int] = set()
-    for cell, cq in sorted(cells.items()):
-        coloured, w = assign_colours(cq, pal, tex_start=tex)
-        if tex + len(w) > run_start + run_len:
-            raise ConvertError("colour table free run exhausted")
-        words.update(w)
-        first, over = first_split(cell, coloured, max_records, cell in prop_cells)
-        capped += over
-        if over:
-            capped_cells.add(cell)
-        blob, layout = encode_object(first, tex_start=tex, no_cull=True)
-        objects[cell] = (blob, layout, tex)
-        tex += len(w)
+    objects, words, capped_cells = encode_cells(cells, rs, course_index, max_records, prop_cells)
+    capped = len(capped_cells)
     report = {"outside": len(outside), "cells": len(objects), "quads": len(quads), "colour_entries": len(words),
               "polygon_bytes": sum(len(o[0]) for o in objects.values()), "capped_cells": capped, "thinned": thinned,
               "lettering_copies": copies, **layer_report}
@@ -330,6 +311,34 @@ def convert_tiles(sat: SaturnCourse, rs: RomSet, course_index: int, groups: tupl
         from vrtools.convert.silhouette import far_copy_cells
         report["far_cells"], report["far_copies"] = far_copy_cells(cells, tuple(far_copies), capped=capped_cells)
     return objects, words, report
+
+
+def encode_cells(cells: dict[int, list[WorldQuad]], rs: RomSet, course_index: int, max_records: int = 5500,
+                 prop_cells: set[int] = frozenset()) -> tuple[dict[int, tuple[bytes, object, int]], dict[int, int], set[int]]:
+    """`convert_tiles`' last stage, for any source of world quads binned into tile cells (Phase 90: the PS2 courses): each
+    cell's quads coloured from the course palette, one colour-table entry per colour change from the table's first free run,
+    encoded as one polygon-ROM object capped at `max_records` (`first_split`). Returns ({cell: (bytes, ObjectLayout, tex_start)},
+    {tex: word}, the capped cells). ConvertError when the colour table's run is exhausted."""
+    from vrtools.arcade.colours import colour_table, free_runs, palette_from_rom
+    from vrtools.arcade.polyrom import encode_object
+    pal = palette_from_rom(rs, course_index)
+    run_start, run_len = free_runs(colour_table(rs))[0]
+    tex = run_start
+    objects: dict[int, tuple[bytes, object, int]] = {}
+    words: dict[int, int] = {}
+    capped_cells: set[int] = set()
+    for cell, cq in sorted(cells.items()):
+        coloured, w = assign_colours(cq, pal, tex_start=tex)
+        if tex + len(w) > run_start + run_len:
+            raise ConvertError("colour table free run exhausted")
+        words.update(w)
+        first, over = first_split(cell, coloured, max_records, cell in prop_cells)
+        if over:
+            capped_cells.add(cell)
+        blob, layout = encode_object(first, tex_start=tex, no_cull=True)
+        objects[cell] = (blob, layout, tex)
+        tex += len(w)
+    return objects, words, capped_cells
 
 
 def cell_grid_from_arcade(rs: RomSet, course_index: int) -> CellGrid:

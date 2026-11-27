@@ -505,3 +505,29 @@ def test_a_missing_reference_set_skips_or_fails(tmp_path, monkeypatch):
         reference_set("VR_P75_SET")
     (tmp_path / "vr.zip").write_bytes(b"x")
     assert reference_set("VR_P75_SET") == tmp_path
+
+
+def test_a_missing_input_skips_or_fails(tmp_path, monkeypatch):
+    """tests/reference_sets.py (Phase 90, the re-review's 5a): a gate's missing input (the original set, the Saturn disc, the PS2
+    disc) skips saying which variable to set; with VR_REQUIRE_REFERENCE_SETS=1 it fails instead; one that is there is returned."""
+    from _pytest.outcomes import Failed, Skipped
+    from tests.reference_sets import missing_input, required_ps2_disc, required_romset_zip, required_saturn_cue
+    for var in ("VR_REQUIRE_REFERENCE_SETS", "VR_PS2_DISC", "VR_ROMDIR", "VR_SATURN_CUE"):
+        monkeypatch.delenv(var, raising=False)
+    monkeypatch.setattr("vrtools.config.rom_dir", lambda: None)
+    monkeypatch.setattr("vrtools.config.saturn_cue", lambda: None)
+    with pytest.raises(Skipped, match="no such input"):
+        missing_input("no such input")
+    for f, var in ((required_ps2_disc, "VR_PS2_DISC"), (required_romset_zip, "VR_ROMDIR"), (required_saturn_cue, "VR_SATURN_CUE")):
+        with pytest.raises(Skipped, match=var):
+            f()
+    monkeypatch.setenv("VR_REQUIRE_REFERENCE_SETS", "1")
+    with pytest.raises(Failed, match="no such input .VR_REQUIRE_REFERENCE_SETS=1"):
+        missing_input("no such input")
+    for f, var in ((required_ps2_disc, "VR_PS2_DISC"), (required_romset_zip, "VR_ROMDIR"), (required_saturn_cue, "VR_SATURN_CUE")):
+        with pytest.raises(Failed, match=var):
+            f()
+    disc = tmp_path / "disc.cue"
+    disc.write_text("x")
+    monkeypatch.setenv("VR_PS2_DISC", str(disc))
+    assert required_ps2_disc() == disc

@@ -59,7 +59,7 @@ def _holds(q: Quad16, x: float, z: float) -> bool:
     return False
 
 
-def reverse_segments(pts: list[tuple[float, float]], tarmac_quads: list[Quad16]) -> list[Segment]:
+def reverse_segments(pts: list[tuple[float, float]], tarmac_quads: list[Quad16], loop: int | None = None) -> list[Segment]:
     """The segment array for the reverse race; `pts` is the FORWARD centreline. Quad k is credited the last reversed
     point its forward-rear edge has reached in reverse travel (`road.segment_credits` on the reversed list, the quads
     turned round and in reverse order; the first and last pinned to 0 and n-1 by the same END_SNAP rule).
@@ -73,7 +73,13 @@ def reverse_segments(pts: list[tuple[float, float]], tarmac_quads: list[Quad16])
     n-1 before the line. On Surfers Oval and Surfers Road quad 0 was the road's only n-1 quad (apron quads beside it
     the others); credited 0, no car sat on n-1 at any of the 20 and 16 reverse crossings (8-20 frames in the normal race),
     the opponents' cursors stayed on 386 / 440 after their first wrap and the field stopped at the line (parked 10 and 5
-    of 15; on Surfers Road every opponent ended the 150-s race there, the leader one lap, 441 points, on)."""
+    of 15; on Surfers Road every opponent ended the 150-s race there, the leader one lap, 441 points, on).
+    Phase 90 (`loop`): only the first `loop` quads are in lap order (a PS2 course's pit lane and its doubled entry quad follow
+    them); the walk credits those, and each quad after them is credited the reversed number of the forward point nearest its
+    centre. Walking the pit lane as if it were the lap credited Island's tunnel quads the start line: the car was put back there
+    and eleven opponents held on the grid."""
+    extra = list(tarmac_quads[loop:]) if loop is not None else []
+    tarmac_quads = list(tarmac_quads[:loop]) if loop is not None else tarmac_quads
     m = len(tarmac_quads)
     walk = segment_credits(reverse_points(pts), [reverse_quad(q) for q in reversed(tarmac_quads)])
     n, (x, z) = len(pts), pts[0]
@@ -82,6 +88,10 @@ def reverse_segments(pts: list[tuple[float, float]], tarmac_quads: list[Quad16])
     before = _before_line(pts)
     if not any(rp == n - 1 and any(_point_in_xz(q.corners, px, pz) for px, pz in before) for q, rp in zip(tarmac_quads, moved)):
         moved = credits                                         # the road would keep no n-1 quad: the walk's credits stand
+    for q in extra:
+        cx, cz = sum(c[0] for c in q.corners) / 4, sum(c[2] for c in q.corners) / 4
+        p = min(range(n), key=lambda i: (pts[i][0] - cx) ** 2 + (pts[i][1] - cz) ** 2)
+        moved.append((n - p) % n)
     return [Segment(k, rp, FLAG_PLAIN) for k, rp in enumerate(moved)]
 
 
@@ -93,17 +103,18 @@ def _before_line(pts: list[tuple[float, float]], step: float = 0.5) -> list[tupl
     return [(ax + (bx - ax) * i / k, az + (bz - az) * i / k) for i in range(k)]
 
 
-def reverse_tables(tables: RoadTables, tarmac_quads: list[Quad16]) -> RoadTables:
+def reverse_tables(tables: RoadTables, tarmac_quads: list[Quad16], loop: int | None = None) -> RoadTables:
     """The tables for racing the course the other way: every line reversed from the start line, the heading turned half
     a turn (re-unwrapped so a lap is still continuous), pitch and roll targets negated, links renamed for the reversed
-    segments. Raises ConvertError when the reversed unwrapped heading leaves 16 bits."""
+    segments. Raises ConvertError when the reversed unwrapped heading leaves 16 bits. `loop` (Phase 90): the quads in lap order
+    are the first `loop` (all when None); the rest (a pit lane appended after the lap) are credited apart (`reverse_segments`)."""
     centre = tables.lines[0]
     n = len(centre)
     order = [(n - j) % n for j in range(n)]
     heads = unwrap_headings([(_hi(centre[k].heading) + HALF_TURN_HEADING) % 16384 for k in order])
     if heads and not (-32768 <= min(heads) and max(heads) <= 32767):
         raise ConvertError(f"the reversed heading runs {min(heads)}..{max(heads)}, outside 16 bits")
-    segments = reverse_segments([(p.x, p.z) for p in centre], tarmac_quads)
+    segments = reverse_segments([(p.x, p.z) for p in centre], tarmac_quads, loop)
     named = segment_links(segments, n)
     words = [((heads[j] & 0xFFFF) << 16) | (-_s16(centre[k].heading) & 0xFFFF) for j, k in enumerate(order)]
     links = [((named[j] & 0xFFFF) << 16) | (-_s16(centre[k].link) & 0xFFFF) for j, k in enumerate(order)]
@@ -330,7 +341,15 @@ def reverse_pit(sat: SaturnCourse, col, centreline) -> ReversePit | None:
         return None                    # (a lane found by its `entry_slice` alone): no box to turn round, none of the seven
     lane = pit_lane_centres(sat, centreline)
     polys = [[(p[0], 0.0, p[2]) for p in poly] for poly in pit_lane_polygons(sat)]
-    lines = road_line_points(centreline, col.lanes)
+    return reverse_pit_in(col, centreline, lane, polys, k, box, col.lanes)
+
+
+def reverse_pit_in(col, centreline, lane, polys, k: int, box: tuple[float, float, float, int], lanes) -> ReversePit:
+    """`reverse_pit`'s choice on a course's pieces, whatever its source (Phase 90: a PS2 course's lane too): the collision `col`,
+    the race centreline, the lane's polyline from its mouth `lane`, its tarmac as (x, 0, z) polygons `polys`, the normal pit
+    quad `k` (its partner k + 1), the normal box `box` and the AI lines' scales `lanes` (`road_line_points`). The rules H1-H5 and
+    C1-C4 as `reverse_pit` states them; ConvertError when no pair or no box satisfies the hard rules."""
+    lines = road_line_points(centreline, lanes)
     quads, n = col.quads, col.n_tarmac
     length = _length(lane)
     heading = (box[3] + HALF_TURN_ATTR) % 0x10000

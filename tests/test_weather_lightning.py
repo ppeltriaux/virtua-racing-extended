@@ -463,6 +463,17 @@ def test_the_aim_changes_no_other_course(romset_zip, saturn_cue):
 
 
 # ---- the runs -----------------------------------------------------------------------------------------------------------------
+def storm_env(lay, wd: Path) -> dict:
+    """A lightning run's logs on a storm set laid out as `lay` (a carrier.Layout), RAIN answered: the frame, rate and stale-list
+    logs, the storm log pass by pass with the sound's thunder count and the rain's RAIN_WATCH cells, the lightning log
+    (`light_env`). Phase 90 (fix round 1c): shared with pack 2's flash gate (tests/test_pack_gates.py)."""
+    from vrtools.arcade.weather import rain
+    watch = [lay.cell('sound', 'nthunder')] + [rain.cell(lay, n) for n in RAIN_WATCH]
+    return {"VR_FRAME_LOG": str(wd / "frames.txt"), "VR_RATE_LOG": str(wd / "rate.txt"), "VR_STALE_LOG": str(wd / "stale_list.txt"),
+            "VR_STORM_LOG": str(wd / "storm.txt"), "VR_STORM_RAIN": f"{lay.cell('rain', 'state'):x}", "VR_STORM_FRAMES": "1",
+            "VR_RAIN": "1", **light_env(lay, wd), "VR_STORM_WATCH": ",".join(f"{a:x}" for a in watch)}
+
+
 class LightSession:
     """The lightning's test sets (the stress tune; with the stand-in cover over a stretch; with the dense test pattern) and runs."""
 
@@ -512,11 +523,7 @@ class LightSession:
         build, lay = self.build(setkind)
         entry = key[1] if kind in ("stress", "litkey") else METROPOLIS if kind == "vis" else 0
         env = self.rate._env(wd, entry, False)
-        from vrtools.arcade.weather import rain
-        watch = [lay.cell('sound', 'nthunder')] + [rain.cell(lay, n) for n in RAIN_WATCH]
-        env.update({"VR_FRAME_LOG": str(wd / "frames.txt"), "VR_RATE_LOG": str(wd / "rate.txt"), "VR_STALE_LOG": str(wd / "stale_list.txt"),
-                    "VR_STORM_LOG": str(wd / "storm.txt"), "VR_STORM_RAIN": f"{lay.cell('rain', 'state'):x}", "VR_STORM_FRAMES": "1",
-                    "VR_RAIN": "1", **light_env(lay, wd), "VR_STORM_WATCH": ",".join(f"{a:x}" for a in watch)})
+        env.update(storm_env(lay, wd))
         seconds = STRESS_SECONDS
         if kind == "end":
             env.pop("VR_HOLD_CLOCK", None)
@@ -656,14 +663,26 @@ def test_the_flash_rule_under_stress(light_runs, entry):
     and the sound's cells follow the strikes (`interface_errors`: strike_seq +1 on each strike's first running pass and on no other,
     strike_band by the distance on that pass)."""
     r = light_runs.run("stress", entry)
-    _rate_gates(r, NAMES[entry])
-    on = onsets(observed_flash(r.light, light_runs.rate.out, entry, r.storm))
+    flash_rule(r, light_runs.rate.out, entry, NAMES[entry],
+               lambda on: _summary(light_runs, f"stress {NAMES[entry]}", r, f", onsets seen {len(on)}"))
+
+
+def flash_rule(r, rs, entry: int, name: str, summary=None) -> list[int]:
+    """test_the_flash_rule_under_stress's gates on a stress run `r` of entry `entry` of the set `rs` (a RomSet): the rate gates
+    (`_rate_gates`); at least 20 strikes, each with its onsets (the onsets seen at least 2 a strike, less 2); never more than three
+    onsets within WINDOW_FRAMES (`crowded`); the sound's cells following the strikes (`interface_errors`, the strike count, the
+    bands). `summary(onsets)` is called before the assertions on the onsets. Returns the onsets' frames. Phase 90 (fix round 1c):
+    shared with pack 2's flash gate (tests/test_pack_gates.py)."""
+    _rate_gates(r, name)
+    on = onsets(observed_flash(r.light, rs, entry, r.storm))
     last = r.light[-1].s
-    _summary(light_runs, f"stress {NAMES[entry]}", r, f", onsets seen {len(on)}")
+    if summary is not None:
+        summary(on)
     assert last["NSTRIKE"] >= 20 and len(on) >= 2 * last["NSTRIKE"] - 2, (last["NSTRIKE"], len(on))
     assert crowded(on) == [], crowded(on)[:3]
     assert interface_errors(r.light) == [], interface_errors(r.light)[:5]
     assert r.light[-1].seq == last["NSTRIKE"] and {p.band for p in r.light if p.seq} <= {1, 2, 3}
+    return on
 
 
 def picture_onsets(pix) -> list[int]:
